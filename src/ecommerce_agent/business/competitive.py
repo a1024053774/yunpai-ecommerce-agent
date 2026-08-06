@@ -327,22 +327,31 @@ class CompetitiveIntelligenceService:
         tenant_id: str,
         value: CompetitiveEntityMatchCreate,
     ) -> dict[str, Any]:
-        observed_at = canonical_source_time(value.observed_at)
-        payload = value.model_dump(mode="json")
-        payload["observed_at"] = observed_at
-        payload_hash = payload_digest(payload)
-        assessment = self._assess_entity_match(value)
         match_id = f"compmatch-{uuid.uuid4().hex}"
         now = utc_now()
         write_status = "applied"
         with self.db._write_lock, self.db.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            subject_identity = self._f305_subject_identity(
+                conn,
+                tenant_id=tenant_id,
+                store_id=value.store_id,
+                subject_sku=value.subject_sku,
+            )
+            canonical_value = value.model_copy(
+                update={"subject_identity": subject_identity}
+            )
+            observed_at = canonical_source_time(canonical_value.observed_at)
+            payload = canonical_value.model_dump(mode="json")
+            payload["observed_at"] = observed_at
+            payload_hash = payload_digest(payload)
+            assessment = self._assess_entity_match(canonical_value)
             existing = conn.execute(
                 """
                 SELECT * FROM competitive_entity_matches
                 WHERE tenant_id=? AND connector_id=? AND source_id=?
                 """,
-                (tenant_id, value.connector_id, value.source_id),
+                (tenant_id, canonical_value.connector_id, canonical_value.source_id),
             ).fetchone()
             if existing is not None:
                 if str(existing["payload_hash"]) != payload_hash:
@@ -366,27 +375,27 @@ class CompetitiveIntelligenceService:
                     (
                         match_id,
                         tenant_id,
-                        value.connector_id,
-                        value.store_id,
-                        value.subject_sku,
-                        value.competitor_name,
-                        value.competitor_sku,
-                        value.source_type,
-                        value.source_ref,
-                        value.source_id,
-                        int(value.is_estimate),
+                        canonical_value.connector_id,
+                        canonical_value.store_id,
+                        canonical_value.subject_sku,
+                        canonical_value.competitor_name,
+                        canonical_value.competitor_sku,
+                        canonical_value.source_type,
+                        canonical_value.source_ref,
+                        canonical_value.source_id,
+                        int(canonical_value.is_estimate),
                         observed_at,
                         json.dumps(
-                            value.subject_identity.model_dump(mode="json"),
+                            canonical_value.subject_identity.model_dump(mode="json"),
                             ensure_ascii=False,
                             sort_keys=True,
                         ),
                         json.dumps(
-                            value.competitor_identity.model_dump(mode="json"),
+                            canonical_value.competitor_identity.model_dump(mode="json"),
                             ensure_ascii=False,
                             sort_keys=True,
                         ),
-                        json.dumps(value.comparison_keys, ensure_ascii=False),
+                        json.dumps(canonical_value.comparison_keys, ensure_ascii=False),
                         assessment["score"],
                         json.dumps(
                             assessment["matched_fields"], ensure_ascii=False, sort_keys=True
@@ -410,6 +419,67 @@ class CompetitiveIntelligenceService:
         result = self._match_view(dict(row))
         result["write_status"] = write_status
         return result
+
+    @staticmethod
+    def _f305_subject_identity(
+        conn: Any,
+        *,
+        tenant_id: str,
+        store_id: str,
+        subject_sku: str,
+    ) -> CompetitiveProductIdentity:
+        row = conn.execute(
+            """
+            SELECT title, attributes_json
+            FROM catalog_items
+            WHERE tenant_id=? AND store_id=? AND sku_id=? AND status<>'deleted'
+            ORDER BY source_updated_at DESC, updated_at DESC, id DESC
+            LIMIT 1
+            """,
+            (tenant_id, store_id, subject_sku),
+        ).fetchone()
+        if row is None:
+            raise ValueError("competitive_subject_sku_unavailable")
+
+        raw_attributes = json.loads(str(row["attributes_json"]) or "{}")
+        standard_aliases = {
+            "brand": "brand",
+            "品牌": "brand",
+            "model": "model",
+            "型号": "model",
+            "category": "category",
+            "品类": "category",
+            "类目": "category",
+            "gtin": "gtin",
+            "条码": "gtin",
+            "商品条码": "gtin",
+        }
+        standard: dict[str, str] = {}
+        attributes: dict[str, str] = {}
+        for raw_key, raw_value in raw_attributes.items():
+            key = str(raw_key).strip()
+            if not key or raw_value is None:
+                continue
+            if isinstance(raw_value, bool):
+                value = "true" if raw_value else "false"
+            else:
+                value = str(raw_value).strip()
+            if not value:
+                continue
+            standard_field = standard_aliases.get(key.casefold())
+            if standard_field and standard_field not in standard:
+                standard[standard_field] = value
+            else:
+                attributes[key] = value
+
+        return CompetitiveProductIdentity(
+            title=str(row["title"]),
+            brand=standard.get("brand"),
+            model=standard.get("model"),
+            category=standard.get("category"),
+            gtin=standard.get("gtin"),
+            attributes=attributes,
+        )
 
     def list_entity_matches(
         self,

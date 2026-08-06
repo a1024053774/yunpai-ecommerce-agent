@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from ecommerce_agent.api import create_app
 from ecommerce_agent.business import (
+    CatalogItemUpsert,
     CompetitiveEntityMatchCreate,
     CompetitiveMatchTransition,
     CompetitiveMonitorUpsert,
@@ -68,6 +69,33 @@ def match_payload(
     )
 
 
+def subject_catalog() -> CatalogItemUpsert:
+    return CatalogItemUpsert(
+        connector_id="catalog-feed",
+        store_id="store-a",
+        item_id="item-a",
+        sku_id="sku-a",
+        title="云湃智能客服一体机 YP-100 32GB 曜石黑",
+        status="active",
+        sale_price=Decimal("100"),
+        currency="CNY",
+        attributes={
+            "brand": "云湃",
+            "model": "YP-100",
+            "category": "智能客服一体机",
+            "gtin": "06912345678901",
+            "颜色": "曜石黑",
+            "内存": "32GB",
+        },
+        source_updated_at=datetime(2026, 7, 22, 0, 0, tzinfo=UTC),
+        source_id="catalog-source-a",
+    )
+
+
+def seed_subject_catalog(service: AgentService) -> None:
+    service.operations.catalog.upsert("tenant-test", subject_catalog())
+
+
 def approve(service: AgentService, match_id: str, version: int = 1) -> dict:
     return service.operations.competitive.transition_entity_match(
         "tenant-test",
@@ -83,6 +111,7 @@ def approve(service: AgentService, match_id: str, version: int = 1) -> dict:
 
 def test_match_assessment_is_explainable_idempotent_and_versioned(tmp_path) -> None:
     service = AgentService(make_settings(tmp_path))
+    seed_subject_catalog(service)
     competitive = service.operations.competitive
     try:
         created = competitive.record_entity_match("tenant-test", match_payload())
@@ -138,6 +167,7 @@ def test_match_assessment_is_explainable_idempotent_and_versioned(tmp_path) -> N
 
 def test_conflicting_identity_cannot_be_approved(tmp_path) -> None:
     service = AgentService(make_settings(tmp_path))
+    seed_subject_catalog(service)
     competitive = service.operations.competitive
     try:
         created = competitive.record_entity_match(
@@ -172,6 +202,7 @@ def test_conflicting_identity_cannot_be_approved(tmp_path) -> None:
 
 def test_review_signals_are_aggregate_redacted_and_match_gated(tmp_path) -> None:
     service = AgentService(make_settings(tmp_path))
+    seed_subject_catalog(service)
     competitive = service.operations.competitive
     try:
         match = competitive.record_entity_match("tenant-test", match_payload())
@@ -300,6 +331,19 @@ def test_review_signal_schema_rejects_raw_or_inconsistent_counts() -> None:
 
 def test_complete_non_gtin_identity_can_enter_human_review(tmp_path) -> None:
     service = AgentService(make_settings(tmp_path))
+    without_gtin = subject_catalog().model_copy(
+        update={
+            "title": "云湃 YP-100",
+            "attributes": {
+                "brand": "云湃",
+                "model": "YP-100",
+                "category": "智能客服一体机",
+                "颜色": "曜石黑",
+                "内存": "32GB",
+            }
+        }
+    )
+    service.operations.catalog.upsert("tenant-test", without_gtin)
     competitive = service.operations.competitive
     try:
         payload = match_payload(source_id="match-without-gtin").model_copy(
@@ -318,6 +362,7 @@ def test_complete_non_gtin_identity_can_enter_human_review(tmp_path) -> None:
 
 def test_approved_match_controls_price_alerts_and_agent_recommendations(tmp_path) -> None:
     service = AgentService(make_settings(tmp_path))
+    seed_subject_catalog(service)
     competitive = service.operations.competitive
     observed_at = datetime.now(UTC).replace(microsecond=0)
     try:
@@ -396,6 +441,7 @@ def test_approved_match_controls_price_alerts_and_agent_recommendations(tmp_path
 
 def test_quality_overview_counts_match_and_signal_states(tmp_path) -> None:
     service = AgentService(make_settings(tmp_path))
+    seed_subject_catalog(service)
     competitive = service.operations.competitive
     try:
         match_a = competitive.record_entity_match("tenant-test", match_payload())
@@ -430,6 +476,12 @@ def test_competitive_entity_api_exposes_review_queue_and_evidence(tmp_path) -> N
         "X-Admin-Key": "test-admin-key-123456",
     }
     with TestClient(app) as client:
+        catalog_response = client.post(
+            "/v1/catalog/items",
+            headers=headers,
+            json=subject_catalog().model_dump(mode="json"),
+        )
+        assert catalog_response.status_code == 200
         created_response = client.post(
             "/v1/competitive/matches",
             headers=headers,
@@ -507,6 +559,7 @@ def test_competitive_entity_api_exposes_review_queue_and_evidence(tmp_path) -> N
 
 def test_concurrent_match_ingestion_and_decision_have_single_winners(tmp_path) -> None:
     service = AgentService(make_settings(tmp_path))
+    seed_subject_catalog(service)
     competitive = service.operations.competitive
     try:
         payload = match_payload(source_id="concurrent-match")
