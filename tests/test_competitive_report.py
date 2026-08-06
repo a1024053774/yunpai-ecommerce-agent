@@ -26,6 +26,7 @@ from conftest import make_settings
 from test_competitive_entity_intelligence import (
     approve,
     match_payload,
+    seed_subject_catalog,
 )
 
 
@@ -67,6 +68,7 @@ def test_analysis_only_consumes_approved_price_evidence(tmp_path) -> None:
     competitive = service.operations.competitive
     report = service.operations.competitive_report
     try:
+        seed_subject_catalog(service)
         approved_match = competitive.record_entity_match("tenant-test", match_payload())
         pending_match = competitive.record_entity_match(
             "tenant-test",
@@ -126,6 +128,7 @@ def test_price_band_arithmetic_is_correct(tmp_path) -> None:
     competitive = service.operations.competitive
     report = service.operations.competitive_report
     try:
+        seed_subject_catalog(service)
         matches = {}
         for sku in ("comp-a", "comp-c", "comp-d"):
             match = competitive.record_entity_match(
@@ -225,6 +228,7 @@ def test_gate_counterexample_rejects_unapproved_in_analysis(tmp_path) -> None:
     competitive = service.operations.competitive
     report = service.operations.competitive_report
     try:
+        seed_subject_catalog(service)
         pending_match = competitive.record_entity_match(
             "tenant-test",
             match_payload(source_id="match-pending").model_copy(
@@ -270,6 +274,7 @@ def test_report_analysis_api_exposes_gate_and_bands(tmp_path) -> None:
     service = AgentService(make_settings(tmp_path))
     competitive = service.operations.competitive
     try:
+        seed_subject_catalog(service)
         match = competitive.record_entity_match("tenant-test", match_payload())
         approve(service, match["id"])
         competitive.record(
