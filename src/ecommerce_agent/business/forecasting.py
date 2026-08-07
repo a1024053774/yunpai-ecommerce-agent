@@ -31,6 +31,23 @@ class ForecastRequest(BaseModel):
     order_multiple: Decimal = Field(default=Decimal("1"), gt=0)
 
 
+class ForecastOrderDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["forecast_replenishment"] = "forecast_replenishment"
+    status: Literal["draft"] = "draft"
+    persisted: Literal[False] = False
+    external_order_created: Literal[False] = False
+    store_id: str
+    warehouse_id: str
+    sku_id: str
+    recommended_quantity: str
+    expected_stockout_date: str | None
+    recommended_arrival_date: str
+    service_level: ServiceLevel
+    forecast_basis: dict[str, str | None]
+
+
 @dataclass(frozen=True)
 class DemandPoint:
     business_date: date
@@ -213,6 +230,26 @@ class ForecastingService:
             minimum=request.minimum_order_qty,
             multiple=request.order_multiple,
         )
+        forecast_order = ForecastOrderDraft(
+            store_id=request.store_id,
+            warehouse_id=request.warehouse_id,
+            sku_id=request.sku_id,
+            recommended_quantity=self._decimal(rounded_quantity),
+            expected_stockout_date=self._expected_stockout_date(
+                forecast_points,
+                service_level=request.service_level,
+                supply=available + inbound,
+            ),
+            recommended_arrival_date=(
+                series.points[-1].business_date + timedelta(days=request.lead_time_days)
+            ).isoformat(),
+            service_level=request.service_level,
+            forecast_basis={
+                "model": model.name,
+                "data_watermark": series.source_watermark,
+                "demand_policy_version": series.policy_version,
+            },
+        )
         return {
             "status": "draft",
             "persisted": False,
@@ -259,6 +296,7 @@ class ForecastingService:
                     "order_multiple": self._decimal(request.order_multiple),
                 },
             },
+            "forecast_order": forecast_order.model_dump(mode="json"),
         }
 
     def _order_line_rows(self, tenant_id: str, *, store_id: str, sku_id: str) -> list[Any]:
@@ -338,6 +376,20 @@ class ForecastingService:
         if coverage < 14:
             return "replenishment_due"
         return "healthy"
+
+    @staticmethod
+    def _expected_stockout_date(
+        forecast_points: list[dict[str, str]],
+        *,
+        service_level: ServiceLevel,
+        supply: Decimal,
+    ) -> str | None:
+        remaining = supply
+        for point in forecast_points:
+            remaining -= Decimal(point[service_level])
+            if remaining < 0:
+                return point["forecast_date"]
+        return None
 
     def _business_date(self, value: str) -> date:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))

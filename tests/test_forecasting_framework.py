@@ -298,6 +298,53 @@ def test_replenishment_formula_applies_supply_safety_stock_and_order_multiple(tm
         service.close()
 
 
+def test_preview_returns_reusable_forecast_order_draft(tmp_path) -> None:
+    service = AgentService(make_settings(tmp_path))
+    try:
+        _seed_weekly_history(
+            service,
+            start=date(2026, 7, 1),
+            quantities=[10] * 14,
+        )
+        service.operations.inventory.upsert(
+            TENANT,
+            _inventory(on_hand="20", reserved="0", inbound="0"),
+        )
+
+        result = service.operations.forecasting.preview(
+            TENANT,
+            ForecastRequest(
+                store_id=STORE,
+                warehouse_id=WAREHOUSE,
+                sku_id=SKU,
+                horizon_days=7,
+                lead_time_days=3,
+                review_period_days=7,
+                service_level="p80",
+            ),
+        )
+
+        draft = result["forecast_order"]
+        assert draft["kind"] == "forecast_replenishment"
+        assert draft["status"] == "draft"
+        assert draft["persisted"] is False
+        assert draft["external_order_created"] is False
+        assert draft["store_id"] == STORE
+        assert draft["warehouse_id"] == WAREHOUSE
+        assert draft["sku_id"] == SKU
+        assert draft["recommended_quantity"] == result["replenishment"]["recommended_order_qty"]
+        assert draft["expected_stockout_date"] == "2026-07-17"
+        assert draft["recommended_arrival_date"] == "2026-07-17"
+        assert draft["service_level"] == "p80"
+        assert draft["forecast_basis"] == {
+            "model": "7_day_seasonal_naive",
+            "data_watermark": result["data_quality"]["source_watermark"],
+            "demand_policy_version": "demand-v1",
+        }
+    finally:
+        service.close()
+
+
 def test_forecasting_is_tenant_and_warehouse_isolated(tmp_path) -> None:
     service = AgentService(make_settings(tmp_path))
     try:
@@ -339,6 +386,8 @@ def test_forecasting_preview_api_requires_admin_and_returns_draft(tmp_path) -> N
             quantities=[2] * 14,
         )
         service.operations.inventory.upsert(TENANT, _inventory())
+        with service.db.connect() as conn:
+            before_order_count = conn.execute("SELECT COUNT(*) FROM commerce_orders").fetchone()[0]
         with TestClient(app) as client:
             unauthorized = client.post(
                 "/v1/forecasting/preview",
@@ -356,6 +405,11 @@ def test_forecasting_preview_api_requires_admin_and_returns_draft(tmp_path) -> N
             assert body["status"] == "draft"
             assert body["persisted"] is False
             assert body["external_order_created"] is False
+            assert body["forecast_order"]["kind"] == "forecast_replenishment"
+            assert body["forecast_order"]["status"] == "draft"
+            assert body["forecast_order"]["persisted"] is False
+            assert body["forecast_order"]["external_order_created"] is False
+            assert body["forecast_order"]["sku_id"] == SKU
 
             audit = client.get(
                 "/v1/admin/audit?event_type=forecasting.preview.generated",
@@ -363,5 +417,12 @@ def test_forecasting_preview_api_requires_admin_and_returns_draft(tmp_path) -> N
             )
             assert audit.status_code == 200
             assert audit.json()[0]["detail"]["sku_id"] == SKU
+        with service.db.connect() as conn:
+            after_order_count = conn.execute("SELECT COUNT(*) FROM commerce_orders").fetchone()[0]
+            forecast_plan_table = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='inventory_plans'"
+            ).fetchone()
+        assert after_order_count == before_order_count
+        assert forecast_plan_table is None
     finally:
         service.close()

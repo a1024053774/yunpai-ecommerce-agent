@@ -17,7 +17,7 @@ from .finance import (
     ReconciliationTaskTransition,
     SettlementStatementUpsert,
 )
-from .forecasting import ForecastRequest, ForecastingService
+from .forecasting import ForecastOrderDraft, ForecastRequest, ForecastingService
 from .inventory import InventoryBalanceUpsert, InventoryService
 from .marketing import (
     ContentDraftUpsert,
@@ -53,6 +53,7 @@ __all__ = [
     "CopywritingRequest",
     "FinanceReportQuery",
     "FinanceService",
+    "ForecastOrderDraft",
     "ForecastRequest",
     "ForecastingService",
     "InventoryBalanceUpsert",
