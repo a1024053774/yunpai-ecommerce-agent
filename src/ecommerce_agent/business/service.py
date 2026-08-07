@@ -12,6 +12,7 @@ from .catalog import CatalogItemUpsert, CatalogService, CatalogStatus
 from .competitive import CompetitiveIntelligenceService, CompetitorObservationCreate
 from .competitive_report import CompetitiveReportService
 from .finance import FinanceReportQuery, FinanceService
+from .forecasting import ForecastingService
 from .inventory import InventoryBalanceUpsert, InventoryService
 from .marketing import MarketingDiagnosisQuery, MarketingService
 from .metrics import MetricQuery, MetricsService
@@ -65,6 +66,7 @@ class OperationsService:
         self.catalog = CatalogService(db)
         self.orders = OrderService(db)
         self.inventory = InventoryService(db)
+        self.forecasting = ForecastingService(db, inventory_service=self.inventory)
         self.competitive = CompetitiveIntelligenceService(db)
         self.competitive_report = CompetitiveReportService(db)
         self.marketing = MarketingService(db)
