@@ -62,6 +62,21 @@ class OrderFactsToolInput(BaseModel):
     store_id: str = Field(min_length=1, max_length=128)
 
 
+class DemandForecastToolInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    store_id: str = Field(min_length=1, max_length=128)
+    sku_id: str = Field(min_length=1, max_length=128)
+
+
+class InventoryPlanToolInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    store_id: str = Field(min_length=1, max_length=128)
+    sku_id: str = Field(min_length=1, max_length=128)
+    warehouse_id: str = Field(min_length=1, max_length=128)
+
+
 class OperationsService:
     def __init__(self, db: Database):
         self.db = db
@@ -342,6 +357,28 @@ class OperationsService:
                     metadata={"domain": "finance", "risk_level": "L0"},
                 )
             )
+        if registry.get("get_demand_forecast") is None:
+            registry.register(
+                ToolSpec(
+                    name="get_demand_forecast",
+                    description="读取指定店铺 SKU 的最新需求预测、日预测区间、回测指标和数据质量证据，不会运行写入或采购动作",
+                    kind="read",
+                    input_model=DemandForecastToolInput,
+                    handler=self._demand_forecast_tool,
+                    metadata={"domain": "forecasting", "risk_level": "L0"},
+                )
+            )
+        if registry.get("get_inventory_plan") is None:
+            registry.register(
+                ToolSpec(
+                    name="get_inventory_plan",
+                    description="读取指定店铺仓库 SKU 的最新确定性补货计划和库存快照，不创建采购单、不修改库存",
+                    kind="read",
+                    input_model=InventoryPlanToolInput,
+                    handler=self._inventory_plan_tool,
+                    metadata={"domain": "forecasting", "risk_level": "L0"},
+                )
+            )
 
     def _inventory_risk_tool(
         self, arguments: BaseModel, context: ToolExecutionContext
@@ -500,3 +537,28 @@ class OperationsService:
                 ),
             },
         )
+
+    def _demand_forecast_tool(
+        self, arguments: BaseModel, context: ToolExecutionContext
+    ) -> ToolResult:
+        value = DemandForecastToolInput.model_validate(arguments.model_dump())
+        run = self.forecasting.latest_run(
+            context.tenant_id, store_id=value.store_id, sku_id=value.sku_id
+        )
+        if run is None:
+            return ToolResult(status="failed", error_code="forecast_run_not_found")
+        return ToolResult(status="success", output=run)
+
+    def _inventory_plan_tool(
+        self, arguments: BaseModel, context: ToolExecutionContext
+    ) -> ToolResult:
+        value = InventoryPlanToolInput.model_validate(arguments.model_dump())
+        plan = self.inventory_planning.latest_plan(
+            context.tenant_id,
+            store_id=value.store_id,
+            sku_id=value.sku_id,
+            warehouse_id=value.warehouse_id,
+        )
+        if plan is None:
+            return ToolResult(status="failed", error_code="inventory_plan_not_found")
+        return ToolResult(status="success", output=plan)

@@ -84,3 +84,18 @@ def test_metrics_report_zero_denominator_without_fake_wape() -> None:
     assert metrics["bias"] is None
     assert metrics["smape"] == Decimal("1")
     assert metrics["rmse"] == Decimal("0.7071067811865475244008443621")
+
+
+def test_champion_keeps_baseline_for_zero_demand_without_wape_denominator() -> None:
+    values = [Decimal("0")] * 14
+    dates = [date(2026, 1, 1) + timedelta(days=index) for index in range(14)]
+    report = RollingBacktest.run(
+        values,
+        dates,
+        models=[RollingMeanModel(window=3), EWMAForecastModel(alpha=Decimal("0.3"))],
+        forecast_horizon=7,
+        windows=3,
+    )
+    decision = ChampionSelector.select(report, baseline_name="rolling_mean")
+    assert decision.champion_model == "rolling_mean"
+    assert decision.reason == "baseline_fallback_all_candidates_failed"

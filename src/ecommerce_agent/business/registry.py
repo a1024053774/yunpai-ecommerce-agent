@@ -43,7 +43,24 @@ def business_module_catalog() -> list[BusinessModule]:
             status="available",
             responsibilities=["库存余额", "缺货与滞销识别", "补货建议"],
             boundaries=["不自建 WMS", "采购和调拨只生成建议"],
-            agent_tools=["get_inventory_risk"],
+            agent_tools=["get_inventory_risk", "get_inventory_plan"],
+        ),
+        BusinessModule(
+            module_id="forecasting",
+            display_name="需求预测与补货计划",
+            status="interface",
+            responsibilities=[
+                "demand-v1 日需求事实",
+                "滚动回测与 champion 预测",
+                "P50/P80/P95 区间",
+                "确定性库存计划与风险解释",
+            ],
+            boundaries=[
+                "不创建采购单或调用外部下单",
+                "不替代仓库执行系统",
+                "数据不足和缺货证据必须显式降级",
+            ],
+            agent_tools=["get_demand_forecast", "get_inventory_plan"],
         ),
         BusinessModule(
             module_id="competitive_intelligence",

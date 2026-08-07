@@ -40,6 +40,13 @@ class InventoryPlanningPolicy(BaseModel):
         return self
 
 
+class InventoryPlanCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    warehouse_id: str = Field(min_length=1, max_length=128)
+    forecast_run_id: str = Field(min_length=1, max_length=128)
+
+
 class InventoryPlanningService:
     def __init__(
         self,
@@ -237,6 +244,76 @@ class InventoryPlanningService:
         if row is None:
             raise ValueError("inventory_plan_not_found")
         return self._view(dict(row))
+
+    def latest_plan(
+        self,
+        tenant_id: str,
+        *,
+        store_id: str,
+        sku_id: str,
+        warehouse_id: str,
+    ) -> dict[str, Any] | None:
+        with self.db.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM inventory_plans
+                WHERE tenant_id=? AND store_id=? AND sku_id=? AND warehouse_id=?
+                ORDER BY created_at DESC, plan_id DESC LIMIT 1
+                """,
+                (tenant_id, store_id, sku_id, warehouse_id),
+            ).fetchone()
+        return self._view(dict(row)) if row else None
+
+    def list_risks(
+        self,
+        tenant_id: str,
+        *,
+        store_id: str | None = None,
+        warehouse_id: str | None = None,
+        risk_level: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        conditions = ["tenant_id=?"]
+        params: list[Any] = [tenant_id]
+        if store_id:
+            conditions.append("store_id=?")
+            params.append(store_id)
+        if warehouse_id:
+            conditions.append("warehouse_id=?")
+            params.append(warehouse_id)
+        if risk_level:
+            conditions.append("risk_level=?")
+            params.append(risk_level)
+        params.append(limit)
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT * FROM inventory_plans
+                WHERE {' AND '.join(conditions)}
+                ORDER BY CASE risk_level
+                    WHEN 'critical' THEN 0 WHEN 'high' THEN 1
+                    WHEN 'medium' THEN 2 WHEN 'replenishment_due' THEN 3 ELSE 4 END,
+                    created_at DESC LIMIT ?
+                """,
+                tuple(params),
+            ).fetchall()
+        return [self._view(dict(row)) for row in rows]
+
+    def latest_policy(
+        self,
+        tenant_id: str,
+        *,
+        store_id: str,
+        sku_id: str,
+        warehouse_id: str,
+    ) -> dict[str, Any] | None:
+        try:
+            policy = self._select_policy(
+                tenant_id, store_id=store_id, sku_id=sku_id, warehouse_id=warehouse_id
+            )
+        except ValueError:
+            return None
+        return self._policy_view(tenant_id, str(policy["policy_id"]))
 
     def list_plans(
         self,

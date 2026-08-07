@@ -25,7 +25,11 @@ from .forecasting import (
     ForecastingService,
 )
 from .inventory import InventoryBalanceUpsert, InventoryService
-from .inventory_planning import InventoryPlanningPolicy, InventoryPlanningService
+from .inventory_planning import (
+    InventoryPlanCreateRequest,
+    InventoryPlanningPolicy,
+    InventoryPlanningService,
+)
 from .marketing import (
     ContentDraftUpsert,
     MarketingDiagnosisQuery,
@@ -71,6 +75,7 @@ __all__ = [
     "InventoryService",
     "InventoryPlanningPolicy",
     "InventoryPlanningService",
+    "InventoryPlanCreateRequest",
     "MetricQuery",
     "MetricsService",
     "MarketingDiagnosisQuery",

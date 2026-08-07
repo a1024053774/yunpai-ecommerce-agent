@@ -252,6 +252,7 @@
         <button class="active" data-view="overview">经营总览</button>
         <button data-view="service">智能客服</button>
         <button data-view="commerce">商品库存</button>
+        <button data-view="forecasting">Demand Forecast</button>
         <button data-view="orders">订单售后</button>
         <button data-view="competitive">竞品分析</button>
         <button data-view="ops">运营辅助</button>
@@ -346,6 +347,22 @@
               </div>
             </article>
           </div>
+        </section>
+
+        <section class="view" id="view-forecasting">
+          <div class="section-head"><div><h2>Demand Forecast</h2><p>需求事实、预测区间、回测与确定性补货计划</p></div><button class="button" id="refreshForecasting">刷新</button></div>
+          <article class="panel">
+            <div class="panel-body form-grid">
+              <div class="field"><label for="forecastStore">Store</label><input class="input" id="forecastStore" placeholder="store_id"></div>
+              <div class="field"><label for="forecastSku">SKU</label><input class="input" id="forecastSku" placeholder="sku_id"></div>
+              <div class="field"><label for="forecastWarehouse">Warehouse</label><input class="input" id="forecastWarehouse" placeholder="warehouse_id"></div>
+            </div>
+          </article>
+          <div class="grid two" style="margin-top:14px">
+            <article class="panel"><div class="panel-head"><h3>Latest Forecast</h3></div><div class="panel-body" id="forecastSummary"><div class="empty">Enter scope and refresh.</div></div></article>
+            <article class="panel"><div class="panel-head"><h3>Inventory Risk</h3></div><div class="panel-body" id="forecastRisk"><div class="empty">No data loaded.</div></div></article>
+          </div>
+          <article class="panel" style="margin-top:14px"><div class="panel-head"><h3>Daily P50 / P80 / P95</h3></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>P50</th><th>P80</th><th>P95</th></tr></thead><tbody id="forecastRows"></tbody></table></div></article>
         </section>
 
         <section class="view" id="view-commerce">
@@ -837,7 +854,7 @@
       customerTestSessionId: `customer-test:${crypto.randomUUID ? crypto.randomUUID() : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`}`
     };
 
-    const titles = { overview: '经营总览', service: '智能客服', commerce: '商品与库存', orders: '订单与售后', competitive: '竞品分析', ops: '运营辅助', marketing: '营销投放', finance: '利润对账', knowledge: '知识与 SOP', quality: '质检 VOC', evaluations: '客服评测', simulation: '场景验收', channels: '渠道接待', releases: '发布门禁', modules: '功能模块', audit: '审计记录' };
+    const titles = { overview: '经营总览', service: '智能客服', commerce: '商品与库存', forecasting: 'Demand Forecast', orders: '订单与售后', competitive: '竞品分析', ops: '运营辅助', marketing: '营销投放', finance: '利润对账', knowledge: '知识与 SOP', quality: '质检 VOC', evaluations: '客服评测', simulation: '场景验收', channels: '渠道接待', releases: '发布门禁', modules: '功能模块', audit: '审计记录' };
     const sourceLabels = { api:'API 会话', channel:'渠道会话', simulation:'虚拟验收', evaluation:'隔离评测' };
     const $ = (id) => document.getElementById(id);
 
@@ -2099,10 +2116,37 @@
       }));
     }
 
+    async function loadForecasting() {
+      const storeId = $('forecastStore').value.trim();
+      const skuId = $('forecastSku').value.trim();
+      const warehouseId = $('forecastWarehouse').value.trim();
+      if (!storeId || !skuId) {
+        $('forecastSummary').innerHTML = '<div class="empty">Enter store_id and sku_id.</div>';
+        return;
+      }
+      try {
+        const query = `?store_id=${encodeURIComponent(storeId)}`;
+        const forecast = await api(`/v1/forecasting/skus/${encodeURIComponent(skuId)}/forecast${query}`);
+        $('forecastSummary').innerHTML = `<div class="stack"><div><strong>${escapeHtml(forecast.champion_model || '-')}</strong><div class="muted">run ${escapeHtml(forecast.run_id)} · ${escapeHtml(forecast.training_end)}</div></div><div class="mono">${escapeHtml(forecast.champion_reason || '')}</div><span class="status ${forecast.data_quality.quality_level === 'good' ? 'ok' : 'warn'}">quality ${escapeHtml(forecast.data_quality.quality_level)}</span></div>`;
+        $('forecastRows').innerHTML = forecast.forecast_points.map((point) => `<tr><td>${escapeHtml(point.forecast_date)}</td><td>${escapeHtml(point.p50)}</td><td>${escapeHtml(point.p80)}</td><td>${escapeHtml(point.p95)}</td></tr>`).join('');
+        if (warehouseId) {
+          const plan = await api(`/v1/forecasting/skus/${encodeURIComponent(skuId)}/inventory-plan?store_id=${encodeURIComponent(storeId)}&warehouse_id=${encodeURIComponent(warehouseId)}`);
+          $('forecastRisk').innerHTML = `<div class="stack"><span class="status ${plan.risk_level === 'critical' ? 'bad' : plan.risk_level === 'healthy' ? 'ok' : 'warn'}">${escapeHtml(plan.risk_level)}</span><strong>Recommended ${escapeHtml(plan.recommended_order_qty)}</strong><div class="muted">stockout ${escapeHtml(plan.expected_stockout_date || 'none')} · status ${escapeHtml(plan.status)}</div><pre class="json-view">${escapeHtml(JSON.stringify(plan.explanation, null, 2))}</pre></div>`;
+        } else {
+          $('forecastRisk').innerHTML = '<div class="empty">Enter warehouse_id to view inventory plan.</div>';
+        }
+      } catch (error) {
+        $('forecastSummary').innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+        $('forecastRows').innerHTML = '';
+        $('forecastRisk').innerHTML = '<div class="empty">No plan available.</div>';
+      }
+    }
+
     async function loadView(view) {
       if (view === 'overview') return loadOverview();
       if (view === 'service') return Promise.all([loadConversations(), loadHandoffs()]);
       if (view === 'commerce') return loadCommerce();
+      if (view === 'forecasting') return loadForecasting();
       if (view === 'orders') return loadOrders();
       if (view === 'competitive') return loadCompetitive();
       if (view === 'ops') return loadOpsAssistant();
@@ -2121,6 +2165,7 @@
     document.querySelectorAll('.nav button').forEach((node) => node.addEventListener('click', () => switchView(node.dataset.view)));
     document.querySelectorAll('[data-go]').forEach((node) => node.addEventListener('click', () => switchView(node.dataset.go)));
     $('refreshButton').addEventListener('click', () => loadView(state.currentView).then(() => toast('数据已刷新')).catch((error) => toast(error.message)));
+    $('refreshForecasting').addEventListener('click', () => loadForecasting().catch((error) => toast(error.message)));
     $('refreshOpsAssistant').addEventListener('click', () => loadOpsAssistant().catch((error) => toast(error.message)));
     $('opsDatasetFile').addEventListener('change', () => {
       const name = $('opsDatasetFile').files?.[0]?.name?.toLowerCase() || '';

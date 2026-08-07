@@ -144,6 +144,13 @@ class ChampionSelector:
         )
         successful = [item for item in ranking if item["wape"] is not None]
         if not successful:
+            # A zero-demand window has no denominator for WAPE. Keep the
+            # deterministic baseline rather than turning a usable zero forecast
+            # into an unavailable model decision.
+            if baseline_name in summaries:
+                return ChampionDecision(baseline_name, "baseline_fallback_all_candidates_failed", ranking)
+            if not summaries:
+                return ChampionDecision(baseline_name, "baseline_fallback_no_backtest_window", ranking)
             return ChampionDecision(None, "all_candidates_failed", ranking)
         baseline = summaries.get(baseline_name)
         best = successful[0]

@@ -393,7 +393,7 @@ class ForecastingService:
         )
         champion_summary = report.summaries.get(decision.champion_model, {})
         now = datetime.now(timezone.utc).isoformat()
-        policy_id = self._persist_forecast_policy(tenant_id, request, now)
+        policy = self._persist_forecast_policy(tenant_id, request, now)
         with self.db._write_lock, self.db.connect() as conn:
             conn.execute(
                 """
@@ -413,7 +413,7 @@ class ForecastingService:
                     dates[-1].isoformat(),
                     data_hash,
                     self.POLICY_VERSION,
-                    str(request.backtest_windows),
+                    str(policy["policy_version"]),
                     json.dumps(request.candidate_models, sort_keys=True),
                     decision.champion_model,
                     decision.reason,
@@ -557,9 +557,48 @@ class ForecastingService:
             },
         }
 
+    def latest_run(self, tenant_id: str, *, store_id: str, sku_id: str) -> dict[str, Any] | None:
+        with self.db.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT run_id FROM forecast_runs
+                WHERE tenant_id=? AND store_id=? AND sku_id=? AND status='succeeded'
+                ORDER BY training_end DESC, created_at DESC, run_id DESC LIMIT 1
+                """,
+                (tenant_id, store_id, sku_id),
+            ).fetchone()
+        return self.get_run(tenant_id, str(row["run_id"])) if row else None
+
+    def list_backtests(self, tenant_id: str, *, store_id: str, sku_id: str) -> list[dict[str, Any]]:
+        run = self.latest_run(tenant_id, store_id=store_id, sku_id=sku_id)
+        return run["backtests"] if run else []
+
+    def upsert_policy(self, tenant_id: str, request: ForecastRunRequest) -> dict[str, Any]:
+        active_from = datetime.now(timezone.utc).isoformat()
+        policy = self._persist_forecast_policy(tenant_id, request, active_from)
+        with self.db.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM forecast_policies WHERE policy_id=? AND tenant_id=?",
+                (policy["policy_id"], tenant_id),
+            ).fetchone()
+        return {
+            "policy_id": policy["policy_id"],
+            "tenant_id": tenant_id,
+            "store_id": request.store_id,
+            "sku_id": request.sku_id,
+            "policy_version": policy["policy_version"],
+            "horizons": json.loads(row["horizons_json"]) if row else [7, 14, 30],
+            "minimum_history_days": request.minimum_history_days,
+            "candidate_models": request.candidate_models,
+            "backtest_windows": request.backtest_windows,
+            "interval_levels": ["p50", "p80", "p95"],
+            "demand_policy_version": self.POLICY_VERSION,
+            "active_from": row["active_from"] if row else active_from,
+        }
+
     def _persist_forecast_policy(
         self, tenant_id: str, request: ForecastRunRequest, active_from: str
-    ) -> str:
+    ) -> dict[str, Any]:
         policy_id = f"forecast-policy-{tenant_id}-{request.store_id}-{request.sku_id}"
         with self.db._write_lock, self.db.connect() as conn:
             existing = conn.execute(
@@ -600,7 +639,7 @@ class ForecastingService:
                     active_from,
                 ),
             )
-        return policy_id
+        return {"policy_id": policy_id, "policy_version": version}
 
     @staticmethod
     def _forecast_quality(facts: list[dict[str, Any]]) -> dict[str, Any]:
