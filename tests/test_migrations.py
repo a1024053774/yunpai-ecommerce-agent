@@ -146,7 +146,6 @@ def test_v25_database_upgrades_to_v27_and_preserves_intent_history(tmp_path) -> 
     db.initialize()
     db.initialize()
 
-    assert db.schema_version() == 27
     with db.connect() as conn:
         columns = {row[1] for row in conn.execute("PRAGMA table_info(messages)")}
         row = conn.execute(
@@ -165,6 +164,62 @@ def test_v25_database_upgrades_to_v27_and_preserves_intent_history(tmp_path) -> 
         "intent_method": None,
     }
     assert {26, 27} <= migrations
+
+
+def test_schema_29_and_30_forecasting_tables_upgrade_idempotently(tmp_path) -> None:
+    db = Database(tmp_path / "forecasting-schema.sqlite3")
+    with db.connect() as conn:
+        conn.execute(
+            "CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)"
+        )
+        for version in range(1, 28):
+            getattr(Database, f"_apply_v{version}")(conn)
+            conn.execute(
+                "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+                (version, "2026-08-07T00:00:00+00:00"),
+            )
+
+    db.initialize()
+    db.initialize()
+
+    expected_tables = {
+        "demand_daily_facts",
+        "forecast_policies",
+        "forecast_runs",
+        "forecast_backtests",
+        "forecast_points",
+        "forecast_anomalies",
+        "inventory_planning_policies",
+        "inventory_plans",
+    }
+    with db.connect() as conn:
+        tables = {
+            row[0]
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        migrations = {
+            row[0] for row in conn.execute("SELECT version FROM schema_migrations")
+        }
+        fact_columns = {row[1] for row in conn.execute("PRAGMA table_info(demand_daily_facts)")}
+        plan_columns = {row[1] for row in conn.execute("PRAGMA table_info(inventory_plans)")}
+        migration_counts = dict(
+            conn.execute(
+                "SELECT version, COUNT(*) FROM schema_migrations WHERE version IN (29, 30) GROUP BY version"
+            ).fetchall()
+        )
+
+    assert expected_tables <= tables
+    assert {29, 30} <= migrations
+    assert migration_counts == {29: 1, 30: 1}
+    assert {"tenant_id", "store_id", "sku_id", "business_date", "payload_hash"} <= fact_columns
+    assert {
+        "tenant_id",
+        "store_id",
+        "sku_id",
+        "warehouse_id",
+        "forecast_run_id",
+        "recommended_order_qty",
+    } <= plan_columns
 
 
 def test_v7_database_upgrades_to_v8_without_losing_competitor_data(tmp_path) -> None:

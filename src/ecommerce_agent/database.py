@@ -41,7 +41,7 @@ class SessionScopeError(ValueError):
 
 
 class Database:
-    SCHEMA_VERSION = 27
+    SCHEMA_VERSION = 30
 
     def __init__(self, path: Path):
         self.path = path
@@ -160,6 +160,12 @@ class Database:
             if 27 not in applied:
                 self._apply_v27(conn)
                 conn.execute("INSERT INTO schema_migrations VALUES (27, ?)", (utc_now(),))
+            if 29 not in applied:
+                self._apply_v29(conn)
+                conn.execute("INSERT INTO schema_migrations VALUES (29, ?)", (utc_now(),))
+            if 30 not in applied:
+                self._apply_v30(conn)
+                conn.execute("INSERT INTO schema_migrations VALUES (30, ?)", (utc_now(),))
             conn.execute(f"PRAGMA user_version = {self.SCHEMA_VERSION}")
             self._validate_schema(conn)
 
@@ -2207,6 +2213,187 @@ class Database:
         cls._ensure_column(conn, "messages", "intent_method", "TEXT")
 
     @staticmethod
+    def _apply_v29(conn: sqlite3.Connection) -> None:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS demand_daily_facts (
+                id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                store_id TEXT NOT NULL,
+                sku_id TEXT NOT NULL,
+                business_date TEXT NOT NULL,
+                gross_units TEXT NOT NULL DEFAULT '0',
+                eligible_units TEXT NOT NULL DEFAULT '0',
+                order_count INTEGER NOT NULL DEFAULT 0 CHECK(order_count >= 0),
+                sales_amount TEXT NOT NULL DEFAULT '0',
+                available_stock TEXT,
+                stockout_flag TEXT NOT NULL DEFAULT 'unknown'
+                    CHECK(stockout_flag IN ('true', 'false', 'unknown')),
+                stockout_evidence TEXT NOT NULL DEFAULT '{}',
+                price TEXT,
+                promotion_flag INTEGER,
+                source_watermark TEXT NOT NULL,
+                fact_version INTEGER NOT NULL,
+                demand_policy_version TEXT NOT NULL,
+                payload_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(
+                    tenant_id, store_id, sku_id, business_date,
+                    demand_policy_version, fact_version
+                )
+            );
+            CREATE INDEX IF NOT EXISTS idx_demand_daily_facts_scope
+                ON demand_daily_facts(tenant_id, store_id, sku_id, business_date DESC);
+            CREATE INDEX IF NOT EXISTS idx_demand_daily_facts_watermark
+                ON demand_daily_facts(tenant_id, store_id, sku_id, source_watermark);
+
+            CREATE TABLE IF NOT EXISTS forecast_policies (
+                policy_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                store_id TEXT NOT NULL,
+                sku_id TEXT,
+                horizons_json TEXT NOT NULL,
+                minimum_history_days INTEGER NOT NULL,
+                candidate_models_json TEXT NOT NULL,
+                backtest_windows INTEGER NOT NULL,
+                interval_levels_json TEXT NOT NULL,
+                demand_policy_version TEXT NOT NULL,
+                policy_version INTEGER NOT NULL,
+                active_from TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_forecast_policies_scope
+                ON forecast_policies(tenant_id, store_id, sku_id, active_from DESC);
+
+            CREATE TABLE IF NOT EXISTS forecast_runs (
+                run_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                store_id TEXT NOT NULL,
+                sku_id TEXT NOT NULL,
+                training_start TEXT NOT NULL,
+                training_end TEXT NOT NULL,
+                data_hash TEXT NOT NULL,
+                demand_policy_version TEXT NOT NULL,
+                forecast_policy_version TEXT NOT NULL,
+                candidate_models_json TEXT NOT NULL,
+                champion_model TEXT,
+                champion_reason TEXT NOT NULL,
+                model_version TEXT NOT NULL,
+                wape TEXT,
+                bias TEXT,
+                smape TEXT,
+                rmse TEXT,
+                forecast_horizon INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_forecast_runs_scope
+                ON forecast_runs(tenant_id, store_id, sku_id, created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS forecast_backtests (
+                backtest_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                run_id TEXT NOT NULL,
+                store_id TEXT NOT NULL,
+                sku_id TEXT NOT NULL,
+                model_name TEXT NOT NULL,
+                origin_date TEXT NOT NULL,
+                forecast_horizon INTEGER NOT NULL,
+                actual_json TEXT NOT NULL,
+                forecast_json TEXT NOT NULL,
+                error_json TEXT NOT NULL,
+                failure_reason TEXT,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_forecast_backtests_run
+                ON forecast_backtests(tenant_id, run_id, model_name, origin_date);
+
+            CREATE TABLE IF NOT EXISTS forecast_points (
+                point_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                run_id TEXT NOT NULL,
+                forecast_date TEXT NOT NULL,
+                p50 TEXT NOT NULL,
+                p80 TEXT NOT NULL,
+                p95 TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(tenant_id, run_id, forecast_date)
+            );
+            CREATE INDEX IF NOT EXISTS idx_forecast_points_run
+                ON forecast_points(tenant_id, run_id, forecast_date);
+
+            CREATE TABLE IF NOT EXISTS forecast_anomalies (
+                anomaly_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                run_id TEXT,
+                store_id TEXT NOT NULL,
+                sku_id TEXT NOT NULL,
+                anomaly_type TEXT NOT NULL,
+                evidence_json TEXT NOT NULL,
+                disposition TEXT NOT NULL DEFAULT 'open',
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_forecast_anomalies_scope
+                ON forecast_anomalies(tenant_id, store_id, sku_id, created_at DESC);
+            """
+        )
+
+    @staticmethod
+    def _apply_v30(conn: sqlite3.Connection) -> None:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS inventory_planning_policies (
+                policy_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                store_id TEXT NOT NULL,
+                sku_id TEXT NOT NULL,
+                warehouse_id TEXT,
+                supplier_lead_days INTEGER NOT NULL CHECK(supplier_lead_days >= 0),
+                review_period_days INTEGER NOT NULL CHECK(review_period_days >= 0),
+                service_level TEXT NOT NULL CHECK(service_level IN ('p50', 'p80', 'p95')),
+                minimum_order_qty TEXT NOT NULL DEFAULT '0',
+                order_multiple TEXT NOT NULL DEFAULT '1',
+                minimum_safety_stock TEXT NOT NULL DEFAULT '0',
+                maximum_stock_days INTEGER,
+                policy_version INTEGER NOT NULL,
+                active_from TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_inventory_planning_policies_scope
+                ON inventory_planning_policies(
+                    tenant_id, store_id, sku_id, warehouse_id, active_from DESC
+                );
+
+            CREATE TABLE IF NOT EXISTS inventory_plans (
+                plan_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                store_id TEXT NOT NULL,
+                sku_id TEXT NOT NULL,
+                warehouse_id TEXT NOT NULL,
+                forecast_run_id TEXT NOT NULL,
+                policy_id TEXT NOT NULL,
+                policy_version INTEGER NOT NULL,
+                inventory_snapshot_hash TEXT NOT NULL,
+                inventory_snapshot_json TEXT NOT NULL,
+                inbound TEXT NOT NULL,
+                reorder_point TEXT NOT NULL,
+                target_stock TEXT NOT NULL,
+                recommended_order_qty TEXT NOT NULL,
+                expected_stockout_date TEXT,
+                risk_level TEXT NOT NULL,
+                rounding_json TEXT NOT NULL,
+                explanation_json TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'draft',
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_inventory_plans_scope
+                ON inventory_plans(tenant_id, store_id, sku_id, warehouse_id, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_inventory_plans_run
+                ON inventory_plans(tenant_id, forecast_run_id, policy_version);
+            """
+        )
+
+    @staticmethod
     def _ensure_column(conn: sqlite3.Connection, table: str, column: str, declaration: str) -> None:
         columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
         if column not in columns:
@@ -2599,6 +2786,80 @@ class Database:
                 "occurrence_count",
                 "detail_json",
                 "record_version",
+            },
+            "demand_daily_facts": {
+                "tenant_id",
+                "store_id",
+                "sku_id",
+                "business_date",
+                "gross_units",
+                "eligible_units",
+                "source_watermark",
+                "fact_version",
+                "demand_policy_version",
+                "payload_hash",
+            },
+            "forecast_policies": {
+                "tenant_id",
+                "store_id",
+                "horizons_json",
+                "candidate_models_json",
+                "demand_policy_version",
+                "policy_version",
+            },
+            "forecast_runs": {
+                "tenant_id",
+                "store_id",
+                "sku_id",
+                "data_hash",
+                "champion_model",
+                "champion_reason",
+                "status",
+            },
+            "forecast_backtests": {
+                "tenant_id",
+                "run_id",
+                "model_name",
+                "origin_date",
+                "actual_json",
+                "forecast_json",
+                "error_json",
+            },
+            "forecast_points": {
+                "tenant_id",
+                "run_id",
+                "forecast_date",
+                "p50",
+                "p80",
+                "p95",
+            },
+            "forecast_anomalies": {
+                "tenant_id",
+                "store_id",
+                "sku_id",
+                "anomaly_type",
+                "evidence_json",
+                "disposition",
+            },
+            "inventory_planning_policies": {
+                "tenant_id",
+                "store_id",
+                "sku_id",
+                "supplier_lead_days",
+                "review_period_days",
+                "service_level",
+                "policy_version",
+            },
+            "inventory_plans": {
+                "tenant_id",
+                "store_id",
+                "sku_id",
+                "warehouse_id",
+                "forecast_run_id",
+                "policy_id",
+                "recommended_order_qty",
+                "risk_level",
+                "status",
             },
         }
         tables = {
