@@ -74,6 +74,8 @@ def test_forecast_run_persists_backtests_points_and_champion(tmp_path) -> None:
         assert result["run_id"]
         assert result["champion_model"]
         assert result["champion_reason"]
+        assert result["backtest_summary"]
+        assert result["backtest_summary"][0]["model"] == result["champion_model"]
         assert len(result["forecast_points"]) == 7
         assert all(
             Decimal(point["p50"]) <= Decimal(point["p80"]) <= Decimal(point["p95"])

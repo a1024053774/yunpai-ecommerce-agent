@@ -518,6 +518,16 @@ class ForecastingService:
                 "SELECT * FROM forecast_anomalies WHERE tenant_id=? AND run_id=? ORDER BY created_at",
                 (tenant_id, run_id),
             ).fetchall()
+        backtest_views = [
+            {
+                **dict(item),
+                "actual": json.loads(item["actual_json"]),
+                "forecast": json.loads(item["forecast_json"]),
+                "errors": json.loads(item["error_json"]),
+            }
+            for item in backtests
+        ]
+        backtest_summary = self._backtest_summary(backtest_views)
         return {
             "run_id": row["run_id"],
             "tenant_id": row["tenant_id"],
@@ -532,21 +542,16 @@ class ForecastingService:
             "champion_model": row["champion_model"],
             "champion_reason": row["champion_reason"],
             "model_version": row["model_version"],
+            "interval_method": "heuristic_error_band_v1",
+            "interval_calibrated": False,
             "metrics": {
                 key: row[key] for key in ("wape", "bias", "smape", "rmse")
             },
             "forecast_horizon": row["forecast_horizon"],
             "status": row["status"],
             "forecast_points": [dict(item) for item in points],
-            "backtests": [
-                {
-                    **dict(item),
-                    "actual": json.loads(item["actual_json"]),
-                    "forecast": json.loads(item["forecast_json"]),
-                    "errors": json.loads(item["error_json"]),
-                }
-                for item in backtests
-            ],
+            "backtests": backtest_views,
+            "backtest_summary": backtest_summary,
             "anomalies": [
                 {**dict(item), "evidence": json.loads(item["evidence_json"])}
                 for item in anomalies
@@ -556,6 +561,32 @@ class ForecastingService:
                 "quality_level": "degraded" if anomalies else "good",
             },
         }
+
+    @staticmethod
+    def _backtest_summary(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for record in records:
+            grouped.setdefault(str(record["model_name"]), []).append(record)
+        output: list[dict[str, Any]] = []
+        for model, items in grouped.items():
+            successful = [item for item in items if item["errors"].get("wape") is not None]
+            summary: dict[str, Any] = {
+                "model": model,
+                "windows": len(successful),
+                "failed": len(items) - len(successful),
+            }
+            for metric in ("wape", "bias", "smape", "rmse"):
+                values = [Decimal(str(item["errors"][metric])) for item in successful if item["errors"].get(metric) is not None]
+                summary[metric] = str(sum(values, Decimal("0")) / Decimal(len(values))) if values else None
+            output.append(summary)
+        return sorted(
+            output,
+            key=lambda item: (
+                item["wape"] is None,
+                Decimal(item["wape"]) if item["wape"] is not None else Decimal("Infinity"),
+                item["model"],
+            ),
+        )
 
     def latest_run(self, tenant_id: str, *, store_id: str, sku_id: str) -> dict[str, Any] | None:
         with self.db.connect() as conn:

@@ -53,14 +53,29 @@ def build_forecasting_router(
         admin: AdminPrincipal = Depends(require_admin),
     ) -> dict[str, Any]:
         try:
-            return service.operations.demand_facts.rebuild(
+            result = service.operations.demand_facts.rebuild(
                 admin.tenant_id,
                 store_id=payload.store_id,
                 sku_id=payload.sku_id,
                 start_date=payload.start_date,
                 end_date=payload.end_date,
                 mode=payload.mode,
+                source_gap_dates=payload.source_gap_dates,
             )
+            service.db.audit(
+                "forecasting.demand.rebuilt",
+                admin.admin_id,
+                f"{payload.store_id}:{payload.sku_id}",
+                {
+                    "store_id": payload.store_id,
+                    "sku_id": payload.sku_id,
+                    "fact_version": result["fact_version"],
+                    "write_status": result["write_status"],
+                    "source_watermark": result["source_watermark"],
+                },
+                admin.tenant_id,
+            )
+            return result
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -96,7 +111,21 @@ def build_forecasting_router(
         admin: AdminPrincipal = Depends(require_admin),
     ) -> dict[str, Any]:
         try:
-            return service.operations.forecasting.run(admin.tenant_id, payload)
+            result = service.operations.forecasting.run(admin.tenant_id, payload)
+            service.db.audit(
+                "forecasting.run.created",
+                admin.admin_id,
+                result["run_id"],
+                {
+                    "store_id": payload.store_id,
+                    "sku_id": payload.sku_id,
+                    "champion_model": result["champion_model"],
+                    "forecast_horizon": payload.horizon_days,
+                    "data_hash": result["data_hash"],
+                },
+                admin.tenant_id,
+            )
+            return result
         except ValueError as exc:
             code = str(exc)
             status = 404 if code == "forecast_run_not_found" else 409
@@ -106,6 +135,13 @@ def build_forecasting_router(
     def get_run(run_id: str, admin: AdminPrincipal = Depends(require_admin)) -> dict[str, Any]:
         try:
             return service.operations.forecasting.get_run(admin.tenant_id, run_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @router.get("/runs/{run_id}/shadow")
+    def shadow_run(run_id: str, admin: AdminPrincipal = Depends(require_admin)) -> dict[str, Any]:
+        try:
+            return service.operations.forecast_shadow.evaluate(admin.tenant_id, run_id)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -145,7 +181,15 @@ def build_forecasting_router(
         if payload.sku_id != sku_id:
             raise HTTPException(status_code=422, detail="sku_scope_mismatch")
         try:
-            return service.operations.forecasting.upsert_policy(admin.tenant_id, payload)
+            result = service.operations.forecasting.upsert_policy(admin.tenant_id, payload)
+            service.db.audit(
+                "forecasting.policy.updated",
+                admin.admin_id,
+                result["policy_id"],
+                {"store_id": payload.store_id, "sku_id": payload.sku_id, "policy_version": result["policy_version"]},
+                admin.tenant_id,
+            )
+            return result
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -158,7 +202,15 @@ def build_forecasting_router(
         if payload.sku_id != sku_id:
             raise HTTPException(status_code=422, detail="sku_scope_mismatch")
         try:
-            return service.operations.inventory_planning.upsert_policy(admin.tenant_id, payload)
+            result = service.operations.inventory_planning.upsert_policy(admin.tenant_id, payload)
+            service.db.audit(
+                "forecasting.planning_policy.updated",
+                admin.admin_id,
+                result["policy_id"],
+                {"store_id": payload.store_id, "sku_id": payload.sku_id, "warehouse_id": payload.warehouse_id, "policy_version": result["policy_version"]},
+                admin.tenant_id,
+            )
+            return result
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -173,11 +225,25 @@ def build_forecasting_router(
             run = service.operations.forecasting.get_run(admin.tenant_id, payload.forecast_run_id)
             if run["sku_id"] != sku_id or run["store_id"] != store_id:
                 raise ValueError("forecast_scope_mismatch")
-            return service.operations.inventory_planning.create_plan(
+            result = service.operations.inventory_planning.create_plan(
                 admin.tenant_id,
                 forecast_run_id=payload.forecast_run_id,
                 warehouse_id=payload.warehouse_id,
             )
+            service.db.audit(
+                "forecasting.inventory_plan.created",
+                admin.admin_id,
+                result["plan_id"],
+                {
+                    "store_id": store_id,
+                    "sku_id": sku_id,
+                    "warehouse_id": payload.warehouse_id,
+                    "forecast_run_id": payload.forecast_run_id,
+                    "status": result["status"],
+                },
+                admin.tenant_id,
+            )
+            return result
         except ValueError as exc:
             status = 404 if str(exc) in {"forecast_run_not_found", "inventory_balance_not_found", "inventory_policy_not_found"} else 409
             raise HTTPException(status_code=status, detail=str(exc)) from exc

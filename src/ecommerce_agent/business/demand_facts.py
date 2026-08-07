@@ -34,6 +34,7 @@ class DemandFactRebuildRequest(BaseModel):
     start_date: date
     end_date: date
     mode: Literal["full", "incremental"] = "incremental"
+    source_gap_dates: list[date] = Field(default_factory=list, max_length=3650)
 
     @model_validator(mode="after")
     def date_range_is_valid(self) -> "DemandFactRebuildRequest":
@@ -66,11 +67,15 @@ class DemandFactService:
         start_date: date,
         end_date: date,
         mode: str = "incremental",
+        source_gap_dates: list[date] | None = None,
     ) -> dict[str, Any]:
         if end_date < start_date:
             raise ValueError("demand_fact_invalid_date_range")
         if mode not in {"full", "incremental"}:
             raise ValueError("demand_fact_invalid_mode")
+        source_gap_set = set(source_gap_dates or [])
+        if any(item < start_date or item > end_date for item in source_gap_set):
+            raise ValueError("demand_fact_source_gap_outside_range")
 
         orders = self.orders.list_orders(tenant_id, store_id=store_id, limit=100000)
         daily: dict[date, dict[str, Any]] = {}
@@ -133,12 +138,24 @@ class DemandFactService:
             }
             eligible_units = bucket["eligible_units"]
             stockout_flag = "unknown"
-            if available_stock is not None:
-                stockout_flag = "true" if available_stock <= 0 and eligible_units > 0 else "false"
+            is_source_gap = cursor in source_gap_set
+            if is_source_gap:
+                demand_state = "source_gap"
+            elif has_source:
+                demand_state = "observed_demand" if eligible_units > 0 else "observed_zero"
+            else:
+                demand_state = "no_orders"
             evidence = {
-                "missing_source_date": not has_source,
+                "missing_source_date": is_source_gap,
+                "source_gap": is_source_gap,
+                "demand_state": demand_state,
                 "inventory_balance_count": len(balances),
                 "inventory_watermark": inventory_watermark,
+                "stockout_reason": (
+                    "no_historical_inventory_snapshot"
+                    if balances
+                    else "inventory_snapshot_unavailable"
+                ),
             }
             price = (
                 bucket["price_amount"] / eligible_units
@@ -311,7 +328,15 @@ class DemandFactService:
         return available, max(watermarks) if watermarks else None
 
     def _quality(self, facts: list[dict[str, Any]]) -> dict[str, Any]:
-        missing = sum(bool(item["stockout_evidence"]["missing_source_date"]) for item in facts)
+        if not facts:
+            return {
+                "level": "unknown",
+                "missing_source_dates": 0,
+                "unknown_stockout_dates": 0,
+                "demand_policy_version": self.policy.policy_version,
+                "reason": "no_demand_facts",
+            }
+        missing = sum(bool(item["stockout_evidence"].get("source_gap")) for item in facts)
         unknown = sum(item["stockout_flag"] == "unknown" for item in facts)
         return {
             "level": "degraded" if missing or unknown else "good",
@@ -354,7 +379,7 @@ class DemandFactService:
             "created_at": row["created_at"],
             "quality": {
                 "missing_source_date": bool(
-                    json.loads(row["stockout_evidence"]).get("missing_source_date")
+                    json.loads(row["stockout_evidence"]).get("source_gap")
                 )
             },
         }

@@ -185,6 +185,8 @@ class InventoryPlanningService:
         explanation = {
             "warehouse_scope": "supply_location_only",
             "demand_scope": "store_sku",
+            "store_total_demand_calculated_once": True,
+            "warehouse_allocation": "caller_allocated",
             "service_level": policy["service_level"],
             "lead_demand": self._decimal(lead_demand),
             "target_demand": self._decimal(target_demand),

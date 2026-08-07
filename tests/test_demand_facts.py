@@ -5,7 +5,7 @@ from decimal import Decimal
 
 import pytest
 
-from ecommerce_agent.business import OrderUpsert
+from ecommerce_agent.business import InventoryBalanceUpsert, OrderUpsert
 from ecommerce_agent.business.orders import OrderLineInput
 from ecommerce_agent.service import AgentService
 
@@ -80,10 +80,66 @@ def test_rebuild_persists_daily_facts_and_replays_idempotently(tmp_path) -> None
             ("2026-08-03", "4.00"),
         ]
         assert facts[0]["gross_units"] == "11.00"
-        assert facts[1]["quality"]["missing_source_date"] is True
+        assert facts[1]["stockout_evidence"]["demand_state"] == "no_orders"
+        assert facts[1]["stockout_evidence"]["source_gap"] is False
+        assert facts[1]["quality"]["missing_source_date"] is False
         assert facts[0]["stockout_flag"] == "unknown"
         with service.db.connect() as conn:
             assert conn.execute("SELECT COUNT(*) FROM demand_daily_facts").fetchone()[0] == 3
+    finally:
+        service.close()
+
+
+def test_historical_inventory_snapshot_does_not_infer_stockout_status(tmp_path) -> None:
+    service = AgentService(make_settings(tmp_path))
+    try:
+        service.operations.orders.upsert(TENANT, _order("stockout-order", date(2026, 8, 1), quantity=2))
+        service.operations.inventory.upsert(
+            TENANT,
+            InventoryBalanceUpsert(
+                connector_id="demand-inventory",
+                store_id=STORE,
+                warehouse_id="warehouse-demand",
+                sku_id=SKU,
+                on_hand=Decimal("0"),
+                reserved=Decimal("0"),
+                inbound=Decimal("0"),
+                source_updated_at=datetime(2026, 8, 5, tzinfo=UTC),
+                source_id="demand-inventory-source",
+            ),
+        )
+        result = service.operations.demand_facts.rebuild(
+            TENANT,
+            store_id=STORE,
+            sku_id=SKU,
+            start_date=date(2026, 8, 1),
+            end_date=date(2026, 8, 1),
+        )
+        fact = result["facts"][0]
+        assert fact["stockout_flag"] == "unknown"
+        assert fact["stockout_evidence"]["stockout_reason"] == "no_historical_inventory_snapshot"
+    finally:
+        service.close()
+
+
+def test_source_gap_is_distinct_from_a_day_with_no_orders(tmp_path) -> None:
+    service = AgentService(make_settings(tmp_path))
+    try:
+        service.operations.orders.upsert(TENANT, _order("gap-order", date(2026, 8, 1), quantity=2))
+        result = service.operations.demand_facts.rebuild(
+            TENANT,
+            store_id=STORE,
+            sku_id=SKU,
+            start_date=date(2026, 8, 1),
+            end_date=date(2026, 8, 3),
+            source_gap_dates=[date(2026, 8, 2)],
+        )
+        facts = result["facts"]
+        assert facts[1]["stockout_evidence"]["demand_state"] == "source_gap"
+        assert facts[1]["quality"]["missing_source_date"] is True
+        assert facts[2]["stockout_evidence"]["demand_state"] == "no_orders"
+        assert facts[2]["quality"]["missing_source_date"] is False
+        assert result["quality"]["missing_source_dates"] == 1
     finally:
         service.close()
 

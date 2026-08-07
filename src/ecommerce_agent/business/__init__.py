@@ -24,6 +24,7 @@ from .forecasting import (
     ForecastRunRequest,
     ForecastingService,
 )
+from .forecast_shadow import ForecastShadowService
 from .inventory import InventoryBalanceUpsert, InventoryService
 from .inventory_planning import (
     InventoryPlanCreateRequest,
@@ -71,6 +72,7 @@ __all__ = [
     "ForecastRequest",
     "ForecastRunRequest",
     "ForecastingService",
+    "ForecastShadowService",
     "InventoryBalanceUpsert",
     "InventoryService",
     "InventoryPlanningPolicy",

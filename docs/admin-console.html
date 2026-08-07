@@ -2126,8 +2126,13 @@
       }
       try {
         const query = `?store_id=${encodeURIComponent(storeId)}`;
-        const forecast = await api(`/v1/forecasting/skus/${encodeURIComponent(skuId)}/forecast${query}`);
-        $('forecastSummary').innerHTML = `<div class="stack"><div><strong>${escapeHtml(forecast.champion_model || '-')}</strong><div class="muted">run ${escapeHtml(forecast.run_id)} · ${escapeHtml(forecast.training_end)}</div></div><div class="mono">${escapeHtml(forecast.champion_reason || '')}</div><span class="status ${forecast.data_quality.quality_level === 'good' ? 'ok' : 'warn'}">quality ${escapeHtml(forecast.data_quality.quality_level)}</span></div>`;
+        const [forecast, demand, backtest] = await Promise.all([
+          api(`/v1/forecasting/skus/${encodeURIComponent(skuId)}/forecast${query}`),
+          api(`/v1/forecasting/demand${query}&sku_id=${encodeURIComponent(skuId)}`),
+          api(`/v1/forecasting/skus/${encodeURIComponent(skuId)}/backtest${query}`)
+        ]);
+        const topBacktest = (forecast.backtest_summary || backtest.backtests || []).slice(0, 3).map((item) => `${escapeHtml(item.model_name || item.model)} ${escapeHtml(item.wape || '-')}`).join(' · ');
+        $('forecastSummary').innerHTML = `<div class="stack"><div><strong>${escapeHtml(forecast.champion_model || '-')}</strong><div class="muted">run ${escapeHtml(forecast.run_id)} · ${escapeHtml(forecast.training_end)}</div></div><div class="mono">${escapeHtml(forecast.champion_reason || '')}</div><span class="status ${demand.quality.level === 'good' ? 'ok' : 'warn'}">quality ${escapeHtml(demand.quality.level)} · ${demand.facts.length} daily facts</span><div class="muted">backtest WAPE: ${topBacktest || '-'}</div></div>`;
         $('forecastRows').innerHTML = forecast.forecast_points.map((point) => `<tr><td>${escapeHtml(point.forecast_date)}</td><td>${escapeHtml(point.p50)}</td><td>${escapeHtml(point.p80)}</td><td>${escapeHtml(point.p95)}</td></tr>`).join('');
         if (warehouseId) {
           const plan = await api(`/v1/forecasting/skus/${encodeURIComponent(skuId)}/inventory-plan?store_id=${encodeURIComponent(storeId)}&warehouse_id=${encodeURIComponent(warehouseId)}`);

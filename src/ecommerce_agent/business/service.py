@@ -14,6 +14,7 @@ from .competitive_report import CompetitiveReportService
 from .demand_facts import DemandFactService
 from .finance import FinanceReportQuery, FinanceService
 from .forecasting import ForecastingService
+from .forecast_shadow import ForecastShadowService
 from .inventory import InventoryBalanceUpsert, InventoryService
 from .inventory_planning import InventoryPlanningService
 from .marketing import MarketingDiagnosisQuery, MarketingService
@@ -93,6 +94,9 @@ class OperationsService:
         )
         self.inventory_planning = InventoryPlanningService(
             db, inventory=self.inventory, forecasting=self.forecasting
+        )
+        self.forecast_shadow = ForecastShadowService(
+            demand_facts=self.demand_facts, forecasting=self.forecasting
         )
         self.competitive = CompetitiveIntelligenceService(db)
         self.competitive_report = CompetitiveReportService(db)

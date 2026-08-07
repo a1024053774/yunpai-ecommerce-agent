@@ -24,8 +24,8 @@ WAREHOUSE = "forecast-api-warehouse"
 ADMIN_HEADERS = {"X-Admin-Id": "admin-test", "X-Admin-Key": "test-admin-key-123456"}
 
 
-def _seed_orders(service) -> None:
-    for index in range(35):
+def _seed_orders(service, *, days: int = 35) -> None:
+    for index in range(days):
         business_date = date(2026, 7, 1) + timedelta(days=index)
         placed_at = datetime.combine(business_date, time(12), tzinfo=SHANGHAI).astimezone(UTC)
         service.operations.orders.upsert(
@@ -68,7 +68,7 @@ def test_forecasting_api_exposes_replayable_demand_run_plan_and_risks(tmp_path) 
     app = create_app(make_settings(tmp_path))
     service = app.state.agent
     try:
-        _seed_orders(service)
+        _seed_orders(service, days=42)
         service.operations.inventory.upsert(
             TENANT,
             InventoryBalanceUpsert(
@@ -125,6 +125,31 @@ def test_forecasting_api_exposes_replayable_demand_run_plan_and_risks(tmp_path) 
             run_body = run.json()
             assert run_body["forecast_policy_version"] == "2"
             assert len(run_body["forecast_points"]) == 7
+            shadow = client.get(
+                f"/v1/forecasting/runs/{run_body['run_id']}/shadow",
+                headers=ADMIN_HEADERS,
+            )
+            assert shadow.status_code == 200
+            assert shadow.json()["status"] == "pending"
+            assert shadow.json()["persisted"] is False
+            extended = client.post(
+                "/v1/forecasting/demand/rebuild",
+                headers=ADMIN_HEADERS,
+                json={
+                    "store_id": STORE,
+                    "sku_id": SKU,
+                    "start_date": "2026-07-01",
+                    "end_date": "2026-08-11",
+                },
+            )
+            assert extended.status_code == 200
+            evaluated_shadow = client.get(
+                f"/v1/forecasting/runs/{run_body['run_id']}/shadow",
+                headers=ADMIN_HEADERS,
+            )
+            assert evaluated_shadow.status_code == 200
+            assert evaluated_shadow.json()["status"] == "evaluated"
+            assert evaluated_shadow.json()["persisted"] is False
 
             latest = client.get(
                 f"/v1/forecasting/skus/{SKU}/forecast?store_id={STORE}",
@@ -175,7 +200,7 @@ def test_forecasting_api_exposes_replayable_demand_run_plan_and_risks(tmp_path) 
             assert risks.status_code == 200
             assert risks.json()["risks"]
         with service.db.connect() as conn:
-            assert conn.execute("SELECT COUNT(*) FROM commerce_orders").fetchone()[0] == 35
+            assert conn.execute("SELECT COUNT(*) FROM commerce_orders").fetchone()[0] == 42
             assert conn.execute("SELECT COUNT(*) FROM inventory_plans").fetchone()[0] == 1
     finally:
         service.close()
