@@ -11,6 +11,7 @@ from ..tools import ToolExecutionContext, ToolRegistry, ToolResult, ToolSpec
 from .catalog import CatalogItemUpsert, CatalogService, CatalogStatus
 from .competitive import CompetitiveIntelligenceService, CompetitorObservationCreate
 from .competitive_report import CompetitiveReportService
+from .demand_facts import DemandFactService
 from .finance import FinanceReportQuery, FinanceService
 from .forecasting import ForecastingService
 from .inventory import InventoryBalanceUpsert, InventoryService
@@ -66,6 +67,9 @@ class OperationsService:
         self.catalog = CatalogService(db)
         self.orders = OrderService(db)
         self.inventory = InventoryService(db)
+        self.demand_facts = DemandFactService(
+            db, orders=self.orders, inventory=self.inventory
+        )
         self.forecasting = ForecastingService(db, inventory_service=self.inventory)
         self.competitive = CompetitiveIntelligenceService(db)
         self.competitive_report = CompetitiveReportService(db)

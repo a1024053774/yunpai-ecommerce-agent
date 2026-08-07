@@ -17,6 +17,7 @@ from .finance import (
     ReconciliationTaskTransition,
     SettlementStatementUpsert,
 )
+from .demand_facts import DemandFactRebuildRequest, DemandFactService, DemandPolicy
 from .forecasting import ForecastOrderDraft, ForecastRequest, ForecastingService
 from .inventory import InventoryBalanceUpsert, InventoryService
 from .marketing import (
@@ -53,6 +54,9 @@ __all__ = [
     "CopywritingRequest",
     "FinanceReportQuery",
     "FinanceService",
+    "DemandFactRebuildRequest",
+    "DemandFactService",
+    "DemandPolicy",
     "ForecastOrderDraft",
     "ForecastRequest",
     "ForecastingService",
