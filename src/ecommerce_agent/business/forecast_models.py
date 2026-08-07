@@ -28,6 +28,25 @@ class RollingMeanModel:
         return [value] * horizon_days
 
 
+class WeightedMovingAverageModel:
+    name = "weighted_moving_average"
+    minimum_history_days = 3
+
+    def __init__(self, window: int = 7):
+        if window < 1:
+            raise ValueError("forecast_invalid_window")
+        self.window = window
+
+    def predict(self, history: list[Decimal], horizon_days: int) -> list[Decimal]:
+        if len(history) < self.minimum_history_days:
+            raise ValueError("forecast_insufficient_history")
+        sample = history[-self.window :]
+        weights = list(range(1, len(sample) + 1))
+        denominator = Decimal(sum(weights))
+        value = sum((item * Decimal(weight) for item, weight in zip(sample, weights)), Decimal("0")) / denominator
+        return [max(Decimal("0"), value)] * horizon_days
+
+
 class EWMAForecastModel:
     name = "ewma"
     minimum_history_days = 1

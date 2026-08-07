@@ -13,12 +13,19 @@ from ecommerce_agent.business.forecast_models import (
     EWMAForecastModel,
     RollingMeanModel,
     TSBModel,
+    WeightedMovingAverageModel,
 )
 
 
 def test_candidate_models_are_deterministic_and_nonnegative() -> None:
     history = [Decimal(value) for value in (0, 3, 0, 6, 0, 0, 9)]
-    models = [RollingMeanModel(window=3), EWMAForecastModel(alpha=Decimal("0.3")), CrostonModel(), TSBModel()]
+    models = [
+        RollingMeanModel(window=3),
+        WeightedMovingAverageModel(window=3),
+        EWMAForecastModel(alpha=Decimal("0.3")),
+        CrostonModel(),
+        TSBModel(),
+    ]
 
     for model in models:
         first = model.predict(history, 5)
@@ -26,6 +33,15 @@ def test_candidate_models_are_deterministic_and_nonnegative() -> None:
         assert first == second
         assert len(first) == 5
         assert all(value >= 0 for value in first)
+
+
+def test_weighted_moving_average_uses_recent_values_more_heavily() -> None:
+    model = WeightedMovingAverageModel(window=3)
+
+    assert model.predict([Decimal("1"), Decimal("2"), Decimal("10")], 2) == [
+        Decimal("5.833333333333333333333333333"),
+        Decimal("5.833333333333333333333333333"),
+    ]
 
 
 def test_rolling_backtest_never_passes_future_values_to_a_model() -> None:

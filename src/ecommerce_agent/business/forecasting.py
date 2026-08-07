@@ -12,7 +12,13 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from ..database import Database
 from .demand_facts import DemandFactService
 from .forecast_backtest import ChampionSelector, RollingBacktest
-from .forecast_models import CrostonModel, EWMAForecastModel, RollingMeanModel, TSBModel
+from .forecast_models import (
+    CrostonModel,
+    EWMAForecastModel,
+    RollingMeanModel,
+    TSBModel,
+    WeightedMovingAverageModel,
+)
 from .inventory import InventoryService
 from .source_versioning import payload_digest
 
@@ -51,6 +57,7 @@ class ForecastRunRequest(BaseModel):
             "last_value",
             "7_day_seasonal_naive",
             "rolling_mean",
+            "weighted_moving_average",
             "ewma",
             "croston",
             "tsb",
@@ -139,6 +146,7 @@ class ForecastModelRegistry:
             LastValueModel.name: LastValueModel(),
             SevenDaySeasonalNaiveModel.name: SevenDaySeasonalNaiveModel(),
             RollingMeanModel.name: RollingMeanModel(),
+            WeightedMovingAverageModel.name: WeightedMovingAverageModel(),
             EWMAForecastModel.name: EWMAForecastModel(),
             CrostonModel.name: CrostonModel(),
             TSBModel.name: TSBModel(),
@@ -528,6 +536,7 @@ class ForecastingService:
             for item in backtests
         ]
         backtest_summary = self._backtest_summary(backtest_views)
+        demand_type = self._demand_type_for_run(row)
         return {
             "run_id": row["run_id"],
             "tenant_id": row["tenant_id"],
@@ -549,6 +558,8 @@ class ForecastingService:
             },
             "forecast_horizon": row["forecast_horizon"],
             "status": row["status"],
+            "demand_type": demand_type["kind"],
+            "demand_type_evidence": demand_type["evidence"],
             "forecast_points": [dict(item) for item in points],
             "backtests": backtest_views,
             "backtest_summary": backtest_summary,
@@ -587,6 +598,63 @@ class ForecastingService:
                 item["model"],
             ),
         )
+
+    def _demand_type_for_run(self, row: Any) -> dict[str, Any]:
+        if self.demand_facts is None:
+            return {"kind": "unknown", "evidence": {"reason": "demand_fact_service_unavailable"}}
+        facts = self.demand_facts.list_facts(
+            str(row["tenant_id"]),
+            store_id=str(row["store_id"]),
+            sku_id=str(row["sku_id"]),
+            start_date=date.fromisoformat(str(row["training_start"])),
+            end_date=date.fromisoformat(str(row["training_end"])),
+        )
+        values = [Decimal(str(item["eligible_units"])) for item in facts]
+        return self._classify_demand(values)
+
+    @staticmethod
+    def _classify_demand(values: list[Decimal]) -> dict[str, Any]:
+        if not values:
+            return {"kind": "cold_start", "evidence": {"history_days": 0}}
+        total = sum(values, Decimal("0"))
+        zero_count = sum(value == 0 for value in values)
+        zero_ratio = Decimal(zero_count) / Decimal(len(values))
+        if total == 0:
+            return {
+                "kind": "zero_demand",
+                "evidence": {"history_days": len(values), "zero_ratio": str(zero_ratio)},
+            }
+        if zero_ratio >= Decimal("0.5"):
+            return {
+                "kind": "intermittent",
+                "evidence": {"history_days": len(values), "zero_ratio": str(zero_ratio)},
+            }
+        mean = total / Decimal(len(values))
+        first = values[0]
+        last = values[-1]
+        trend_score = (last - first) / Decimal(max(1, len(values) - 1)) / mean
+        weekly_error: Decimal | None = None
+        if len(values) >= 14:
+            weekly_error = sum(
+                (abs(values[index] - values[index - 7]) for index in range(7, len(values))),
+                Decimal("0"),
+            ) / Decimal(len(values) - 7) / mean
+        evidence = {
+            "history_days": len(values),
+            "zero_ratio": str(zero_ratio),
+            "trend_score": str(trend_score),
+            "weekly_error": str(weekly_error) if weekly_error is not None else None,
+        }
+        variation = max(values) - min(values)
+        if weekly_error is not None and variation > 0 and weekly_error <= Decimal("0.2"):
+            kind = "weekly_seasonal"
+        elif trend_score >= Decimal("0.05"):
+            kind = "trend_up"
+        elif trend_score <= Decimal("-0.05"):
+            kind = "trend_down"
+        else:
+            kind = "stable"
+        return {"kind": kind, "evidence": evidence}
 
     def latest_run(self, tenant_id: str, *, store_id: str, sku_id: str) -> dict[str, Any] | None:
         with self.db.connect() as conn:
