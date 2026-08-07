@@ -208,10 +208,21 @@ def test_models_are_deterministic_and_forecast_quantiles_are_monotonic(tmp_path)
         assert first["persisted"] is False
         assert first["external_order_created"] is False
         with service.db.connect() as conn:
-            forecast_tables = conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'forecast%'"
-            ).fetchall()
-        assert forecast_tables == []
+            forecast_tables = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'forecast%'"
+                ).fetchall()
+            }
+            forecast_rows = conn.execute(
+                "SELECT COUNT(*) FROM forecast_runs"
+            ).fetchone()[0]
+            point_rows = conn.execute(
+                "SELECT COUNT(*) FROM forecast_points"
+            ).fetchone()[0]
+        assert {"forecast_policies", "forecast_runs", "forecast_backtests", "forecast_points", "forecast_anomalies"} <= forecast_tables
+        assert forecast_rows == 0
+        assert point_rows == 0
     finally:
         service.close()
 
@@ -419,10 +430,10 @@ def test_forecasting_preview_api_requires_admin_and_returns_draft(tmp_path) -> N
             assert audit.json()[0]["detail"]["sku_id"] == SKU
         with service.db.connect() as conn:
             after_order_count = conn.execute("SELECT COUNT(*) FROM commerce_orders").fetchone()[0]
-            forecast_plan_table = conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='inventory_plans'"
-            ).fetchone()
+            forecast_plan_rows = conn.execute(
+                "SELECT COUNT(*) FROM inventory_plans"
+            ).fetchone()[0]
         assert after_order_count == before_order_count
-        assert forecast_plan_table is None
+        assert forecast_plan_rows == 0
     finally:
         service.close()

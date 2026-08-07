@@ -18,7 +18,12 @@ from .finance import (
     SettlementStatementUpsert,
 )
 from .demand_facts import DemandFactRebuildRequest, DemandFactService, DemandPolicy
-from .forecasting import ForecastOrderDraft, ForecastRequest, ForecastingService
+from .forecasting import (
+    ForecastOrderDraft,
+    ForecastRequest,
+    ForecastRunRequest,
+    ForecastingService,
+)
 from .inventory import InventoryBalanceUpsert, InventoryService
 from .marketing import (
     ContentDraftUpsert,
@@ -59,6 +64,7 @@ __all__ = [
     "DemandPolicy",
     "ForecastOrderDraft",
     "ForecastRequest",
+    "ForecastRunRequest",
     "ForecastingService",
     "InventoryBalanceUpsert",
     "InventoryService",

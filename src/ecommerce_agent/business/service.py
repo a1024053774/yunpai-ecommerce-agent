@@ -70,7 +70,11 @@ class OperationsService:
         self.demand_facts = DemandFactService(
             db, orders=self.orders, inventory=self.inventory
         )
-        self.forecasting = ForecastingService(db, inventory_service=self.inventory)
+        self.forecasting = ForecastingService(
+            db,
+            inventory_service=self.inventory,
+            demand_fact_service=self.demand_facts,
+        )
         self.competitive = CompetitiveIntelligenceService(db)
         self.competitive_report = CompetitiveReportService(db)
         self.marketing = MarketingService(db)
