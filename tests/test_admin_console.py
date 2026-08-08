@@ -150,27 +150,26 @@ def test_admin_console_page_and_audit_api(tmp_path) -> None:
         forecast_start = page.text.index('id="forecastStore"')
         orders_start = page.text.index('id="view-orders"')
         assert commerce_start < forecast_start < orders_start
-        assert "需求预测与补货计划" in page.text
+        assert "需求预测" in page.text
         assert "Demand Forecast" not in page.text
         for label in (
             "店铺 ID",
             "商品 SKU",
-            "仓库 ID",
+            "时序预测方法",
             "最新预测",
-            "库存风险",
+            "已观测需求与历史预测对比",
             "历史需求事实",
             "可履约需求",
             "总需求",
             "需求状态",
-            "每日 P50 / P80 / P95",
+            "未来每日需求预测",
             "请输入店铺 ID 和商品 SKU 后刷新。",
-            "请输入仓库 ID 查看补货计划。",
-            "暂无已加载数据",
-            "暂无补货计划",
         ):
             assert label in page.text
         assert 'id="forecastRows"' in page.text
         assert 'id="demandRows"' in page.text
+        assert 'id="forecastMethod"' in page.text
+        assert 'id="backtestRows"' in page.text
         assert "/v1/forecasting/skus/" in page.text
         assert "竞品分析" in page.text
         assert "商品与库存" in page.text
@@ -293,6 +292,21 @@ def test_admin_console_page_and_audit_api(tmp_path) -> None:
         assert audit.status_code == 200
         assert audit.json()[0]["event_type"] == "connector.sync.succeeded"
         assert audit.json()[0]["detail"]["virtual"] is True
+
+
+def test_admin_console_forecasting_view_is_prediction_only(tmp_path) -> None:
+    app = create_app(make_settings(tmp_path))
+    with TestClient(app) as client:
+        page = client.get("/admin")
+
+    assert page.status_code == 200
+    assert 'id="forecastMethod"' in page.text
+    assert 'id="backtestRows"' in page.text
+    assert 'id="forecastWarehouse"' not in page.text
+    assert 'id="forecastRisk"' not in page.text
+    assert "inventory-plan?store_id=" not in page.text
+    assert "库存快照" not in page.text
+    assert "demand.facts.slice(-90)" in page.text
 
 
 def test_local_admin_bypass_is_loopback_only_and_keeps_client_authentication(tmp_path) -> None:

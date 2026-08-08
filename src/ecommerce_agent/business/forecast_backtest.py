@@ -107,14 +107,20 @@ class RollingBacktest:
         models: Iterable[ForecastModel],
         forecast_horizon: int,
         windows: int = 3,
+        step_days: int = 1,
     ) -> BacktestReport:
         if len(values) != len(dates) or not values:
             raise ValueError("forecast_series_length_mismatch")
-        if forecast_horizon < 1 or windows < 1:
+        if forecast_horizon < 1 or windows < 1 or step_days < 1:
             raise ValueError("forecast_backtest_parameters_invalid")
         candidates = list(models)
         minimum_history = max(model.minimum_history_days for model in candidates)
-        origins = list(range(minimum_history, len(values) - forecast_horizon + 1))[-windows:]
+        latest_origin = len(values) - forecast_horizon
+        origins = [
+            latest_origin - (step_days * offset)
+            for offset in reversed(range(windows))
+            if latest_origin - (step_days * offset) >= minimum_history
+        ]
         records: list[BacktestRecord] = []
         for model in candidates:
             for origin in origins:

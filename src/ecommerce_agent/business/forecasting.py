@@ -66,6 +66,7 @@ class ForecastRunRequest(BaseModel):
         max_length=12,
     )
     backtest_windows: int = Field(default=3, ge=1, le=30)
+    backtest_step_days: int = Field(default=1, ge=1, le=3650)
     improvement_threshold: Decimal = Field(default=Decimal("0.05"), ge=0, le=1)
 
     @model_validator(mode="after")
@@ -386,6 +387,7 @@ class ForecastingService:
             models=models,
             forecast_horizon=request.horizon_days,
             windows=request.backtest_windows,
+            step_days=request.backtest_step_days,
         )
         baseline_name = "last_value" if "last_value" in request.candidate_models else models[0].name
         decision = ChampionSelector.select(
