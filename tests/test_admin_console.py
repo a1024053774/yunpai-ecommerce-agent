@@ -147,6 +147,23 @@ def test_admin_console_page_and_audit_api(tmp_path) -> None:
         assert 'data-view="forecasting"' in page.text
         assert "需求预测与补货计划" in page.text
         assert "Demand Forecast" not in page.text
+        for label in (
+            "店铺 ID",
+            "商品 SKU",
+            "仓库 ID",
+            "最新预测",
+            "库存风险",
+            "历史需求事实",
+            "可履约需求",
+            "总需求",
+            "需求状态",
+            "每日 P50 / P80 / P95",
+            "请输入店铺 ID 和商品 SKU 后刷新。",
+            "请输入仓库 ID 查看补货计划。",
+            "暂无已加载数据",
+            "暂无补货计划",
+        ):
+            assert label in page.text
         assert 'id="forecastRows"' in page.text
         assert 'id="demandRows"' in page.text
         assert "/v1/forecasting/skus/" in page.text

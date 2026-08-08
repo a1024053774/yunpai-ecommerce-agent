@@ -353,17 +353,17 @@
           <div class="section-head"><div><h2>需求预测与补货计划</h2><p>需求事实、预测区间、回测与确定性补货计划</p></div><button class="button" id="refreshForecasting">刷新</button></div>
           <article class="panel">
             <div class="panel-body form-grid">
-              <div class="field"><label for="forecastStore">Store</label><input class="input" id="forecastStore" placeholder="store_id"></div>
-              <div class="field"><label for="forecastSku">SKU</label><input class="input" id="forecastSku" placeholder="sku_id"></div>
-              <div class="field"><label for="forecastWarehouse">Warehouse</label><input class="input" id="forecastWarehouse" placeholder="warehouse_id"></div>
+              <div class="field"><label for="forecastStore">店铺</label><input class="input" id="forecastStore" placeholder="店铺 ID"></div>
+              <div class="field"><label for="forecastSku">商品 SKU</label><input class="input" id="forecastSku" placeholder="商品 SKU"></div>
+              <div class="field"><label for="forecastWarehouse">仓库</label><input class="input" id="forecastWarehouse" placeholder="仓库 ID"></div>
             </div>
           </article>
           <div class="grid two" style="margin-top:14px">
-            <article class="panel"><div class="panel-head"><h3>Latest Forecast</h3></div><div class="panel-body" id="forecastSummary"><div class="empty">Enter scope and refresh.</div></div></article>
-            <article class="panel"><div class="panel-head"><h3>Inventory Risk</h3></div><div class="panel-body" id="forecastRisk"><div class="empty">No data loaded.</div></div></article>
+            <article class="panel"><div class="panel-head"><h3>最新预测</h3></div><div class="panel-body" id="forecastSummary"><div class="empty">请输入店铺 ID 和商品 SKU 后刷新。</div></div></article>
+            <article class="panel"><div class="panel-head"><h3>库存风险</h3></div><div class="panel-body" id="forecastRisk"><div class="empty">暂无已加载数据</div></div></article>
           </div>
-          <article class="panel" style="margin-top:14px"><div class="panel-head"><h3>Historical Demand Facts</h3></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>Eligible</th><th>Gross</th><th>Demand State</th><th>Stockout</th><th>Quality</th></tr></thead><tbody id="demandRows"></tbody></table></div></article>
-          <article class="panel" style="margin-top:14px"><div class="panel-head"><h3>Daily P50 / P80 / P95</h3></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>P50</th><th>P80</th><th>P95</th></tr></thead><tbody id="forecastRows"></tbody></table></div></article>
+          <article class="panel" style="margin-top:14px"><div class="panel-head"><h3>历史需求事实</h3></div><div class="table-wrap"><table><thead><tr><th>日期</th><th>可履约需求</th><th>总需求</th><th>需求状态</th><th>缺货</th><th>质量</th></tr></thead><tbody id="demandRows"></tbody></table></div></article>
+          <article class="panel" style="margin-top:14px"><div class="panel-head"><h3>每日 P50 / P80 / P95</h3></div><div class="table-wrap"><table><thead><tr><th>日期</th><th>P50</th><th>P80</th><th>P95</th></tr></thead><tbody id="forecastRows"></tbody></table></div></article>
         </section>
 
         <section class="view" id="view-commerce">
@@ -2122,7 +2122,7 @@
       const skuId = $('forecastSku').value.trim();
       const warehouseId = $('forecastWarehouse').value.trim();
       if (!storeId || !skuId) {
-        $('forecastSummary').innerHTML = '<div class="empty">Enter store_id and sku_id.</div>';
+        $('forecastSummary').innerHTML = '<div class="empty">请输入店铺 ID 和商品 SKU 后刷新。</div>';
         return;
       }
       try {
@@ -2134,20 +2134,20 @@
         ]);
         const topBacktest = (forecast.backtest_summary || backtest.backtests || []).slice(0, 3).map((item) => `${escapeHtml(item.model_name || item.model)} ${escapeHtml(item.wape || '-')}`).join(' · ');
         const quality = forecast.data_quality || demand.quality || {};
-        $('forecastSummary').innerHTML = `<div class="stack"><div><strong>${escapeHtml(forecast.champion_model || '-')}</strong><div class="muted">run ${escapeHtml(forecast.run_id)} · ${escapeHtml(forecast.training_end)}</div></div><div class="mono">${escapeHtml(forecast.champion_reason || '')}</div><span class="status ${quality.quality_level === 'good' ? 'ok' : 'warn'}">quality ${escapeHtml(quality.quality_level || quality.level || 'unknown')} · ${demand.facts.length} daily facts</span><div class="muted">demand type: ${escapeHtml(forecast.demand_type || '-')} · source watermark: ${escapeHtml(quality.source_watermark || '-')}</div><div class="muted">backtest WAPE: ${topBacktest || '-'}</div></div>`;
-        $('demandRows').innerHTML = demand.facts.length ? demand.facts.map((item) => `<tr><td>${escapeHtml(item.business_date)}</td><td>${escapeHtml(item.eligible_units)}</td><td>${escapeHtml(item.gross_units)}</td><td>${escapeHtml(item.stockout_evidence?.demand_state || '-')}</td><td>${escapeHtml(item.stockout_flag || '-')}</td><td>${item.quality?.missing_source_date ? '<span class="status warn">source gap</span>' : '<span class="status ok">observed</span>'}</td></tr>`).join('') : '<tr><td colspan="6"><div class="empty">暂无需求事实</div></td></tr>';
+        $('forecastSummary').innerHTML = `<div class="stack"><div><strong>${escapeHtml(forecast.champion_model || '-')}</strong><div class="muted">预测运行 ${escapeHtml(forecast.run_id)} · ${escapeHtml(forecast.training_end)}</div></div><div class="mono">${escapeHtml(forecast.champion_reason || '')}</div><span class="status ${quality.quality_level === 'good' ? 'ok' : 'warn'}">数据质量 ${escapeHtml(quality.quality_level || quality.level || 'unknown')} · ${demand.facts.length} 条日需求事实</span><div class="muted">需求类型：${escapeHtml(forecast.demand_type || '-')} · 来源水位：${escapeHtml(quality.source_watermark || '-')}</div><div class="muted">回测 WAPE：${topBacktest || '-'}</div></div>`;
+        $('demandRows').innerHTML = demand.facts.length ? demand.facts.map((item) => `<tr><td>${escapeHtml(item.business_date)}</td><td>${escapeHtml(item.eligible_units)}</td><td>${escapeHtml(item.gross_units)}</td><td>${escapeHtml(item.stockout_evidence?.demand_state || '-')}</td><td>${escapeHtml(item.stockout_flag || '-')}</td><td>${item.quality?.missing_source_date ? '<span class="status warn">来源缺口</span>' : '<span class="status ok">已观测</span>'}</td></tr>`).join('') : '<tr><td colspan="6"><div class="empty">暂无需求事实</div></td></tr>';
         $('forecastRows').innerHTML = forecast.forecast_points.map((point) => `<tr><td>${escapeHtml(point.forecast_date)}</td><td>${escapeHtml(point.p50)}</td><td>${escapeHtml(point.p80)}</td><td>${escapeHtml(point.p95)}</td></tr>`).join('');
         if (warehouseId) {
           const plan = await api(`/v1/forecasting/skus/${encodeURIComponent(skuId)}/inventory-plan?store_id=${encodeURIComponent(storeId)}&warehouse_id=${encodeURIComponent(warehouseId)}`);
-          $('forecastRisk').innerHTML = `<div class="stack"><span class="status ${plan.risk_level === 'critical' ? 'bad' : plan.risk_level === 'healthy' ? 'ok' : 'warn'}">${escapeHtml(plan.risk_level)}</span><strong>Recommended ${escapeHtml(plan.recommended_order_qty)}</strong><div class="muted">stockout ${escapeHtml(plan.expected_stockout_date || 'none')} · status ${escapeHtml(plan.status)}</div><div class="muted">snapshot ${escapeHtml(plan.inventory_snapshot?.source_updated_at || '-')} · target ${escapeHtml(plan.target_stock || '-')}</div><pre class="json-view">${escapeHtml(JSON.stringify(plan.explanation, null, 2))}</pre></div>`;
+          $('forecastRisk').innerHTML = `<div class="stack"><span class="status ${plan.risk_level === 'critical' ? 'bad' : plan.risk_level === 'healthy' ? 'ok' : 'warn'}">${escapeHtml(plan.risk_level)}</span><strong>建议补货量 ${escapeHtml(plan.recommended_order_qty)}</strong><div class="muted">预计缺货 ${escapeHtml(plan.expected_stockout_date || '无')} · 状态 ${escapeHtml(plan.status)}</div><div class="muted">库存快照 ${escapeHtml(plan.inventory_snapshot?.source_updated_at || '-')} · 目标库存 ${escapeHtml(plan.target_stock || '-')}</div><pre class="json-view">${escapeHtml(JSON.stringify(plan.explanation, null, 2))}</pre></div>`;
         } else {
-          $('forecastRisk').innerHTML = '<div class="empty">Enter warehouse_id to view inventory plan.</div>';
+          $('forecastRisk').innerHTML = '<div class="empty">请输入仓库 ID 查看补货计划。</div>';
         }
       } catch (error) {
         $('forecastSummary').innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
         $('demandRows').innerHTML = '';
         $('forecastRows').innerHTML = '';
-        $('forecastRisk').innerHTML = '<div class="empty">No plan available.</div>';
+        $('forecastRisk').innerHTML = '<div class="empty">暂无补货计划</div>';
       }
     }
 
