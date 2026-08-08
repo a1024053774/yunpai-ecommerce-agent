@@ -145,6 +145,8 @@ def test_admin_console_page_and_audit_api(tmp_path) -> None:
         assert page.status_code == 200
         assert "yunpai-admin-console" in page.text
         assert 'data-view="forecasting"' in page.text
+        assert "需求预测与补货计划" in page.text
+        assert "Demand Forecast" not in page.text
         assert 'id="forecastRows"' in page.text
         assert 'id="demandRows"' in page.text
         assert "/v1/forecasting/skus/" in page.text
