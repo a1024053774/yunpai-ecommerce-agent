@@ -252,7 +252,6 @@
         <button class="active" data-view="overview">经营总览</button>
         <button data-view="service">智能客服</button>
         <button data-view="commerce">商品库存</button>
-        <button data-view="forecasting">需求预测与补货计划</button>
         <button data-view="orders">订单售后</button>
         <button data-view="competitive">竞品分析</button>
         <button data-view="ops">运营辅助</button>
@@ -349,8 +348,12 @@
           </div>
         </section>
 
-        <section class="view" id="view-forecasting">
-          <div class="section-head"><div><h2>需求预测与补货计划</h2><p>需求事实、预测区间、回测与确定性补货计划</p></div><button class="button" id="refreshForecasting">刷新</button></div>
+        <section class="view" id="view-commerce">
+          <div class="section-head"><div><h2>商品与库存</h2><p>渠道商品事实、来源版本与库存风险</p></div><div class="toolbar"><button class="button" id="syncCommerce">同步虚拟数据</button><input class="input" id="commerceSku" placeholder="筛选 SKU"><button class="button primary" id="filterCommerce">查询</button></div></div>
+          <div class="grid kpis" id="commerceKpis"></div>
+          <article class="panel" style="margin-top:14px"><div class="panel-head"><h3>商品事实</h3><span class="muted" id="catalogAsOf"></span></div><div class="table-wrap"><table><thead><tr><th>SKU</th><th>商品</th><th>店铺</th><th>售价</th><th>状态</th><th>版本</th><th>数据时间</th></tr></thead><tbody id="catalogRows"></tbody></table></div></article>
+          <article class="panel" style="margin-top:14px"><div class="panel-head"><h3>库存风险</h3></div><div class="table-wrap"><table><thead><tr><th>SKU</th><th>仓库</th><th>可售</th><th>覆盖天数</th><th>风险</th><th>建议补货</th><th>数据时间</th></tr></thead><tbody id="inventoryRows"></tbody></table></div></article>
+          <div class="section-head" style="margin-top:22px"><div><h2>需求预测与补货计划</h2><p>基于销售订单生成需求事实、预测区间、回测与确定性补货计划</p></div><button class="button" id="refreshForecasting">刷新预测</button></div>
           <article class="panel">
             <div class="panel-body form-grid">
               <div class="field"><label for="forecastStore">店铺</label><input class="input" id="forecastStore" placeholder="店铺 ID"></div>
@@ -360,17 +363,10 @@
           </article>
           <div class="grid two" style="margin-top:14px">
             <article class="panel"><div class="panel-head"><h3>最新预测</h3></div><div class="panel-body" id="forecastSummary"><div class="empty">请输入店铺 ID 和商品 SKU 后刷新。</div></div></article>
-            <article class="panel"><div class="panel-head"><h3>库存风险</h3></div><div class="panel-body" id="forecastRisk"><div class="empty">暂无已加载数据</div></div></article>
+            <article class="panel"><div class="panel-head"><h3>预测补货风险</h3></div><div class="panel-body" id="forecastRisk"><div class="empty">暂无已加载数据</div></div></article>
           </div>
           <article class="panel" style="margin-top:14px"><div class="panel-head"><h3>历史需求事实</h3></div><div class="table-wrap"><table><thead><tr><th>日期</th><th>可履约需求</th><th>总需求</th><th>需求状态</th><th>缺货</th><th>质量</th></tr></thead><tbody id="demandRows"></tbody></table></div></article>
           <article class="panel" style="margin-top:14px"><div class="panel-head"><h3>每日 P50 / P80 / P95</h3></div><div class="table-wrap"><table><thead><tr><th>日期</th><th>P50</th><th>P80</th><th>P95</th></tr></thead><tbody id="forecastRows"></tbody></table></div></article>
-        </section>
-
-        <section class="view" id="view-commerce">
-          <div class="section-head"><div><h2>商品与库存</h2><p>渠道商品事实、来源版本与库存风险</p></div><div class="toolbar"><button class="button" id="syncCommerce">同步虚拟数据</button><input class="input" id="commerceSku" placeholder="筛选 SKU"><button class="button primary" id="filterCommerce">查询</button></div></div>
-          <div class="grid kpis" id="commerceKpis"></div>
-          <article class="panel" style="margin-top:14px"><div class="panel-head"><h3>商品事实</h3><span class="muted" id="catalogAsOf"></span></div><div class="table-wrap"><table><thead><tr><th>SKU</th><th>商品</th><th>店铺</th><th>售价</th><th>状态</th><th>版本</th><th>数据时间</th></tr></thead><tbody id="catalogRows"></tbody></table></div></article>
-          <article class="panel" style="margin-top:14px"><div class="panel-head"><h3>库存风险</h3></div><div class="table-wrap"><table><thead><tr><th>SKU</th><th>仓库</th><th>可售</th><th>覆盖天数</th><th>风险</th><th>建议补货</th><th>数据时间</th></tr></thead><tbody id="inventoryRows"></tbody></table></div></article>
         </section>
 
         <section class="view" id="view-orders">
@@ -855,7 +851,7 @@
       customerTestSessionId: `customer-test:${crypto.randomUUID ? crypto.randomUUID() : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`}`
     };
 
-    const titles = { overview: '经营总览', service: '智能客服', commerce: '商品与库存', forecasting: '需求预测与补货计划', orders: '订单与售后', competitive: '竞品分析', ops: '运营辅助', marketing: '营销投放', finance: '利润对账', knowledge: '知识与 SOP', quality: '质检 VOC', evaluations: '客服评测', simulation: '场景验收', channels: '渠道接待', releases: '发布门禁', modules: '功能模块', audit: '审计记录' };
+    const titles = { overview: '经营总览', service: '智能客服', commerce: '商品与库存', orders: '订单与售后', competitive: '竞品分析', ops: '运营辅助', marketing: '营销投放', finance: '利润对账', knowledge: '知识与 SOP', quality: '质检 VOC', evaluations: '客服评测', simulation: '场景验收', channels: '渠道接待', releases: '发布门禁', modules: '功能模块', audit: '审计记录' };
     const sourceLabels = { api:'API 会话', channel:'渠道会话', simulation:'虚拟验收', evaluation:'隔离评测' };
     const $ = (id) => document.getElementById(id);
 
@@ -2154,8 +2150,7 @@
     async function loadView(view) {
       if (view === 'overview') return loadOverview();
       if (view === 'service') return Promise.all([loadConversations(), loadHandoffs()]);
-      if (view === 'commerce') return loadCommerce();
-      if (view === 'forecasting') return loadForecasting();
+      if (view === 'commerce') return Promise.all([loadCommerce(), loadForecasting()]);
       if (view === 'orders') return loadOrders();
       if (view === 'competitive') return loadCompetitive();
       if (view === 'ops') return loadOpsAssistant();

@@ -144,7 +144,12 @@ def test_admin_console_page_and_audit_api(tmp_path) -> None:
         page = client.get("/admin")
         assert page.status_code == 200
         assert "yunpai-admin-console" in page.text
-        assert 'data-view="forecasting"' in page.text
+        assert 'data-view="forecasting"' not in page.text
+        assert 'id="view-forecasting"' not in page.text
+        commerce_start = page.text.index('id="view-commerce"')
+        forecast_start = page.text.index('id="forecastStore"')
+        orders_start = page.text.index('id="view-orders"')
+        assert commerce_start < forecast_start < orders_start
         assert "需求预测与补货计划" in page.text
         assert "Demand Forecast" not in page.text
         for label in (
