@@ -110,6 +110,10 @@ def test_inventory_plan_is_deterministic_and_preserves_calculation_evidence(tmp_
         assert first["rounding"]["minimum_order_qty"] == "20.00"
         assert first["rounding"]["order_multiple"] == "10.00"
         assert first["explanation"]["warehouse_scope"] == "supply_location_only"
+        assert set(first["expected_stockout_dates"]) == {"p50", "p80", "p95"}
+        assert first["replenishment_order"]["status"] == "draft"
+        assert first["replenishment_order"]["external_order_created"] is False
+        assert first["explanation"]["forecast_data_quality"]
         with service.db.connect() as conn:
             assert conn.execute("SELECT COUNT(*) FROM inventory_plans").fetchone()[0] == 2
     finally:
@@ -123,5 +127,89 @@ def test_inventory_plan_is_tenant_scoped(tmp_path) -> None:
             service.operations.inventory_planning.create_plan(
                 "tenant-other", forecast_run_id="run-other", warehouse_id=WAREHOUSE
             )
+    finally:
+        service.close()
+
+
+def test_inventory_plan_applies_maximum_stock_after_moq_and_multiple(tmp_path) -> None:
+    service = AgentService(make_settings(tmp_path))
+    try:
+        run_id = _seed_and_run(service)
+        service.operations.inventory.upsert(
+            TENANT,
+            InventoryBalanceUpsert(
+                connector_id="plan-cap-inventory",
+                store_id=STORE,
+                warehouse_id=WAREHOUSE,
+                sku_id=SKU,
+                on_hand=Decimal("0"),
+                reserved=Decimal("0"),
+                inbound=Decimal("0"),
+                source_updated_at=datetime.now(UTC),
+                source_id="plan-cap-source",
+            ),
+        )
+        service.operations.inventory_planning.upsert_policy(
+            TENANT,
+            InventoryPlanningPolicy(
+                store_id=STORE,
+                sku_id=SKU,
+                warehouse_id=WAREHOUSE,
+                supplier_lead_days=3,
+                review_period_days=2,
+                minimum_order_qty=Decimal("65"),
+                order_multiple=Decimal("20"),
+                minimum_safety_stock=Decimal("60"),
+                maximum_stock_days=7,
+            ),
+        )
+
+        plan = service.operations.inventory_planning.create_plan(
+            TENANT, forecast_run_id=run_id, warehouse_id=WAREHOUSE
+        )
+
+        assert plan["recommended_order_qty"] == "70.00"
+        assert plan["rounding"]["after_order_multiple"] == "80.00"
+        assert plan["rounding"]["maximum_stock_limit"] == "70.00"
+        assert plan["rounding"]["maximum_stock_cap_applied"] is True
+    finally:
+        service.close()
+
+
+def test_inventory_plan_exposes_overstock_risk(tmp_path) -> None:
+    service = AgentService(make_settings(tmp_path))
+    try:
+        run_id = _seed_and_run(service)
+        service.operations.inventory.upsert(
+            TENANT,
+            InventoryBalanceUpsert(
+                connector_id="plan-overstock-inventory",
+                store_id=STORE,
+                warehouse_id=WAREHOUSE,
+                sku_id=SKU,
+                on_hand=Decimal("100"),
+                reserved=Decimal("0"),
+                inbound=Decimal("0"),
+                source_updated_at=datetime.now(UTC),
+                source_id="plan-overstock-source",
+            ),
+        )
+        service.operations.inventory_planning.upsert_policy(
+            TENANT,
+            InventoryPlanningPolicy(
+                store_id=STORE,
+                sku_id=SKU,
+                warehouse_id=WAREHOUSE,
+                supplier_lead_days=3,
+                review_period_days=2,
+                maximum_stock_days=5,
+            ),
+        )
+
+        plan = service.operations.inventory_planning.create_plan(
+            TENANT, forecast_run_id=run_id, warehouse_id=WAREHOUSE
+        )
+
+        assert plan["risk_level"] == "overstock"
     finally:
         service.close()

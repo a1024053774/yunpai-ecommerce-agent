@@ -8,6 +8,9 @@ forecast runs, or inventory plans. Run it with:
 python evals/forecasting/run.py
 ```
 
-The suite covers steady demand, trends, weekly seasonality, intermittent demand, zero
-demand, missing-date evidence, and cold start. It is not a claim of accuracy on a real
-platform export; real-data acceptance remains a separate gate.
+The suite covers steady demand, rising and falling trends, weekly seasonality,
+intermittent demand, zero demand, missing-date evidence, cold start, promotion peaks,
+and stockout-truncated history. Every non-cold-start sequence uses rolling-origin
+backtesting and reports WAPE/Bias, Pinball Loss, bounded interval coverage, demand type,
+and a no-future-leakage gate. It is not a claim of accuracy on a real platform export;
+real-data acceptance remains a separate gate.

@@ -142,35 +142,53 @@ class InventoryPlanningService:
         lead_demand = sum(selected[: policy["supplier_lead_days"]], Decimal("0"))
         target_demand = sum(selected[:planning_days], Decimal("0"))
         average_daily = target_demand / Decimal(planning_days)
-        target_stock = max(
-            target_demand,
-            Decimal(str(policy["minimum_safety_stock"])),
-        )
+        minimum_safety_stock = Decimal(str(policy["minimum_safety_stock"]))
+        target_stock = max(target_demand, minimum_safety_stock)
         maximum_stock = None
         if policy["maximum_stock_days"] is not None:
             maximum_stock = average_daily * Decimal(str(policy["maximum_stock_days"]))
-            target_stock = min(target_stock, maximum_stock)
         on_hand = Decimal(str(balance["on_hand"]))
         reserved = Decimal(str(balance["reserved"]))
         inbound = Decimal(str(balance["inbound"]))
         available = max(Decimal("0"), on_hand - reserved)
         raw_quantity = max(Decimal("0"), target_stock - available - inbound)
-        recommended = self._round_quantity(
-            raw_quantity,
-            minimum=Decimal(str(policy["minimum_order_qty"])),
-            multiple=Decimal(str(policy["order_multiple"])),
+        minimum_order_qty = Decimal(str(policy["minimum_order_qty"]))
+        order_multiple = Decimal(str(policy["order_multiple"]))
+        after_minimum = max(raw_quantity, minimum_order_qty) if raw_quantity > 0 else Decimal("0")
+        after_multiple = (
+            (after_minimum / order_multiple).to_integral_value(rounding=ROUND_CEILING) * order_multiple
+            if after_minimum > 0
+            else Decimal("0")
         )
+        maximum_stock_cap_applied = False
+        if maximum_stock is not None:
+            maximum_remaining = max(Decimal("0"), maximum_stock - available - inbound)
+            recommended = min(after_multiple, maximum_remaining)
+            maximum_stock_cap_applied = recommended < after_multiple
+        else:
+            recommended = after_multiple
         expected_stockout = self._stockout_date(
             points,
             service_level=policy["service_level"],
             supply=available + inbound,
         )
+        expected_stockout_dates = {
+            level: self._stockout_date(
+                points,
+                service_level=level,
+                supply=available + inbound,
+            )
+            for level in ("p50", "p80", "p95")
+        }
         risk_level = self._risk_level(
             expected_stockout,
             training_end=run["training_end"],
             lead_days=policy["supplier_lead_days"],
             review_days=policy["review_period_days"],
             recommended=recommended,
+            supply=available + inbound,
+            average_daily=average_daily,
+            maximum_stock_days=policy["maximum_stock_days"],
         )
         snapshot = {
             "balance_id": balance["id"],
@@ -188,19 +206,36 @@ class InventoryPlanningService:
             "store_total_demand_calculated_once": True,
             "warehouse_allocation": "caller_allocated",
             "service_level": policy["service_level"],
+            "stockout_dates": expected_stockout_dates,
+            "forecast_metrics": run["metrics"],
+            "forecast_data_quality": run["data_quality"],
+            "forecast_horizon_totals": run["horizon_totals"],
+            "replenishment_order": {
+                "kind": "forecast_replenishment",
+                "status": "draft",
+                "persisted": True,
+                "external_order_created": False,
+                "recommended_quantity": self._decimal(recommended),
+                "recommended_arrival_date": (
+                    date.fromisoformat(str(run["training_end"]))
+                    + timedelta(days=policy["supplier_lead_days"])
+                ).isoformat(),
+            },
             "lead_demand": self._decimal(lead_demand),
             "target_demand": self._decimal(target_demand),
             "average_daily_demand": self._decimal(average_daily),
             "maximum_stock": self._decimal(maximum_stock),
-            "calculation": "available + inbound -> target stock -> safety stock -> MOQ -> multiple",
+            "calculation": "target demand -> minimum safety stock -> MOQ -> order multiple -> maximum stock cap",
         }
         rounding = {
             "minimum_order_qty": self._decimal(Decimal(str(policy["minimum_order_qty"]))),
             "order_multiple": self._decimal(Decimal(str(policy["order_multiple"]))),
-            "minimum_safety_stock": self._decimal(
-                Decimal(str(policy["minimum_safety_stock"]))
-            ),
+            "minimum_safety_stock": self._decimal(minimum_safety_stock),
             "raw_order_qty": self._decimal(raw_quantity),
+            "after_minimum_order_qty": self._decimal(after_minimum),
+            "after_order_multiple": self._decimal(after_multiple),
+            "maximum_stock_limit": self._decimal(maximum_stock),
+            "maximum_stock_cap_applied": maximum_stock_cap_applied,
         }
         with self.db._write_lock, self.db.connect() as conn:
             conn.execute(
@@ -294,7 +329,8 @@ class InventoryPlanningService:
                 WHERE {' AND '.join(conditions)}
                 ORDER BY CASE risk_level
                     WHEN 'critical' THEN 0 WHEN 'high' THEN 1
-                    WHEN 'medium' THEN 2 WHEN 'replenishment_due' THEN 3 ELSE 4 END,
+                    WHEN 'medium' THEN 2 WHEN 'overstock' THEN 3
+                    WHEN 'replenishment_due' THEN 4 ELSE 5 END,
                     created_at DESC LIMIT ?
                 """,
                 tuple(params),
@@ -412,7 +448,16 @@ class InventoryPlanningService:
         lead_days: int,
         review_days: int,
         recommended: Decimal,
+        supply: Decimal,
+        average_daily: Decimal,
+        maximum_stock_days: int | None,
     ) -> str:
+        if (
+            maximum_stock_days is not None
+            and average_daily > 0
+            and supply > average_daily * Decimal(str(maximum_stock_days))
+        ):
+            return "overstock"
         if expected_stockout is None:
             return "replenishment_due" if recommended > 0 else "healthy"
         stockout = date.fromisoformat(expected_stockout)
@@ -432,6 +477,7 @@ class InventoryPlanningService:
     def _view(row: dict[str, Any]) -> dict[str, Any]:
         snapshot = json.loads(row["inventory_snapshot_json"])
         rounding = json.loads(row["rounding_json"])
+        explanation = json.loads(row["explanation_json"])
         return {
             "plan_id": row["plan_id"],
             "tenant_id": row["tenant_id"],
@@ -447,6 +493,7 @@ class InventoryPlanningService:
             "target_stock": row["target_stock"],
             "recommended_order_qty": row["recommended_order_qty"],
             "expected_stockout_date": row["expected_stockout_date"],
+            "expected_stockout_dates": explanation.get("stockout_dates", {}),
             "risk_level": row["risk_level"],
             "rounding": rounding,
             "calculation": {
@@ -457,7 +504,10 @@ class InventoryPlanningService:
                 "minimum_safety_stock": rounding["minimum_safety_stock"],
                 "raw_order_qty": rounding["raw_order_qty"],
             },
-            "explanation": json.loads(row["explanation_json"]),
+            "explanation": explanation,
+            "replenishment_order": explanation.get("replenishment_order", {}),
+            "persisted": True,
+            "external_order_created": False,
             "status": row["status"],
             "created_at": row["created_at"],
         }

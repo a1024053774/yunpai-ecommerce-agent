@@ -76,6 +76,10 @@ def test_forecast_run_persists_backtests_points_and_champion(tmp_path) -> None:
         assert result["champion_reason"]
         assert result["backtest_summary"]
         assert result["backtest_summary"][0]["model"] == result["champion_model"]
+        assert Decimal(result["horizon_totals"]["p50"]) == sum(
+            (Decimal(point["p50"]) for point in result["forecast_points"]),
+            Decimal("0"),
+        )
         assert result["demand_type"] == "weekly_seasonal"
         assert result["demand_type_evidence"]["history_days"] == 35
         assert len(result["forecast_points"]) == 7

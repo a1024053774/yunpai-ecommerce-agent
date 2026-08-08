@@ -369,6 +369,7 @@ class OperationsService:
                     kind="read",
                     input_model=DemandForecastToolInput,
                     handler=self._demand_forecast_tool,
+                    policy=self._forecast_store_scope_policy,
                     metadata={"domain": "forecasting", "risk_level": "L0"},
                 )
             )
@@ -380,6 +381,7 @@ class OperationsService:
                     kind="read",
                     input_model=InventoryPlanToolInput,
                     handler=self._inventory_plan_tool,
+                    policy=self._forecast_store_scope_policy,
                     metadata={"domain": "forecasting", "risk_level": "L0"},
                 )
             )
@@ -413,6 +415,17 @@ class OperationsService:
 
     @classmethod
     def _catalog_store_scope_policy(
+        cls, arguments: BaseModel, context: ToolExecutionContext
+    ) -> str | None:
+        payload = arguments.model_dump()
+        trusted_store = cls._trusted_store_id(context)
+        requested_store = payload.get("store_id")
+        if trusted_store and requested_store and str(requested_store) != trusted_store:
+            return "store_scope_mismatch"
+        return None
+
+    @classmethod
+    def _forecast_store_scope_policy(
         cls, arguments: BaseModel, context: ToolExecutionContext
     ) -> str | None:
         payload = arguments.model_dump()
@@ -551,7 +564,26 @@ class OperationsService:
         )
         if run is None:
             return ToolResult(status="failed", error_code="forecast_run_not_found")
-        return ToolResult(status="success", output=run)
+        return ToolResult(
+            status="success",
+            output={
+                **run,
+                "evidence": {
+                    "forecast_run_id": run["run_id"],
+                    "training_window": {
+                        "start": run["training_start"],
+                        "end": run["training_end"],
+                    },
+                    "data_hash": run["data_hash"],
+                    "demand_policy_version": run["demand_policy_version"],
+                    "source_watermark": run["data_quality"].get("source_watermark"),
+                    "fact_versions": run["data_quality"].get("fact_versions", []),
+                    "quality": run["data_quality"],
+                    "data_quality": run["data_quality"],
+                    "backtest_summary": run["backtest_summary"],
+                },
+            },
+        )
 
     def _inventory_plan_tool(
         self, arguments: BaseModel, context: ToolExecutionContext
@@ -565,4 +597,22 @@ class OperationsService:
         )
         if plan is None:
             return ToolResult(status="failed", error_code="inventory_plan_not_found")
-        return ToolResult(status="success", output=plan)
+        run = self.forecasting.get_run(context.tenant_id, plan["forecast_run_id"])
+        return ToolResult(
+            status="success",
+            output={
+                **plan,
+                "evidence": {
+                    "forecast_run_id": run["run_id"],
+                    "forecast_policy_version": run["forecast_policy_version"],
+                    "champion_model": run["champion_model"],
+                    "forecast_metrics": run["metrics"],
+                    "inventory_snapshot": plan["inventory_snapshot"],
+                    "planning_policy": {
+                        "policy_id": plan["policy_id"],
+                        "policy_version": plan["policy_version"],
+                    },
+                    "data_quality": run["data_quality"],
+                },
+            },
+        )

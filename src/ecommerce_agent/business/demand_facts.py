@@ -35,11 +35,20 @@ class DemandFactRebuildRequest(BaseModel):
     end_date: date
     mode: Literal["full", "incremental"] = "incremental"
     source_gap_dates: list[date] = Field(default_factory=list, max_length=3650)
+    stockout_statuses: dict[date, Literal["true", "false", "unknown"]] = Field(
+        default_factory=dict,
+        max_length=3650,
+    )
 
     @model_validator(mode="after")
     def date_range_is_valid(self) -> "DemandFactRebuildRequest":
         if self.end_date < self.start_date:
             raise ValueError("demand_fact_invalid_date_range")
+        if any(
+            item < self.start_date or item > self.end_date
+            for item in (*self.source_gap_dates, *self.stockout_statuses)
+        ):
+            raise ValueError("demand_fact_evidence_outside_range")
         return self
 
 
@@ -68,14 +77,23 @@ class DemandFactService:
         end_date: date,
         mode: str = "incremental",
         source_gap_dates: list[date] | None = None,
+        stockout_statuses: dict[date, str] | None = None,
     ) -> dict[str, Any]:
         if end_date < start_date:
             raise ValueError("demand_fact_invalid_date_range")
         if mode not in {"full", "incremental"}:
             raise ValueError("demand_fact_invalid_mode")
         source_gap_set = set(source_gap_dates or [])
+        stockout_status_map = {
+            date.fromisoformat(str(day)): str(status)
+            for day, status in (stockout_statuses or {}).items()
+        }
         if any(item < start_date or item > end_date for item in source_gap_set):
             raise ValueError("demand_fact_source_gap_outside_range")
+        if any(item < start_date or item > end_date for item in stockout_status_map):
+            raise ValueError("demand_fact_evidence_outside_range")
+        if any(status not in {"true", "false", "unknown"} for status in stockout_status_map.values()):
+            raise ValueError("demand_fact_invalid_stockout_status")
 
         orders = self.orders.list_orders(tenant_id, store_id=store_id, limit=100000)
         daily: dict[date, dict[str, Any]] = {}
@@ -137,7 +155,7 @@ class DemandFactService:
                 "price_amount": Decimal("0"),
             }
             eligible_units = bucket["eligible_units"]
-            stockout_flag = "unknown"
+            stockout_flag = stockout_status_map.get(cursor, "unknown")
             is_source_gap = cursor in source_gap_set
             if is_source_gap:
                 demand_state = "source_gap"
@@ -152,9 +170,16 @@ class DemandFactService:
                 "inventory_balance_count": len(balances),
                 "inventory_watermark": inventory_watermark,
                 "stockout_reason": (
-                    "no_historical_inventory_snapshot"
+                    "reviewed_source_evidence"
+                    if cursor in stockout_status_map and stockout_flag != "unknown"
+                    else "no_historical_inventory_snapshot"
                     if balances
                     else "inventory_snapshot_unavailable"
+                ),
+                "stockout_evidence_source": (
+                    "caller_asserted"
+                    if cursor in stockout_status_map and stockout_flag != "unknown"
+                    else "unavailable"
                 ),
             }
             price = (

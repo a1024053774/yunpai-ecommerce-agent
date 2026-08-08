@@ -9,8 +9,10 @@
     {"id": "downtrend", "kind": "trend_down", "history": [25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2], "future": [1, 1, 1, 1, 1, 1, 1]},
     {"id": "weekly_seasonal", "kind": "seasonal_7d", "history": [4, 6, 8, 10, 12, 14, 16, 4, 6, 8, 10, 12, 14, 16, 4, 6, 8, 10, 12, 14, 16, 4, 6, 8, 10, 12, 14, 16], "future": [4, 6, 8, 10, 12, 14, 16]},
     {"id": "intermittent", "kind": "intermittent", "history": [0, 0, 0, 5, 0, 0, 0, 0, 7, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 9, 0, 0], "future": [0, 0, 0, 6, 0, 0, 0]},
-    {"id": "zero_demand", "kind": "zero", "history": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "future": [0, 0, 0, 0, 0, 0, 0]},
+    {"id": "zero_demand", "kind": "zero", "history": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "future": [0, 0, 0, 0, 0, 0, 0]},
     {"id": "cold_start", "kind": "cold_start", "history": [3, 4], "future": [null, null, null, null, null, null, null]},
-    {"id": "missing_dates", "kind": "missing_evidence", "history": [5, 0, 0, 6, 0, 0, 7, 0, 0, 8, 0, 0, 9, 0, 0, 10, 0, 0, 11, 0, 0], "future": [11, 0, 0, 12, 0, 0, 13]}
+    {"id": "missing_dates", "kind": "missing_evidence", "history": [5, 0, 0, 6, 0, 0, 7, 0, 0, 8, 0, 0, 9, 0, 0, 10, 0, 0, 11, 0, 0], "future": [11, 0, 0, 12, 0, 0, 13]},
+    {"id": "promotion_peak", "kind": "promotion_peak", "history": [5, 5, 5, 5, 5, 5, 30, 5, 5, 5, 5, 5, 5, 35, 5, 5, 5, 5, 5, 5, 40, 5, 5, 5, 5, 5, 5, 45], "future": [5, 5, 5, 5, 5, 5, 50]},
+    {"id": "stockout_truncated", "kind": "stockout_truncated", "history": [8, 8, 8, 8, 8, 8, 8, 1, 1, 1, 1, 1, 1, 1, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8], "future": [8, 8, 8, 8, 8, 8, 8]}
   ]
 }

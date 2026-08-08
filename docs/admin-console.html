@@ -362,6 +362,7 @@
             <article class="panel"><div class="panel-head"><h3>Latest Forecast</h3></div><div class="panel-body" id="forecastSummary"><div class="empty">Enter scope and refresh.</div></div></article>
             <article class="panel"><div class="panel-head"><h3>Inventory Risk</h3></div><div class="panel-body" id="forecastRisk"><div class="empty">No data loaded.</div></div></article>
           </div>
+          <article class="panel" style="margin-top:14px"><div class="panel-head"><h3>Historical Demand Facts</h3></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>Eligible</th><th>Gross</th><th>Demand State</th><th>Stockout</th><th>Quality</th></tr></thead><tbody id="demandRows"></tbody></table></div></article>
           <article class="panel" style="margin-top:14px"><div class="panel-head"><h3>Daily P50 / P80 / P95</h3></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>P50</th><th>P80</th><th>P95</th></tr></thead><tbody id="forecastRows"></tbody></table></div></article>
         </section>
 
@@ -2132,16 +2133,19 @@
           api(`/v1/forecasting/skus/${encodeURIComponent(skuId)}/backtest${query}`)
         ]);
         const topBacktest = (forecast.backtest_summary || backtest.backtests || []).slice(0, 3).map((item) => `${escapeHtml(item.model_name || item.model)} ${escapeHtml(item.wape || '-')}`).join(' · ');
-        $('forecastSummary').innerHTML = `<div class="stack"><div><strong>${escapeHtml(forecast.champion_model || '-')}</strong><div class="muted">run ${escapeHtml(forecast.run_id)} · ${escapeHtml(forecast.training_end)}</div></div><div class="mono">${escapeHtml(forecast.champion_reason || '')}</div><span class="status ${demand.quality.level === 'good' ? 'ok' : 'warn'}">quality ${escapeHtml(demand.quality.level)} · ${demand.facts.length} daily facts</span><div class="muted">backtest WAPE: ${topBacktest || '-'}</div></div>`;
+        const quality = forecast.data_quality || demand.quality || {};
+        $('forecastSummary').innerHTML = `<div class="stack"><div><strong>${escapeHtml(forecast.champion_model || '-')}</strong><div class="muted">run ${escapeHtml(forecast.run_id)} · ${escapeHtml(forecast.training_end)}</div></div><div class="mono">${escapeHtml(forecast.champion_reason || '')}</div><span class="status ${quality.quality_level === 'good' ? 'ok' : 'warn'}">quality ${escapeHtml(quality.quality_level || quality.level || 'unknown')} · ${demand.facts.length} daily facts</span><div class="muted">demand type: ${escapeHtml(forecast.demand_type || '-')} · source watermark: ${escapeHtml(quality.source_watermark || '-')}</div><div class="muted">backtest WAPE: ${topBacktest || '-'}</div></div>`;
+        $('demandRows').innerHTML = demand.facts.length ? demand.facts.map((item) => `<tr><td>${escapeHtml(item.business_date)}</td><td>${escapeHtml(item.eligible_units)}</td><td>${escapeHtml(item.gross_units)}</td><td>${escapeHtml(item.stockout_evidence?.demand_state || '-')}</td><td>${escapeHtml(item.stockout_flag || '-')}</td><td>${item.quality?.missing_source_date ? '<span class="status warn">source gap</span>' : '<span class="status ok">observed</span>'}</td></tr>`).join('') : '<tr><td colspan="6"><div class="empty">暂无需求事实</div></td></tr>';
         $('forecastRows').innerHTML = forecast.forecast_points.map((point) => `<tr><td>${escapeHtml(point.forecast_date)}</td><td>${escapeHtml(point.p50)}</td><td>${escapeHtml(point.p80)}</td><td>${escapeHtml(point.p95)}</td></tr>`).join('');
         if (warehouseId) {
           const plan = await api(`/v1/forecasting/skus/${encodeURIComponent(skuId)}/inventory-plan?store_id=${encodeURIComponent(storeId)}&warehouse_id=${encodeURIComponent(warehouseId)}`);
-          $('forecastRisk').innerHTML = `<div class="stack"><span class="status ${plan.risk_level === 'critical' ? 'bad' : plan.risk_level === 'healthy' ? 'ok' : 'warn'}">${escapeHtml(plan.risk_level)}</span><strong>Recommended ${escapeHtml(plan.recommended_order_qty)}</strong><div class="muted">stockout ${escapeHtml(plan.expected_stockout_date || 'none')} · status ${escapeHtml(plan.status)}</div><pre class="json-view">${escapeHtml(JSON.stringify(plan.explanation, null, 2))}</pre></div>`;
+          $('forecastRisk').innerHTML = `<div class="stack"><span class="status ${plan.risk_level === 'critical' ? 'bad' : plan.risk_level === 'healthy' ? 'ok' : 'warn'}">${escapeHtml(plan.risk_level)}</span><strong>Recommended ${escapeHtml(plan.recommended_order_qty)}</strong><div class="muted">stockout ${escapeHtml(plan.expected_stockout_date || 'none')} · status ${escapeHtml(plan.status)}</div><div class="muted">snapshot ${escapeHtml(plan.inventory_snapshot?.source_updated_at || '-')} · target ${escapeHtml(plan.target_stock || '-')}</div><pre class="json-view">${escapeHtml(JSON.stringify(plan.explanation, null, 2))}</pre></div>`;
         } else {
           $('forecastRisk').innerHTML = '<div class="empty">Enter warehouse_id to view inventory plan.</div>';
         }
       } catch (error) {
         $('forecastSummary').innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+        $('demandRows').innerHTML = '';
         $('forecastRows').innerHTML = '';
         $('forecastRisk').innerHTML = '<div class="empty">No plan available.</div>';
       }

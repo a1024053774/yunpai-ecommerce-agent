@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Any
 
 from .demand_facts import DemandFactService
-from .forecast_backtest import compute_metrics
+from .forecast_backtest import compute_interval_coverage, compute_metrics, compute_pinball_loss
 from .forecasting import ForecastingService
 
 
@@ -40,7 +40,25 @@ class ForecastShadowService:
                 "quality": "insufficient_future_facts",
                 "persisted": False,
             }
+        excluded = [
+            item
+            for item in facts[:horizon]
+            if item["quality"].get("missing_source_date") or item["stockout_flag"] == "true"
+        ]
+        if excluded:
+            return {
+                "run_id": run_id,
+                "status": "pending",
+                "training_end": training_end.isoformat(),
+                "evaluation_end": end_date.isoformat(),
+                "observed_days": len(facts[:horizon]),
+                "required_days": horizon,
+                "quality": "future_facts_degraded",
+                "excluded_days": [item["business_date"] for item in excluded],
+                "persisted": False,
+            }
         actual = [Decimal(str(item["eligible_units"])) for item in facts[:horizon]]
+        p50 = [Decimal(str(point["p50"])) for point in points[:horizon]]
         forecast = [Decimal(str(point["p50"])) for point in points[:horizon]]
         p80 = [Decimal(str(point["p80"])) for point in points[:horizon]]
         p95 = [Decimal(str(point["p95"])) for point in points[:horizon]]
@@ -51,10 +69,30 @@ class ForecastShadowService:
             "evaluation_end": end_date.isoformat(),
             "observed_days": len(actual),
             "required_days": horizon,
-            "metrics": {key: str(value) if value is not None else None for key, value in compute_metrics(actual, forecast).items()},
+            "metrics": {
+                key: str(value) if value is not None else None
+                for key, value in compute_metrics(actual, forecast).items()
+            },
+            "pinball_loss": {
+                "p50": str(compute_pinball_loss(actual, p50, Decimal("0.5"))),
+                "p80": str(compute_pinball_loss(actual, p80, Decimal("0.8"))),
+                "p95": str(compute_pinball_loss(actual, p95, Decimal("0.95"))),
+            },
             "interval_coverage": {
-                "p80": str(sum(actual[index] <= p80[index] for index in range(horizon)) / Decimal(horizon)),
-                "p95": str(sum(actual[index] <= p95[index] for index in range(horizon)) / Decimal(horizon)),
+                "p80": str(
+                    compute_interval_coverage(
+                        actual,
+                        lower=[Decimal("0")] * horizon,
+                        upper=p80,
+                    )
+                ),
+                "p95": str(
+                    compute_interval_coverage(
+                        actual,
+                        lower=[Decimal("0")] * horizon,
+                        upper=p95,
+                    )
+                ),
             },
             "data_hash": run["data_hash"],
             "persisted": False,

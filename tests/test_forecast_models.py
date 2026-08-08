@@ -6,7 +6,9 @@ from decimal import Decimal
 from ecommerce_agent.business.forecast_backtest import (
     ChampionSelector,
     RollingBacktest,
+    compute_interval_coverage,
     compute_metrics,
+    compute_pinball_loss,
 )
 from ecommerce_agent.business.forecast_models import (
     CrostonModel,
@@ -102,6 +104,18 @@ def test_metrics_report_zero_denominator_without_fake_wape() -> None:
     assert metrics["rmse"] == Decimal("0.7071067811865475244008443621")
 
 
+def test_quantile_metrics_report_pinball_and_interval_coverage() -> None:
+    actual = [Decimal("1"), Decimal("3"), Decimal("2"), Decimal("4")]
+    forecast = [Decimal("2"), Decimal("2"), Decimal("2"), Decimal("3")]
+
+    assert compute_pinball_loss(actual, forecast, Decimal("0.5")) == Decimal("0.375")
+    assert compute_interval_coverage(
+        actual,
+        lower=[Decimal("0"), Decimal("2"), Decimal("1"), Decimal("3")],
+        upper=[Decimal("2"), Decimal("4"), Decimal("2"), Decimal("3")],
+    ) == Decimal("0.75")
+
+
 def test_champion_keeps_baseline_for_zero_demand_without_wape_denominator() -> None:
     values = [Decimal("0")] * 14
     dates = [date(2026, 1, 1) + timedelta(days=index) for index in range(14)]
@@ -115,3 +129,26 @@ def test_champion_keeps_baseline_for_zero_demand_without_wape_denominator() -> N
     decision = ChampionSelector.select(report, baseline_name="rolling_mean")
     assert decision.champion_model == "rolling_mean"
     assert decision.reason == "baseline_fallback_all_candidates_failed"
+
+
+def test_failed_candidate_does_not_block_a_usable_baseline() -> None:
+    class BrokenModel:
+        name = "broken"
+        minimum_history_days = 3
+
+        def predict(self, history: list[Decimal], horizon_days: int) -> list[Decimal]:
+            raise ValueError("synthetic_model_failure")
+
+    values = [Decimal("4")] * 14
+    dates = [date(2026, 1, 1) + timedelta(days=index) for index in range(len(values))]
+    report = RollingBacktest.run(
+        values,
+        dates,
+        models=[RollingMeanModel(window=3), BrokenModel()],
+        forecast_horizon=2,
+        windows=2,
+    )
+
+    decision = ChampionSelector.select(report, baseline_name="rolling_mean")
+    assert decision.champion_model == "rolling_mean"
+    assert any(record.model == "broken" and record.failure_reason for record in report.records)

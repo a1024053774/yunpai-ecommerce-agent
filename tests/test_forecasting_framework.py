@@ -11,6 +11,7 @@ from ecommerce_agent.business import InventoryBalanceUpsert, OrderUpsert
 from ecommerce_agent.business.orders import OrderLineInput
 from ecommerce_agent.business.forecasting import (
     ForecastRequest,
+    ForecastRunRequest,
     LastValueModel,
     SevenDaySeasonalNaiveModel,
 )
@@ -200,6 +201,10 @@ def test_models_are_deterministic_and_forecast_quantiles_are_monotonic(tmp_path)
         assert first["model"]["name"] == "7_day_seasonal_naive"
         assert first["forecast_points"] == second["forecast_points"]
         assert len(first["forecast_points"]) == 14
+        assert Decimal(first["horizon_totals"]["p50"]) == sum(
+            (Decimal(point["p50"]) for point in first["forecast_points"]),
+            Decimal("0"),
+        )
         assert all(
             Decimal(item["p50"]) <= Decimal(item["p80"]) <= Decimal(item["p95"])
             for item in first["forecast_points"]
@@ -223,6 +228,29 @@ def test_models_are_deterministic_and_forecast_quantiles_are_monotonic(tmp_path)
         assert {"forecast_policies", "forecast_runs", "forecast_backtests", "forecast_points", "forecast_anomalies"} <= forecast_tables
         assert forecast_rows == 0
         assert point_rows == 0
+    finally:
+        service.close()
+
+
+def test_interval_monotonicity_rejects_an_inverted_error_band(tmp_path) -> None:
+    service = AgentService(make_settings(tmp_path))
+    try:
+        _seed_weekly_history(
+            service,
+            start=date(2026, 7, 1),
+            quantities=list(range(1, 15)),
+        )
+        service.operations.inventory.upsert(TENANT, _inventory())
+        result = service.operations.forecasting.preview(
+            TENANT,
+            ForecastRequest(store_id=STORE, warehouse_id=WAREHOUSE, sku_id=SKU),
+        )
+
+        assert any(Decimal(point["p80"]) > Decimal(point["p50"]) for point in result["forecast_points"])
+        assert all(
+            Decimal(point["p50"]) <= Decimal(point["p80"]) <= Decimal(point["p95"])
+            for point in result["forecast_points"]
+        )
     finally:
         service.close()
 
@@ -305,6 +333,40 @@ def test_replenishment_formula_applies_supply_safety_stock_and_order_multiple(tm
         assert result["replenishment"]["recommended_order_qty"] == "160.00"
         assert result["replenishment"]["rounding"]["minimum_order_qty"] == "20.00"
         assert result["replenishment"]["rounding"]["order_multiple"] == "10.00"
+    finally:
+        service.close()
+
+
+def test_forecast_excludes_source_gaps_and_reviewed_stockout_days(tmp_path) -> None:
+    service = AgentService(make_settings(tmp_path))
+    try:
+        _seed_weekly_history(service, start=date(2026, 7, 1), quantities=[4] * 21)
+        service.operations.demand_facts.rebuild(
+            TENANT,
+            store_id=STORE,
+            sku_id=SKU,
+            start_date=date(2026, 7, 1),
+            end_date=date(2026, 7, 21),
+            source_gap_dates=[date(2026, 7, 2)],
+            stockout_statuses={date(2026, 7, 3): "true", date(2026, 7, 4): "false"},
+        )
+        result = service.operations.forecasting.run(
+            TENANT,
+            ForecastRunRequest(
+                store_id=STORE,
+                sku_id=SKU,
+                minimum_history_days=14,
+                candidate_models=["last_value", "rolling_mean"],
+            ),
+        )
+
+        assert result["status"] == "succeeded"
+        assert result["data_quality"]["training_excluded_dates"] == 2
+        assert result["data_quality"]["explicit_stockout_dates"] == 1
+        assert "2026-07-02" not in result["data_quality"]["training_dates"]
+        assert "2026-07-03" not in result["data_quality"]["training_dates"]
+        assert result["training_start"] == "2026-07-04"
+        assert result["data_quality"]["training_fact_count"] == 18
     finally:
         service.close()
 

@@ -323,6 +323,7 @@ class ForecastingService:
                 "service_level": request.service_level,
             },
             "forecast_points": forecast_points,
+            "horizon_totals": self._horizon_totals(forecast_points[: request.horizon_days]),
             "data_quality": {
                 "history_days": len(series.points),
                 "missing_business_dates": [item.isoformat() for item in series.missing_business_dates],
@@ -361,10 +362,23 @@ class ForecastingService:
             start_date=request.start_date,
             end_date=request.end_date,
         )
-        if len(facts) < request.minimum_history_days:
+        quality = self._forecast_quality(facts)
+        training_facts = self._usable_training_facts(facts)
+        if len(training_facts) < request.minimum_history_days:
             raise ValueError("forecast_insufficient_history")
-        values = [Decimal(str(item["eligible_units"])) for item in facts]
-        dates = [date.fromisoformat(str(item["business_date"])) for item in facts]
+        quality.update(
+            {
+                "source_watermark": max(
+                    (str(item["source_watermark"]) for item in facts if item.get("source_watermark")),
+                    default=None,
+                ),
+                "fact_versions": sorted({int(item["fact_version"]) for item in facts}),
+                "training_fact_count": len(training_facts),
+                "training_dates": [str(item["business_date"]) for item in training_facts],
+            }
+        )
+        values = [Decimal(str(item["eligible_units"])) for item in training_facts]
+        dates = [date.fromisoformat(str(item["business_date"])) for item in training_facts]
         models = [self.models.get(name) for name in request.candidate_models]
         report = RollingBacktest.run(
             values,
@@ -537,6 +551,17 @@ class ForecastingService:
         ]
         backtest_summary = self._backtest_summary(backtest_views)
         demand_type = self._demand_type_for_run(row)
+        data_quality = self._run_data_quality(row)
+        quality_anomaly = next(
+            (
+                json.loads(item["evidence_json"])
+                for item in anomalies
+                if item["anomaly_type"] == "demand_quality_degraded"
+            ),
+            None,
+        )
+        if quality_anomaly:
+            data_quality = {**data_quality, **quality_anomaly}
         return {
             "run_id": row["run_id"],
             "tenant_id": row["tenant_id"],
@@ -557,6 +582,7 @@ class ForecastingService:
                 key: row[key] for key in ("wape", "bias", "smape", "rmse")
             },
             "forecast_horizon": row["forecast_horizon"],
+            "horizon_totals": self._horizon_totals([dict(item) for item in points]),
             "status": row["status"],
             "demand_type": demand_type["kind"],
             "demand_type_evidence": demand_type["evidence"],
@@ -568,8 +594,8 @@ class ForecastingService:
                 for item in anomalies
             ],
             "data_quality": {
-                "demand_policy_version": row["demand_policy_version"],
-                "quality_level": "degraded" if anomalies else "good",
+                **data_quality,
+                "quality_level": "degraded" if anomalies else data_quality["level"],
             },
         }
 
@@ -609,8 +635,39 @@ class ForecastingService:
             start_date=date.fromisoformat(str(row["training_start"])),
             end_date=date.fromisoformat(str(row["training_end"])),
         )
-        values = [Decimal(str(item["eligible_units"])) for item in facts]
+        values = [
+            Decimal(str(item["eligible_units"]))
+            for item in self._usable_training_facts(facts)
+        ]
         return self._classify_demand(values)
+
+    def _run_data_quality(self, row: Any) -> dict[str, Any]:
+        if self.demand_facts is None:
+            return {
+                "level": "unknown",
+                "demand_policy_version": str(row["demand_policy_version"]),
+                "reason": "demand_fact_service_unavailable",
+            }
+        facts = self.demand_facts.list_facts(
+            str(row["tenant_id"]),
+            store_id=str(row["store_id"]),
+            sku_id=str(row["sku_id"]),
+            start_date=date.fromisoformat(str(row["training_start"])),
+            end_date=date.fromisoformat(str(row["training_end"])),
+        )
+        quality = self._forecast_quality(facts)
+        usable = self._usable_training_facts(facts)
+        watermarks = [str(item["source_watermark"]) for item in facts if item.get("source_watermark")]
+        quality.update(
+            {
+                "source_watermark": max(watermarks) if watermarks else None,
+                "fact_versions": sorted({int(item["fact_version"]) for item in facts}),
+                "data_hash": str(row["data_hash"]),
+                "training_fact_count": len(usable),
+                "training_dates": [str(item["business_date"]) for item in usable],
+            }
+        )
+        return quality
 
     @staticmethod
     def _classify_demand(values: list[Decimal]) -> dict[str, Any]:
@@ -744,12 +801,31 @@ class ForecastingService:
     def _forecast_quality(facts: list[dict[str, Any]]) -> dict[str, Any]:
         missing = sum(bool(item["quality"].get("missing_source_date")) for item in facts)
         unknown = sum(item["stockout_flag"] == "unknown" for item in facts)
+        explicit_stockout = sum(item["stockout_flag"] == "true" for item in facts)
         return {
-            "level": "degraded" if missing or unknown else "good",
+            "level": "degraded" if missing or unknown or explicit_stockout else "good",
             "missing_source_dates": missing,
             "unknown_stockout_dates": unknown,
+            "explicit_stockout_dates": explicit_stockout,
+            "training_excluded_dates": missing + explicit_stockout,
             "demand_policy_version": "demand-v1",
         }
+
+    @staticmethod
+    def _usable_training_facts(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        # A missing or censored day cannot be removed from the middle of a daily
+        # vector: doing so would compress the calendar and corrupt seasonal lags.
+        # V1 therefore uses only the latest contiguous valid segment.
+        last_excluded = max(
+            (
+                index
+                for index, item in enumerate(facts)
+                if item["quality"].get("missing_source_date")
+                or item["stockout_flag"] == "true"
+            ),
+            default=-1,
+        )
+        return facts[last_excluded + 1 :]
 
     @staticmethod
     def _json_decimal(value: Decimal | None) -> str | None:
@@ -804,6 +880,15 @@ class ForecastingService:
                 }
             )
         return points
+
+    @classmethod
+    def _horizon_totals(cls, points: list[dict[str, Any]]) -> dict[str, str]:
+        return {
+            key: cls._decimal(
+                sum((Decimal(str(item[key])) for item in points), Decimal("0"))
+            )
+            for key in ("p50", "p80", "p95")
+        }
 
     @staticmethod
     def _seasonal_error_scale(history: list[Decimal]) -> Decimal:

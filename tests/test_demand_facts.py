@@ -144,6 +144,30 @@ def test_source_gap_is_distinct_from_a_day_with_no_orders(tmp_path) -> None:
         service.close()
 
 
+def test_reviewed_stockout_evidence_preserves_three_state_contract(tmp_path) -> None:
+    service = AgentService(make_settings(tmp_path))
+    try:
+        service.operations.orders.upsert(TENANT, _order("state-order", date(2026, 8, 1), quantity=2))
+        result = service.operations.demand_facts.rebuild(
+            TENANT,
+            store_id=STORE,
+            sku_id=SKU,
+            start_date=date(2026, 8, 1),
+            end_date=date(2026, 8, 3),
+            stockout_statuses={
+                date(2026, 8, 1): "true",
+                date(2026, 8, 2): "false",
+            },
+        )
+
+        assert [item["stockout_flag"] for item in result["facts"]] == ["true", "false", "unknown"]
+        assert result["facts"][0]["stockout_evidence"]["stockout_reason"] == "reviewed_source_evidence"
+        assert result["facts"][1]["stockout_evidence"]["stockout_evidence_source"] == "caller_asserted"
+        assert result["facts"][2]["stockout_evidence"]["stockout_evidence_source"] == "unavailable"
+    finally:
+        service.close()
+
+
 def test_later_order_correction_appends_a_new_fact_version(tmp_path) -> None:
     service = AgentService(make_settings(tmp_path))
     try:

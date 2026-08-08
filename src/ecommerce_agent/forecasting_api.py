@@ -61,6 +61,7 @@ def build_forecasting_router(
                 end_date=payload.end_date,
                 mode=payload.mode,
                 source_gap_dates=payload.source_gap_dates,
+                stockout_statuses=payload.stockout_statuses,
             )
             service.db.audit(
                 "forecasting.demand.rebuilt",
@@ -164,12 +165,18 @@ def build_forecasting_router(
         store_id: str = Query(min_length=1, max_length=128),
         admin: AdminPrincipal = Depends(require_admin),
     ) -> dict[str, Any]:
+        run = service.operations.forecasting.latest_run(
+            admin.tenant_id, store_id=store_id, sku_id=sku_id
+        )
         return {
             "store_id": store_id,
             "sku_id": sku_id,
-            "backtests": service.operations.forecasting.list_backtests(
-                admin.tenant_id, store_id=store_id, sku_id=sku_id
-            ),
+            "run_id": run["run_id"] if run else None,
+            "champion_model": run["champion_model"] if run else None,
+            "champion_reason": run["champion_reason"] if run else None,
+            "metrics": run["metrics"] if run else {},
+            "backtest_summary": run["backtest_summary"] if run else [],
+            "backtests": run["backtests"] if run else [],
         }
 
     @router.put("/policies/{sku_id}")
@@ -269,7 +276,7 @@ def build_forecasting_router(
     def forecasting_risks(
         store_id: str | None = Query(default=None, max_length=128),
         warehouse_id: str | None = Query(default=None, max_length=128),
-        risk_level: Literal["critical", "high", "medium", "replenishment_due", "healthy"] | None = None,
+        risk_level: Literal["critical", "high", "medium", "replenishment_due", "overstock", "healthy"] | None = None,
         limit: int = Query(default=100, ge=1, le=500),
         admin: AdminPrincipal = Depends(require_admin),
     ) -> dict[str, Any]:

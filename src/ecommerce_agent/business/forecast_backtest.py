@@ -28,6 +28,36 @@ def compute_metrics(actual: list[Decimal], forecast: list[Decimal]) -> dict[str,
     return {"wape": wape, "bias": bias, "smape": smape, "rmse": rmse}
 
 
+def compute_pinball_loss(
+    actual: list[Decimal], forecast: list[Decimal], quantile: Decimal
+) -> Decimal:
+    if len(actual) != len(forecast) or not actual:
+        raise ValueError("forecast_metric_length_mismatch")
+    if not Decimal("0") < quantile < Decimal("1"):
+        raise ValueError("forecast_quantile_invalid")
+    loss = sum(
+        (
+            quantile * (value - prediction)
+            if value >= prediction
+            else (Decimal("1") - quantile) * (prediction - value)
+        for value, prediction in zip(actual, forecast)
+        ),
+        Decimal("0"),
+    )
+    return loss / Decimal(len(actual))
+
+
+def compute_interval_coverage(
+    actual: list[Decimal], *, lower: list[Decimal], upper: list[Decimal]
+) -> Decimal:
+    if len(actual) != len(lower) or len(actual) != len(upper) or not actual:
+        raise ValueError("forecast_metric_length_mismatch")
+    if any(low > high for low, high in zip(lower, upper)):
+        raise ValueError("forecast_interval_invalid")
+    covered = sum(low <= value <= high for value, low, high in zip(actual, lower, upper))
+    return Decimal(covered) / Decimal(len(actual))
+
+
 @dataclass(frozen=True)
 class BacktestRecord:
     model: str

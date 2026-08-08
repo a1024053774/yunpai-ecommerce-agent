@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 
+import pytest
 from fastapi.testclient import TestClient
 
 from ecommerce_agent.api import create_app
@@ -150,6 +151,8 @@ def test_forecasting_api_exposes_replayable_demand_run_plan_and_risks(tmp_path) 
             assert evaluated_shadow.status_code == 200
             assert evaluated_shadow.json()["status"] == "evaluated"
             assert evaluated_shadow.json()["persisted"] is False
+            assert set(evaluated_shadow.json()["pinball_loss"]) == {"p50", "p80", "p95"}
+            assert set(evaluated_shadow.json()["interval_coverage"]) == {"p80", "p95"}
 
             latest = client.get(
                 f"/v1/forecasting/skus/{SKU}/forecast?store_id={STORE}",
@@ -162,6 +165,8 @@ def test_forecasting_api_exposes_replayable_demand_run_plan_and_risks(tmp_path) 
                 headers=ADMIN_HEADERS,
             )
             assert backtest.status_code == 200
+            assert backtest.json()["run_id"] == run_body["run_id"]
+            assert backtest.json()["backtest_summary"]
             assert backtest.json()["backtests"]
 
             planning_policy = client.put(
@@ -188,6 +193,8 @@ def test_forecasting_api_exposes_replayable_demand_run_plan_and_risks(tmp_path) 
             )
             assert plan.status_code == 200
             assert plan.json()["status"] == "draft"
+            assert plan.json()["external_order_created"] is False
+            assert plan.json()["replenishment_order"]["kind"] == "forecast_replenishment"
             assert plan.json()["explanation"]["warehouse_scope"] == "supply_location_only"
             assert plan.json()["recommended_order_qty"]
 
@@ -258,6 +265,22 @@ def test_forecasting_tools_are_read_only_and_tenant_scoped(tmp_path) -> None:
             assert spec.kind == "read"
             result = service.tools.execute(spec=spec, arguments=validated, context=context)
             assert result.status == "success"
+            assert result.output["evidence"]["data_quality"]
+            assert result.output["evidence"]["forecast_run_id"]
+        scoped_context = ToolExecutionContext(
+            tenant_id=TENANT,
+            client_id="client-test",
+            session_id="forecast-tool-session",
+            trace_id="forecast-tool-trace",
+            trusted_context={"store_id": "another-store"},
+        )
+        with pytest.raises(ValueError, match="tool_policy_denied:store_scope_mismatch"):
+            service.tools.validate_selection(
+                name="get_demand_forecast",
+                arguments={"store_id": STORE, "sku_id": SKU},
+                requested_mode="observe",
+                context=scoped_context,
+            )
         assert len(service.operations.inventory_planning.list_plans(TENANT)) == before
         missing = service.operations.forecasting.latest_run(
             "tenant-other", store_id=STORE, sku_id=SKU
