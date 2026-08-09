@@ -90,21 +90,13 @@ def build_forecasting_router(
     ) -> dict[str, Any]:
         if start_date and end_date and end_date < start_date:
             raise HTTPException(status_code=422, detail="demand_fact_invalid_date_range")
-        facts = service.operations.demand_facts.list_facts(
+        return service.operations.demand_facts.list_response(
             admin.tenant_id,
             store_id=store_id,
             sku_id=sku_id,
             start_date=start_date,
             end_date=end_date,
         )
-        return {
-            "store_id": store_id,
-            "sku_id": sku_id,
-            "policy_version": service.operations.demand_facts.policy.policy_version,
-            "timezone": service.operations.demand_facts.policy.timezone,
-            "facts": facts,
-            "quality": service.operations.demand_facts._quality(facts),
-        }
 
     @router.post("/runs")
     def create_run(

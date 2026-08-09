@@ -5,7 +5,7 @@ from decimal import Decimal
 
 import pytest
 
-from ecommerce_agent.business import InventoryBalanceUpsert, OrderUpsert
+from ecommerce_agent.business import DemandFactService, InventoryBalanceUpsert, OrderUpsert
 from ecommerce_agent.business.orders import OrderLineInput
 from ecommerce_agent.service import AgentService
 
@@ -226,5 +226,82 @@ def test_demand_facts_are_tenant_scoped(tmp_path) -> None:
                 start_date=date(2026, 8, 1),
                 end_date=date(2026, 8, 1),
             )
+    finally:
+        service.close()
+
+
+def test_rebuild_excludes_open_business_day_but_reports_today_so_far(tmp_path) -> None:
+    """Removing the closed-day boundary would train on an incomplete sales day."""
+    service = AgentService(make_settings(tmp_path))
+    now = datetime(2026, 8, 10, 1, tzinfo=SHANGHAI).astimezone(UTC)
+    try:
+        service.operations.demand_facts = DemandFactService(
+            service.db,
+            orders=service.operations.orders,
+            inventory=service.operations.inventory,
+            now_provider=lambda: now,
+        )
+        service.operations.orders.upsert(TENANT, _order("closed", date(2026, 8, 9), quantity=2))
+        open_placed_at = datetime(2026, 8, 10, 0, 30, tzinfo=SHANGHAI).astimezone(UTC)
+        service.operations.orders.upsert(
+            TENANT,
+            _order("open", date(2026, 8, 10), quantity=3).model_copy(
+                update={"placed_at": open_placed_at, "source_updated_at": open_placed_at}
+            ),
+        )
+
+        result = service.operations.demand_facts.rebuild(
+            TENANT,
+            store_id=STORE,
+            sku_id=SKU,
+            start_date=date(2026, 8, 9),
+            end_date=date(2026, 8, 10),
+        )
+
+        assert [(item["business_date"], item["eligible_units"]) for item in result["facts"]] == [
+            ("2026-08-09", "2.00"),
+        ]
+        assert result["today_so_far"] == {
+            "business_date": "2026-08-10",
+            "eligible_units": "3.00",
+            "basis_label": "已支付订单的下单日销量",
+        }
+        assert result["training_closed_through"] == "2026-08-09"
+    finally:
+        service.close()
+
+
+def test_list_response_labels_paid_orders_by_placed_day(tmp_path) -> None:
+    """Removing the response basis would let clients mislabel the demand series."""
+    service = AgentService(make_settings(tmp_path))
+    now = datetime(2026, 8, 10, 1, tzinfo=SHANGHAI).astimezone(UTC)
+    try:
+        service.operations.demand_facts = DemandFactService(
+            service.db,
+            orders=service.operations.orders,
+            inventory=service.operations.inventory,
+            now_provider=lambda: now,
+        )
+        service.operations.orders.upsert(TENANT, _order("closed-response", date(2026, 8, 9), quantity=2))
+        service.operations.demand_facts.rebuild(
+            TENANT,
+            store_id=STORE,
+            sku_id=SKU,
+            start_date=date(2026, 8, 9),
+            end_date=date(2026, 8, 9),
+        )
+
+        response = service.operations.demand_facts.list_response(
+            TENANT,
+            store_id=STORE,
+            sku_id=SKU,
+        )
+
+        assert response["basis"] == {
+            "event_time": "placed_at",
+            "label": "已支付订单的下单日销量",
+        }
+        assert response["training_closed_through"] == "2026-08-09"
+        assert response["today_so_far"]["eligible_units"] == "0.00"
     finally:
         service.close()

@@ -301,6 +301,35 @@ def test_forecasting_supports_declared_horizons(tmp_path, horizon: int) -> None:
         service.close()
 
 
+def test_preview_excludes_open_business_day_from_training_history(tmp_path) -> None:
+    """Removing the closed-day check would let a partial day distort the forecast."""
+    service = AgentService(make_settings(tmp_path))
+    try:
+        _seed_weekly_history(
+            service,
+            start=date(2026, 8, 1),
+            quantities=[1] * 14,
+        )
+        service.operations.orders.upsert(
+            TENANT,
+            _order("open-day", date(2026, 8, 15), quantity=99, hour=0),
+        )
+        service.operations.forecasting.now_provider = lambda: datetime(
+            2026, 8, 15, 1, tzinfo=SHANGHAI
+        ).astimezone(UTC)
+        service.operations.inventory.upsert(TENANT, _inventory())
+
+        result = service.operations.forecasting.preview(
+            TENANT,
+            ForecastRequest(store_id=STORE, warehouse_id=WAREHOUSE, sku_id=SKU),
+        )
+
+        assert result["data_quality"]["history_days"] == 14
+        assert [point["p50"] for point in result["forecast_points"][:7]] == ["1.00"] * 7
+    finally:
+        service.close()
+
+
 def test_replenishment_formula_applies_supply_safety_stock_and_order_multiple(tmp_path) -> None:
     service = AgentService(make_settings(tmp_path))
     try:

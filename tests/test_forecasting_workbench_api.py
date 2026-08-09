@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from ecommerce_agent.api import create_app
-from ecommerce_agent.business import InventoryBalanceUpsert, OrderUpsert
+from ecommerce_agent.business import DemandFactService, InventoryBalanceUpsert, OrderUpsert
 from ecommerce_agent.business.forecasting import ForecastRunRequest
 from ecommerce_agent.business.inventory_planning import InventoryPlanningPolicy
 from ecommerce_agent.business.orders import OrderLineInput
@@ -69,6 +69,14 @@ def test_forecasting_api_exposes_replayable_demand_run_plan_and_risks(tmp_path) 
     app = create_app(make_settings(tmp_path))
     service = app.state.agent
     try:
+        demand_facts = DemandFactService(
+            service.db,
+            orders=service.operations.orders,
+            inventory=service.operations.inventory,
+            now_provider=lambda: datetime(2026, 8, 12, 1, tzinfo=SHANGHAI).astimezone(UTC),
+        )
+        service.operations.demand_facts = demand_facts
+        service.operations.forecasting.demand_facts = demand_facts
         _seed_orders(service, days=42)
         service.operations.inventory.upsert(
             TENANT,
@@ -108,6 +116,12 @@ def test_forecasting_api_exposes_replayable_demand_run_plan_and_risks(tmp_path) 
             assert demand.status_code == 200
             assert demand.json()["policy_version"] == "demand-v1"
             assert demand.json()["timezone"] == "Asia/Shanghai"
+            assert demand.json()["basis"] == {
+                "event_time": "placed_at",
+                "label": "已支付订单的下单日销量",
+            }
+            assert demand.json()["training_closed_through"]
+            assert demand.json()["today_so_far"]["basis_label"] == "已支付订单的下单日销量"
 
             policy = client.put(
                 f"/v1/forecasting/policies/{SKU}",
@@ -143,7 +157,7 @@ def test_forecasting_api_exposes_replayable_demand_run_plan_and_risks(tmp_path) 
                     "end_date": "2026-08-11",
                 },
             )
-            assert extended.status_code == 200
+            assert extended.status_code == 200, extended.text
             evaluated_shadow = client.get(
                 f"/v1/forecasting/runs/{run_body['run_id']}/shadow",
                 headers=ADMIN_HEADERS,

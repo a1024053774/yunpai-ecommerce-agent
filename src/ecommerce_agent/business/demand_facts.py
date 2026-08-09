@@ -4,6 +4,7 @@ import json
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+from collections.abc import Callable
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -60,12 +61,14 @@ class DemandFactService:
         orders: OrderService,
         inventory: InventoryService,
         policy: DemandPolicy | None = None,
+        now_provider: Callable[[], datetime] | None = None,
     ):
         self.db = db
         self.orders = orders
         self.inventory = inventory
         self.policy = policy or DemandPolicy()
         self.zone = timezone(timedelta(hours=8))
+        self.now_provider = now_provider or (lambda: datetime.now(timezone.utc))
 
     def rebuild(
         self,
@@ -95,11 +98,17 @@ class DemandFactService:
         if any(status not in {"true", "false", "unknown"} for status in stockout_status_map.values()):
             raise ValueError("demand_fact_invalid_stockout_status")
 
+        now = self.now_provider().astimezone(self.zone)
+        today = now.date()
+        closed_through = today - timedelta(days=1)
         orders = self.orders.list_orders(tenant_id, store_id=store_id, limit=100000)
         daily: dict[date, dict[str, Any]] = {}
         source_times: list[str] = []
         for order in orders:
-            business_day = self._business_date(str(order["placed_at"]))
+            placed_at = self._timestamp(str(order["placed_at"]))
+            business_day = placed_at.astimezone(self.zone).date()
+            if placed_at > now or business_day > today:
+                continue
             if business_day < start_date or business_day > end_date:
                 continue
             matching_lines = [
@@ -138,13 +147,15 @@ class DemandFactService:
         balances = self.inventory.list_balances(tenant_id, store_id=store_id, sku_id=sku_id)
         available_stock, inventory_watermark = self._inventory_snapshot(balances)
         order_watermark = max(source_times)
-        source_watermark = max(
-            (value for value in (order_watermark, inventory_watermark) if value),
-            default=order_watermark,
-        )
+        # Daily demand versions are determined by order data. A current inventory
+        # snapshot only enriches evidence and must not turn an expanded order range
+        # into a same-version payload conflict.
+        source_watermark = order_watermark
+        today_so_far = self._today_so_far(daily.get(today), today)
         facts: list[dict[str, Any]] = []
         cursor = start_date
-        while cursor <= end_date:
+        closed_end = min(end_date, closed_through)
+        while cursor <= closed_end:
             bucket = daily.get(cursor)
             has_source = bucket is not None
             bucket = bucket or {
@@ -207,6 +218,17 @@ class DemandFactService:
                 }
             )
             cursor += timedelta(days=1)
+
+        if not facts:
+            return {
+                "fact_version": None,
+                "write_status": "not_applicable",
+                "source_watermark": source_watermark,
+                "facts": [],
+                "quality": self._quality([]),
+                "today_so_far": today_so_far,
+                "training_closed_through": closed_through.isoformat(),
+            }
 
         write_status = "applied"
         fact_version = 1
@@ -297,6 +319,8 @@ class DemandFactService:
             "source_watermark": source_watermark,
             "facts": self.list_facts(tenant_id, store_id=store_id, sku_id=sku_id),
             "quality": self._quality(facts),
+            "today_so_far": today_so_far,
+            "training_closed_through": closed_through.isoformat(),
         }
 
     def list_facts(
@@ -335,6 +359,59 @@ class DemandFactService:
             ).fetchall()
         return [self._view(dict(row)) for row in rows]
 
+    def list_response(
+        self,
+        tenant_id: str,
+        *,
+        store_id: str,
+        sku_id: str,
+        start_date: date | None = None,
+        end_date: date | None = None,
+    ) -> dict[str, Any]:
+        now = self.now_provider().astimezone(self.zone)
+        today = now.date()
+        eligible_units = Decimal("0")
+        for order in self.orders.list_orders(tenant_id, store_id=store_id, limit=100000):
+            placed_at = self._timestamp(str(order["placed_at"]))
+            if placed_at > now or placed_at.astimezone(self.zone).date() != today:
+                continue
+            if (
+                str(order["order_status"]) in self.policy.excluded_order_statuses
+                or str(order["payment_status"]) not in self.policy.included_payment_statuses
+            ):
+                continue
+            eligible_units += sum(
+                (
+                    Decimal(str(line["quantity"]))
+                    for line in order["lines"]
+                    if str(line["sku_id"]) == sku_id
+                ),
+                Decimal("0"),
+            )
+        facts = self.list_facts(
+            tenant_id,
+            store_id=store_id,
+            sku_id=sku_id,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        return {
+            "store_id": store_id,
+            "sku_id": sku_id,
+            "policy_version": self.policy.policy_version,
+            "timezone": self.policy.timezone,
+            "facts": facts,
+            "quality": self._quality(facts),
+            "today_so_far": self._today_so_far(
+                {"eligible_units": eligible_units}, today
+            ),
+            "training_closed_through": (today - timedelta(days=1)).isoformat(),
+            "basis": {
+                "event_time": "placed_at",
+                "label": "已支付订单的下单日销量",
+            },
+        }
+
     @staticmethod
     def _inventory_snapshot(
         balances: list[dict[str, Any]],
@@ -371,8 +448,21 @@ class DemandFactService:
         }
 
     def _business_date(self, value: str) -> date:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        return parsed.astimezone(self.zone).date()
+        return self._timestamp(value).astimezone(self.zone).date()
+
+    @staticmethod
+    def _timestamp(value: str) -> datetime:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+    def _today_so_far(
+        self, bucket: dict[str, Any] | None, business_day: date
+    ) -> dict[str, str]:
+        eligible_units = Decimal("0") if bucket is None else bucket["eligible_units"]
+        return {
+            "business_date": business_day.isoformat(),
+            "eligible_units": self._decimal(eligible_units),
+            "basis_label": "已支付订单的下单日销量",
+        }
 
     @staticmethod
     def _decimal(value: Decimal | None) -> str | None:

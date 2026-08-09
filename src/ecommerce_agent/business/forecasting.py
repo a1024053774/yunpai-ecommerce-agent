@@ -5,6 +5,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, ROUND_CEILING
+from collections.abc import Callable
 from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -174,6 +175,7 @@ class ForecastingService:
         inventory_service: InventoryService | None = None,
         demand_fact_service: DemandFactService | None = None,
         model_registry: ForecastModelRegistry | None = None,
+        now_provider: Callable[[], datetime] | None = None,
     ):
         self.db = db
         # Asia/Shanghai has a fixed UTC+8 offset; using a fixed offset keeps the
@@ -182,6 +184,7 @@ class ForecastingService:
         self.inventory_service = inventory_service or InventoryService(db)
         self.demand_facts = demand_fact_service
         self.models = model_registry or ForecastModelRegistry()
+        self.now_provider = now_provider or (lambda: datetime.now(timezone.utc))
 
     def build_demand_series(
         self,
@@ -199,8 +202,11 @@ class ForecastingService:
         eligible_by_day: dict[date, Decimal] = {}
         source_rows_by_day: dict[date, bool] = {}
         watermark: str | None = None
+        closed_through = self.now_provider().astimezone(self.zone).date() - timedelta(days=1)
         for row in rows:
             business_day = self._business_date(str(row["placed_at"]))
+            if business_day > closed_through:
+                continue
             quantity = Decimal(str(row["quantity"]))
             gross_by_day[business_day] = gross_by_day.get(business_day, Decimal("0")) + quantity
             if row["order_status"] != "canceled" and row["payment_status"] in {
@@ -214,6 +220,9 @@ class ForecastingService:
             source_time = str(row["source_updated_at"])
             if watermark is None or source_time > watermark:
                 watermark = source_time
+
+        if not gross_by_day:
+            raise ValueError("forecast_insufficient_history")
 
         first_day = min(gross_by_day)
         last_day = max(gross_by_day)
