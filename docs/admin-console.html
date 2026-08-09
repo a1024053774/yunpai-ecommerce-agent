@@ -2309,24 +2309,29 @@
       const storeId = $('forecastStore').value.trim();
       const skuId = $('forecastSku').value.trim();
       if (!storeId || !skuId) {
-        $('forecastMethod').innerHTML = '<div class="empty">请输入店铺 ID 和商品 SKU 后刷新。</div>';
-        renderForecastSource(null);
-        return;
+        if (!generate) return loadForecasting({ generate: true });
       }
       try {
         let forecast;
         let effectiveStoreId = storeId;
         let effectiveSkuId = skuId;
         if (generate) {
+          const resolutionPayload = { horizon_days: 30 };
+          if (storeId && skuId) {
+            resolutionPayload.store_id = storeId;
+            resolutionPayload.sku_id = skuId;
+          }
           const resolution = await api('/v1/forecasting/resolve-and-run', {
             method: 'POST',
-            body: JSON.stringify({ store_id: storeId, sku_id: skuId, horizon_days: 30 }),
+            body: JSON.stringify(resolutionPayload),
           });
           forecast = resolution.forecast;
           effectiveStoreId = resolution.effective_scope.store_id;
           effectiveSkuId = resolution.effective_scope.sku_id;
-          $('forecastStore').value = effectiveStoreId;
-          $('forecastSku').value = effectiveSkuId;
+          if (!resolution.virtual) {
+            $('forecastStore').value = effectiveStoreId;
+            $('forecastSku').value = effectiveSkuId;
+          }
           renderForecastSource(resolution);
         } else {
           const query = `?store_id=${encodeURIComponent(storeId)}`;

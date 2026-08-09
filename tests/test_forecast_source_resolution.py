@@ -69,7 +69,7 @@ def test_resolve_and_run_prefers_sufficient_real_sales_history(tmp_path) -> None
         service.close()
 
 
-def test_resolve_and_run_falls_back_to_a_reused_isolated_demo(tmp_path) -> None:
+def test_resolve_and_run_defaults_to_a_reused_isolated_demo(tmp_path) -> None:
     app = create_app(make_settings(tmp_path))
     service = app.state.agent
     try:
@@ -77,12 +77,12 @@ def test_resolve_and_run_falls_back_to_a_reused_isolated_demo(tmp_path) -> None:
             first = client.post(
                 "/v1/forecasting/resolve-and-run",
                 headers=ADMIN_HEADERS,
-                json={"store_id": "empty-store", "sku_id": "empty-sku", "horizon_days": 30},
+                json={"horizon_days": 30},
             )
             second = client.post(
                 "/v1/forecasting/resolve-and-run",
                 headers=ADMIN_HEADERS,
-                json={"store_id": "empty-store", "sku_id": "empty-sku", "horizon_days": 30},
+                json={"horizon_days": 30},
             )
 
         assert first.status_code == 200, first.text
@@ -92,7 +92,8 @@ def test_resolve_and_run_falls_back_to_a_reused_isolated_demo(tmp_path) -> None:
         assert first_body["source_type"] == "demo"
         assert first_body["virtual"] is True
         assert first_body["production_claim"] is False
-        assert first_body["effective_scope"] != {"store_id": "empty-store", "sku_id": "empty-sku"}
+        assert first_body["requested_scope"] is None
+        assert first_body["effective_scope"]["store_id"] != ""
         assert first_body["forecast"]["run_id"] == second_body["forecast"]["run_id"]
         assert first_body["demo_sales_day_count"] == 1095
     finally:

@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .auth import AdminPrincipal
 from .business.demand_facts import DemandFactRebuildRequest
@@ -22,9 +22,15 @@ class ForecastResolveRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    store_id: str = Field(min_length=1, max_length=128)
-    sku_id: str = Field(min_length=1, max_length=128)
+    store_id: str | None = Field(default=None, min_length=1, max_length=128)
+    sku_id: str | None = Field(default=None, min_length=1, max_length=128)
     horizon_days: Literal[7, 14, 30] = 7
+
+    @model_validator(mode="after")
+    def require_complete_scope(self) -> "ForecastResolveRequest":
+        if (self.store_id is None) != (self.sku_id is None):
+            raise ValueError("forecast_scope_requires_store_and_sku")
+        return self
 
 
 def _real_sales_dates(
@@ -145,14 +151,22 @@ def build_forecasting_router(
         payload: ForecastResolveRequest,
         admin: AdminPrincipal = Depends(require_admin),
     ) -> dict[str, Any]:
-        real_dates = _real_sales_dates(
-            service,
-            tenant_id=admin.tenant_id,
-            store_id=payload.store_id,
-            sku_id=payload.sku_id,
+        requested_scope = (
+            {"store_id": payload.store_id, "sku_id": payload.sku_id}
+            if payload.store_id is not None and payload.sku_id is not None
+            else None
         )
-        requested_scope = {"store_id": payload.store_id, "sku_id": payload.sku_id}
-        if len(real_dates) >= 14:
+        real_dates = (
+            _real_sales_dates(
+                service,
+                tenant_id=admin.tenant_id,
+                store_id=payload.store_id,
+                sku_id=payload.sku_id,
+            )
+            if requested_scope is not None
+            else []
+        )
+        if requested_scope is not None and len(real_dates) >= 14:
             service.operations.demand_facts.rebuild(
                 admin.tenant_id,
                 store_id=payload.store_id,
@@ -202,7 +216,7 @@ def build_forecasting_router(
         service.db.audit(
             "forecasting.source_resolved",
             admin.admin_id,
-            f"{payload.store_id}:{payload.sku_id}",
+            f"{payload.store_id or 'demo'}:{payload.sku_id or 'demo'}",
             {
                 "requested_scope": requested_scope,
                 "effective_scope": result["effective_scope"],
