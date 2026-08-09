@@ -3,16 +3,58 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, ConfigDict, Field
 
 from .auth import AdminPrincipal
 from .business.demand_facts import DemandFactRebuildRequest
+from .business.forecast_demo import ensure_three_year_demo
 from .business.forecasting import ForecastRequest, ForecastRunRequest
 from .business.inventory_planning import InventoryPlanCreateRequest, InventoryPlanningPolicy
 from .service import AgentService
+
+
+class ForecastResolveRequest(BaseModel):
+    """Resolve an operator-selected scope to real or clearly marked demo data."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    store_id: str = Field(min_length=1, max_length=128)
+    sku_id: str = Field(min_length=1, max_length=128)
+    horizon_days: Literal[7, 14, 30] = 7
+
+
+def _real_sales_dates(
+    service: AgentService,
+    *,
+    tenant_id: str,
+    store_id: str,
+    sku_id: str,
+) -> list[date]:
+    demand_service = service.operations.demand_facts
+    policy = demand_service.policy
+    zone = timezone(timedelta(hours=8))
+    closed_through = demand_service.now_provider().astimezone(zone).date() - timedelta(days=1)
+    dates: set[date] = set()
+    for order in service.operations.orders.list_orders(
+        tenant_id,
+        store_id=store_id,
+        limit=100_000,
+    ):
+        if (
+            str(order["order_status"]) in policy.excluded_order_statuses
+            or str(order["payment_status"]) not in policy.included_payment_statuses
+            or not any(str(line["sku_id"]) == sku_id for line in order["lines"])
+        ):
+            continue
+        placed_at = datetime.fromisoformat(str(order["placed_at"]).replace("Z", "+00:00"))
+        business_date = placed_at.astimezone(zone).date()
+        if business_date <= closed_through:
+            dates.add(business_date)
+    return sorted(dates)
 
 
 def build_forecasting_router(
@@ -97,6 +139,79 @@ def build_forecasting_router(
             start_date=start_date,
             end_date=end_date,
         )
+
+    @router.post("/resolve-and-run")
+    def resolve_and_run(
+        payload: ForecastResolveRequest,
+        admin: AdminPrincipal = Depends(require_admin),
+    ) -> dict[str, Any]:
+        real_dates = _real_sales_dates(
+            service,
+            tenant_id=admin.tenant_id,
+            store_id=payload.store_id,
+            sku_id=payload.sku_id,
+        )
+        requested_scope = {"store_id": payload.store_id, "sku_id": payload.sku_id}
+        if len(real_dates) >= 14:
+            service.operations.demand_facts.rebuild(
+                admin.tenant_id,
+                store_id=payload.store_id,
+                sku_id=payload.sku_id,
+                start_date=real_dates[0],
+                end_date=real_dates[-1],
+            )
+            forecast = service.operations.forecasting.run(
+                admin.tenant_id,
+                ForecastRunRequest(
+                    store_id=payload.store_id,
+                    sku_id=payload.sku_id,
+                    horizon_days=payload.horizon_days,
+                ),
+            )
+            result = {
+                "source_type": "real",
+                "virtual": False,
+                "production_claim": False,
+                "requested_scope": requested_scope,
+                "effective_scope": requested_scope,
+                "real_history_day_count": len(real_dates),
+                "fallback_reason": None,
+                "demo_sales_day_count": None,
+                "forecast": forecast,
+            }
+        else:
+            demo = ensure_three_year_demo(
+                service,
+                tenant_id=admin.tenant_id,
+                horizon_days=payload.horizon_days,
+            )
+            result = {
+                "source_type": "demo",
+                "virtual": True,
+                "production_claim": False,
+                "requested_scope": requested_scope,
+                "effective_scope": {
+                    "store_id": demo["store_id"],
+                    "sku_id": demo["sku_id"],
+                },
+                "real_history_day_count": len(real_dates),
+                "fallback_reason": "real_history_insufficient",
+                "demo_sales_day_count": demo["sales_day_count"],
+                "forecast": demo["run"],
+            }
+        service.db.audit(
+            "forecasting.source_resolved",
+            admin.admin_id,
+            f"{payload.store_id}:{payload.sku_id}",
+            {
+                "requested_scope": requested_scope,
+                "effective_scope": result["effective_scope"],
+                "source_type": result["source_type"],
+                "real_history_day_count": len(real_dates),
+            },
+            admin.tenant_id,
+        )
+        return result
 
     @router.post("/runs")
     def create_run(

@@ -156,6 +156,7 @@ def test_admin_console_page_and_audit_api(tmp_path) -> None:
             "店铺 ID",
             "商品 SKU",
             "时序预测方法",
+            "数据来源",
             "基于 ${escapeHtml(demand.facts.length)} 天历史销售数据，预测未来 ${escapeHtml(forecast.forecast_horizon)} 天需求",
             "历史需求事实",
             "可履约需求",
@@ -170,7 +171,10 @@ def test_admin_console_page_and_audit_api(tmp_path) -> None:
             assert label in page.text
         assert 'id="demandRows"' in page.text
         assert 'id="forecastMethod"' in page.text
+        assert 'id="forecastSource"' in page.text
         assert 'id="demandTrendChart"' in page.text
+        assert "api('/v1/forecasting/resolve-and-run'" in page.text
+        assert "生成预测" in page.text
         assert "/v1/forecasting/skus/" in page.text
         assert "竞品分析" in page.text
         assert "商品与库存" in page.text
