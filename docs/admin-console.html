@@ -2311,6 +2311,14 @@
       if (!storeId || !skuId) {
         if (!generate) return loadForecasting({ generate: true });
       }
+      const generateButton = $('refreshForecasting');
+      let sourceResolution = null;
+      let phase = '读取销售数据';
+      if (generate) {
+        generateButton.disabled = true;
+        generateButton.textContent = '正在读取数据...';
+        $('forecastMethod').innerHTML = '<div class="empty">正在读取销售数据，请稍等...</div>';
+      }
       try {
         let forecast;
         let effectiveStoreId = storeId;
@@ -2321,18 +2329,29 @@
             resolutionPayload.store_id = storeId;
             resolutionPayload.sku_id = skuId;
           }
-          const resolution = await api('/v1/forecasting/resolve-and-run', {
+          sourceResolution = await api('/v1/forecasting/resolve-source', {
             method: 'POST',
             body: JSON.stringify(resolutionPayload),
           });
-          forecast = resolution.forecast;
-          effectiveStoreId = resolution.effective_scope.store_id;
-          effectiveSkuId = resolution.effective_scope.sku_id;
-          if (!resolution.virtual) {
+          effectiveStoreId = sourceResolution.effective_scope.store_id;
+          effectiveSkuId = sourceResolution.effective_scope.sku_id;
+          if (!sourceResolution.virtual) {
             $('forecastStore').value = effectiveStoreId;
             $('forecastSku').value = effectiveSkuId;
           }
-          renderForecastSource(resolution);
+          renderForecastSource(sourceResolution);
+          const sourceName = sourceResolution.virtual ? '本地演示数据' : '真实销售数据';
+          generateButton.textContent = '正在预测，请稍等...';
+          $('forecastMethod').innerHTML = `<div class="empty">已读取到${sourceName}，正在预测，请稍等...</div>`;
+          phase = '预测';
+          forecast = await api('/v1/forecasting/runs', {
+            method: 'POST',
+            body: JSON.stringify({
+              store_id: effectiveStoreId,
+              sku_id: effectiveSkuId,
+              horizon_days: 30,
+            }),
+          });
         } else {
           const query = `?store_id=${encodeURIComponent(storeId)}`;
           forecast = await api(`/v1/forecasting/skus/${encodeURIComponent(skuId)}/forecast${query}`);
@@ -2345,10 +2364,15 @@
         $('demandRows').innerHTML = visibleDemandFacts.length ? visibleDemandFacts.map((item) => `<tr><td>${escapeHtml(item.business_date)}</td><td>${escapeHtml(item.eligible_units)}</td><td>${escapeHtml(item.gross_units)}</td><td>${escapeHtml(demandStateDisplayName(item.stockout_evidence?.demand_state))}</td><td>${escapeHtml(stockoutDisplayName(item.stockout_flag))}</td><td>${item.quality?.missing_source_date ? '<span class="status warn">来源缺口</span>' : '<span class="status ok">已观测</span>'}</td></tr>`).join('') : '<tr><td colspan="6"><div class="empty">暂无需求事实</div></td></tr>';
         renderDemandTrendChart(visibleDemandFacts, forecast);
       } catch (error) {
-        $('forecastMethod').innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
-        renderForecastSource(null);
+        $('forecastMethod').innerHTML = `<div class="empty">${escapeHtml(phase)}失败：${escapeHtml(error.message)}</div>`;
+        if (!sourceResolution) renderForecastSource(null);
         $('demandRows').innerHTML = '';
         $('demandTrendChart').innerHTML = '<div class="empty">暂无可绘制的销售需求数据</div>';
+      } finally {
+        if (generate) {
+          generateButton.disabled = false;
+          generateButton.textContent = '生成预测';
+        }
       }
     }
 

@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .auth import AdminPrincipal
 from .business.demand_facts import DemandFactRebuildRequest
-from .business.forecast_demo import ensure_three_year_demo
+from .business.forecast_demo import ensure_three_year_demo, ensure_three_year_demo_data
 from .business.forecasting import ForecastRequest, ForecastRunRequest
 from .business.inventory_planning import InventoryPlanCreateRequest, InventoryPlanningPolicy
 from .service import AgentService
@@ -61,6 +61,58 @@ def _real_sales_dates(
         if business_date <= closed_through:
             dates.add(business_date)
     return sorted(dates)
+
+
+def _resolve_source(
+    service: AgentService,
+    *,
+    tenant_id: str,
+    payload: ForecastResolveRequest,
+) -> dict[str, Any]:
+    requested_scope = (
+        {"store_id": payload.store_id, "sku_id": payload.sku_id}
+        if payload.store_id is not None and payload.sku_id is not None
+        else None
+    )
+    real_dates = (
+        _real_sales_dates(
+            service,
+            tenant_id=tenant_id,
+            store_id=payload.store_id,
+            sku_id=payload.sku_id,
+        )
+        if requested_scope is not None
+        else []
+    )
+    if requested_scope is not None and len(real_dates) >= 14:
+        service.operations.demand_facts.rebuild(
+            tenant_id,
+            store_id=payload.store_id,
+            sku_id=payload.sku_id,
+            start_date=real_dates[0],
+            end_date=real_dates[-1],
+        )
+        return {
+            "source_type": "real",
+            "virtual": False,
+            "production_claim": False,
+            "requested_scope": requested_scope,
+            "effective_scope": requested_scope,
+            "real_history_day_count": len(real_dates),
+            "fallback_reason": None,
+            "demo_sales_day_count": None,
+        }
+    demo = ensure_three_year_demo_data(service, tenant_id=tenant_id)
+    return {
+        "source_type": "demo",
+        "virtual": True,
+        "production_claim": False,
+        "requested_scope": requested_scope,
+        "effective_scope": {"store_id": demo["store_id"], "sku_id": demo["sku_id"]},
+        "real_history_day_count": len(real_dates),
+        "fallback_reason": "real_history_insufficient",
+        "demo_sales_day_count": demo["sales_day_count"],
+    }
 
 
 def build_forecasting_router(
@@ -151,77 +203,58 @@ def build_forecasting_router(
         payload: ForecastResolveRequest,
         admin: AdminPrincipal = Depends(require_admin),
     ) -> dict[str, Any]:
-        requested_scope = (
-            {"store_id": payload.store_id, "sku_id": payload.sku_id}
-            if payload.store_id is not None and payload.sku_id is not None
-            else None
-        )
-        real_dates = (
-            _real_sales_dates(
-                service,
-                tenant_id=admin.tenant_id,
-                store_id=payload.store_id,
-                sku_id=payload.sku_id,
-            )
-            if requested_scope is not None
-            else []
-        )
-        if requested_scope is not None and len(real_dates) >= 14:
-            service.operations.demand_facts.rebuild(
-                admin.tenant_id,
-                store_id=payload.store_id,
-                sku_id=payload.sku_id,
-                start_date=real_dates[0],
-                end_date=real_dates[-1],
-            )
-            forecast = service.operations.forecasting.run(
-                admin.tenant_id,
-                ForecastRunRequest(
-                    store_id=payload.store_id,
-                    sku_id=payload.sku_id,
+        try:
+            result = _resolve_source(service, tenant_id=admin.tenant_id, payload=payload)
+            if result["virtual"]:
+                result["forecast"] = ensure_three_year_demo(
+                    service,
+                    tenant_id=admin.tenant_id,
                     horizon_days=payload.horizon_days,
-                ),
-            )
-            result = {
-                "source_type": "real",
-                "virtual": False,
-                "production_claim": False,
-                "requested_scope": requested_scope,
-                "effective_scope": requested_scope,
-                "real_history_day_count": len(real_dates),
-                "fallback_reason": None,
-                "demo_sales_day_count": None,
-                "forecast": forecast,
-            }
-        else:
-            demo = ensure_three_year_demo(
-                service,
-                tenant_id=admin.tenant_id,
-                horizon_days=payload.horizon_days,
-            )
-            result = {
-                "source_type": "demo",
-                "virtual": True,
-                "production_claim": False,
-                "requested_scope": requested_scope,
-                "effective_scope": {
-                    "store_id": demo["store_id"],
-                    "sku_id": demo["sku_id"],
-                },
-                "real_history_day_count": len(real_dates),
-                "fallback_reason": "real_history_insufficient",
-                "demo_sales_day_count": demo["sales_day_count"],
-                "forecast": demo["run"],
-            }
+                )["run"]
+            else:
+                scope = result["effective_scope"]
+                result["forecast"] = service.operations.forecasting.run(
+                    admin.tenant_id,
+                    ForecastRunRequest(
+                        store_id=scope["store_id"],
+                        sku_id=scope["sku_id"],
+                        horizon_days=payload.horizon_days,
+                    ),
+                )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         service.db.audit(
             "forecasting.source_resolved",
             admin.admin_id,
             f"{payload.store_id or 'demo'}:{payload.sku_id or 'demo'}",
             {
-                "requested_scope": requested_scope,
+                "requested_scope": result["requested_scope"],
                 "effective_scope": result["effective_scope"],
                 "source_type": result["source_type"],
-                "real_history_day_count": len(real_dates),
+                "real_history_day_count": result["real_history_day_count"],
+            },
+            admin.tenant_id,
+        )
+        return result
+
+    @router.post("/resolve-source")
+    def resolve_source(
+        payload: ForecastResolveRequest,
+        admin: AdminPrincipal = Depends(require_admin),
+    ) -> dict[str, Any]:
+        try:
+            result = _resolve_source(service, tenant_id=admin.tenant_id, payload=payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        service.db.audit(
+            "forecasting.source_resolved",
+            admin.admin_id,
+            f"{payload.store_id or 'demo'}:{payload.sku_id or 'demo'}",
+            {
+                "requested_scope": result["requested_scope"],
+                "effective_scope": result["effective_scope"],
+                "source_type": result["source_type"],
+                "real_history_day_count": result["real_history_day_count"],
             },
             admin.tenant_id,
         )

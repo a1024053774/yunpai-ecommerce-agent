@@ -69,18 +69,18 @@ def test_resolve_and_run_prefers_sufficient_real_sales_history(tmp_path) -> None
         service.close()
 
 
-def test_resolve_and_run_defaults_to_a_reused_isolated_demo(tmp_path) -> None:
+def test_resolve_source_defaults_to_an_isolated_demo(tmp_path) -> None:
     app = create_app(make_settings(tmp_path))
     service = app.state.agent
     try:
         with TestClient(app) as client:
             first = client.post(
-                "/v1/forecasting/resolve-and-run",
+                "/v1/forecasting/resolve-source",
                 headers=ADMIN_HEADERS,
                 json={"horizon_days": 30},
             )
             second = client.post(
-                "/v1/forecasting/resolve-and-run",
+                "/v1/forecasting/resolve-source",
                 headers=ADMIN_HEADERS,
                 json={"horizon_days": 30},
             )
@@ -94,7 +94,8 @@ def test_resolve_and_run_defaults_to_a_reused_isolated_demo(tmp_path) -> None:
         assert first_body["production_claim"] is False
         assert first_body["requested_scope"] is None
         assert first_body["effective_scope"]["store_id"] != ""
-        assert first_body["forecast"]["run_id"] == second_body["forecast"]["run_id"]
+        assert "forecast" not in first_body
+        assert first_body["effective_scope"] == second_body["effective_scope"]
         assert first_body["demo_sales_day_count"] == 1095
     finally:
         service.close()

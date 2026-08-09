@@ -29,13 +29,42 @@ def ensure_three_year_demo(
     tenant_id: str,
     horizon_days: int,
 ) -> dict[str, Any]:
+    demo = ensure_three_year_demo_data(service, tenant_id=tenant_id)
     existing = service.operations.forecasting.latest_run(
         tenant_id,
         store_id=DEMO_STORE_ID,
         sku_id=DEMO_SKU_ID,
     )
     if existing is not None and int(existing["forecast_horizon"]) == horizon_days:
-        return _view(existing, tenant_id=tenant_id)
+        return {**demo, "run": existing}
+
+    end_date = START_DATE + timedelta(days=SALES_DAY_COUNT - 1)
+    run = service.operations.forecasting.run(
+        tenant_id,
+        ForecastRunRequest(
+            store_id=DEMO_STORE_ID,
+            sku_id=DEMO_SKU_ID,
+            horizon_days=horizon_days,
+            start_date=START_DATE,
+            end_date=end_date,
+            minimum_history_days=365,
+            backtest_windows=3,
+            backtest_step_days=horizon_days,
+        ),
+    )
+    return {**demo, "run": run}
+
+
+def ensure_three_year_demo_data(service: Any, *, tenant_id: str) -> dict[str, Any]:
+    existing = service.operations.demand_facts.list_response(
+        tenant_id,
+        store_id=DEMO_STORE_ID,
+        sku_id=DEMO_SKU_ID,
+        start_date=START_DATE,
+        end_date=START_DATE + timedelta(days=SALES_DAY_COUNT - 1),
+    )
+    if len(existing["facts"]) == SALES_DAY_COUNT:
+        return _source_view(tenant_id=tenant_id)
 
     end_date = START_DATE + timedelta(days=SALES_DAY_COUNT - 1)
     for index in range(SALES_DAY_COUNT):
@@ -77,23 +106,10 @@ def ensure_three_year_demo(
             START_DATE + timedelta(days=index): "false" for index in range(SALES_DAY_COUNT)
         },
     )
-    run = service.operations.forecasting.run(
-        tenant_id,
-        ForecastRunRequest(
-            store_id=DEMO_STORE_ID,
-            sku_id=DEMO_SKU_ID,
-            horizon_days=horizon_days,
-            start_date=START_DATE,
-            end_date=end_date,
-            minimum_history_days=365,
-            backtest_windows=3,
-            backtest_step_days=horizon_days,
-        ),
-    )
-    return _view(run, tenant_id=tenant_id)
+    return _source_view(tenant_id=tenant_id)
 
 
-def _view(run: dict[str, Any], *, tenant_id: str) -> dict[str, Any]:
+def _source_view(*, tenant_id: str) -> dict[str, Any]:
     return {
         "virtual": True,
         "production_claim": False,
@@ -101,5 +117,4 @@ def _view(run: dict[str, Any], *, tenant_id: str) -> dict[str, Any]:
         "store_id": DEMO_STORE_ID,
         "sku_id": DEMO_SKU_ID,
         "sales_day_count": SALES_DAY_COUNT,
-        "run": run,
     }

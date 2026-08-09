@@ -173,8 +173,12 @@ def test_admin_console_page_and_audit_api(tmp_path) -> None:
         assert 'id="forecastMethod"' in page.text
         assert 'id="forecastSource"' in page.text
         assert 'id="demandTrendChart"' in page.text
-        assert "api('/v1/forecasting/resolve-and-run'" in page.text
+        assert "api('/v1/forecasting/resolve-source'" in page.text
         assert "生成预测" in page.text
+        assert "正在读取销售数据，请稍等" in page.text
+        assert "已读取到" in page.text
+        assert "正在预测，请稍等" in page.text
+        assert "generateButton.disabled = true" in page.text
         assert "/v1/forecasting/skus/" in page.text
         assert "竞品分析" in page.text
         assert "商品与库存" in page.text
