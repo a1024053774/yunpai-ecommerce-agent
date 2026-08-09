@@ -295,7 +295,7 @@ def test_admin_console_page_and_audit_api(tmp_path) -> None:
         assert audit.json()[0]["detail"]["virtual"] is True
 
 
-def test_admin_console_forecasting_view_is_prediction_only(tmp_path) -> None:
+def test_admin_console_forecasting_view_shows_three_layers_without_data_connections(tmp_path) -> None:
     app = create_app(make_settings(tmp_path))
     with TestClient(app) as client:
         page = client.get("/admin")
@@ -307,17 +307,36 @@ def test_admin_console_forecasting_view_is_prediction_only(tmp_path) -> None:
     assert "实际销售需求" in page.text
     assert "历史预测销售需求" in page.text
     assert "未来预测销售需求（P50）" in page.text
-    assert 'id="backtestRows"' not in page.text
-    assert 'id="forecastRows"' not in page.text
-    assert 'id="forecastSummary"' not in page.text
-    assert 'id="forecastWarehouse"' not in page.text
-    assert 'id="forecastRisk"' not in page.text
-    assert "inventory-plan?store_id=" not in page.text
-    assert "库存快照" not in page.text
     assert "demand.facts.slice(-90)" in page.text
     assert "基于 ${escapeHtml(demand.facts.length)} 天历史销售数据，预测未来 ${escapeHtml(forecast.forecast_horizon)} 天需求" in page.text
     assert "point.p80" not in page.text
     assert "point.p95" not in page.text
+    assert 'id="inventoryProjection"' in page.text
+    assert 'id="replenishmentDraft"' in page.text
+    assert page.text.index('id="demandTrendChart"') < page.text.index('id="inventoryProjection"')
+    assert page.text.index('id="inventoryProjection"') < page.text.index('id="replenishmentDraft"')
+    for label in (
+        "库存预测",
+        "期初库存",
+        "锁定库存",
+        "计划到货",
+        "预计退货",
+        "期末库存",
+        "缺货风险",
+        "补货建议",
+        "采购提前期",
+        "复核周期",
+        "安全库存",
+        "最低起订量",
+        "包装倍数",
+        "建议补货量",
+        "预计到货日",
+        "库存、锁定量、到货计划和退货数据接入后，将生成每日库存预测。",
+        "数据接入后生成补货草稿；不会自动创建采购单。",
+    ):
+        assert label in page.text
+    assert "purchase-order" not in page.text
+    assert "创建采购单" not in page.text
 
 
 def test_local_admin_bypass_is_loopback_only_and_keeps_client_authentication(tmp_path) -> None:
