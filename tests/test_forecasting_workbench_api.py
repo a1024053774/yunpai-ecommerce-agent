@@ -210,6 +210,8 @@ def test_forecasting_api_exposes_replayable_demand_run_plan_and_risks(tmp_path) 
             assert plan.json()["external_order_created"] is False
             assert plan.json()["replenishment_order"]["kind"] == "forecast_replenishment"
             assert plan.json()["explanation"]["warehouse_scope"] == "supply_location_only"
+            assert plan.json()["explanation"]["quality"]["unknown_arrival_inbound_quantity"] == "5.00"
+            assert plan.json()["inventory_projection"]["days"]
             assert plan.json()["recommended_order_qty"]
 
             latest_plan = client.get(
@@ -300,5 +302,57 @@ def test_forecasting_tools_are_read_only_and_tenant_scoped(tmp_path) -> None:
             "tenant-other", store_id=STORE, sku_id=SKU
         )
         assert missing is None
+    finally:
+        service.close()
+
+
+def test_inventory_plan_does_not_count_undated_balance_inbound_as_available_supply(tmp_path) -> None:
+    """Using the aggregate inbound balance as immediate supply would suppress replenishment."""
+    service = create_app(make_settings(tmp_path)).state.agent
+    try:
+        _seed_orders(service, days=35)
+        service.operations.demand_facts.rebuild(
+            TENANT,
+            store_id=STORE,
+            sku_id=SKU,
+            start_date=date(2026, 7, 1),
+            end_date=date(2026, 8, 4),
+        )
+        run = service.operations.forecasting.run(
+            TENANT, ForecastRunRequest(store_id=STORE, sku_id=SKU, horizon_days=7)
+        )
+        service.operations.inventory.upsert(
+            TENANT,
+            InventoryBalanceUpsert(
+                connector_id="undated-inbound-inventory",
+                store_id=STORE,
+                warehouse_id=WAREHOUSE,
+                sku_id=SKU,
+                on_hand=Decimal("0"),
+                reserved=Decimal("0"),
+                inbound=Decimal("100"),
+                source_updated_at=datetime.now(UTC),
+                source_id="undated-inbound-source",
+            ),
+        )
+        service.operations.inventory_planning.upsert_policy(
+            TENANT,
+            InventoryPlanningPolicy(
+                store_id=STORE,
+                sku_id=SKU,
+                warehouse_id=WAREHOUSE,
+                supplier_lead_days=2,
+                review_period_days=2,
+                minimum_order_qty=Decimal("1"),
+                order_multiple=Decimal("1"),
+            ),
+        )
+
+        plan = service.operations.inventory_planning.create_plan(
+            TENANT, forecast_run_id=run["run_id"], warehouse_id=WAREHOUSE
+        )
+
+        assert Decimal(plan["recommended_order_qty"]) > 0
+        assert plan["explanation"]["quality"]["unknown_arrival_inbound_quantity"] == "100.00"
     finally:
         service.close()
