@@ -157,22 +157,20 @@ def test_admin_console_page_and_audit_api(tmp_path) -> None:
             "商品 SKU",
             "时序预测方法",
             "基于 ${escapeHtml(demand.facts.length)} 天历史销售数据，预测未来 ${escapeHtml(forecast.forecast_horizon)} 天需求",
-            "已观测需求与历史预测对比",
             "历史需求事实",
             "可履约需求",
             "总需求",
             "需求状态",
-            "未来每日需求预测",
-            "50% 把握需求（P50）",
-            "80% 把握需求（P80）",
-            "95% 把握需求（P95）",
+            "销售需求趋势",
+            "实际销售需求",
+            "历史预测销售需求",
+            "未来预测销售需求（P50）",
             "请输入店铺 ID 和商品 SKU 后刷新。",
         ):
             assert label in page.text
-        assert 'id="forecastRows"' in page.text
         assert 'id="demandRows"' in page.text
         assert 'id="forecastMethod"' in page.text
-        assert 'id="backtestRows"' in page.text
+        assert 'id="demandTrendChart"' in page.text
         assert "/v1/forecasting/skus/" in page.text
         assert "竞品分析" in page.text
         assert "商品与库存" in page.text
@@ -304,7 +302,13 @@ def test_admin_console_forecasting_view_is_prediction_only(tmp_path) -> None:
 
     assert page.status_code == 200
     assert 'id="forecastMethod"' in page.text
-    assert 'id="backtestRows"' in page.text
+    assert 'id="demandTrendChart"' in page.text
+    assert "renderDemandTrendChart" in page.text
+    assert "实际销售需求" in page.text
+    assert "历史预测销售需求" in page.text
+    assert "未来预测销售需求（P50）" in page.text
+    assert 'id="backtestRows"' not in page.text
+    assert 'id="forecastRows"' not in page.text
     assert 'id="forecastSummary"' not in page.text
     assert 'id="forecastWarehouse"' not in page.text
     assert 'id="forecastRisk"' not in page.text
@@ -312,9 +316,8 @@ def test_admin_console_forecasting_view_is_prediction_only(tmp_path) -> None:
     assert "库存快照" not in page.text
     assert "demand.facts.slice(-90)" in page.text
     assert "基于 ${escapeHtml(demand.facts.length)} 天历史销售数据，预测未来 ${escapeHtml(forecast.forecast_horizon)} 天需求" in page.text
-    assert "50% 把握需求（P50）" in page.text
-    assert "80% 把握需求（P80）" in page.text
-    assert "95% 把握需求（P95）" in page.text
+    assert "point.p80" not in page.text
+    assert "point.p95" not in page.text
 
 
 def test_local_admin_bypass_is_loopback_only_and_keeps_client_authentication(tmp_path) -> None:
