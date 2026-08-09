@@ -361,10 +361,9 @@
             </div>
           </article>
           <article class="panel" style="margin-top:14px"><div class="panel-head"><h3>时序预测方法</h3></div><div class="panel-body" id="forecastMethod"><div class="empty">请输入店铺 ID 和商品 SKU 后刷新。</div></div></article>
-          <article class="panel" style="margin-top:14px"><div class="panel-head"><h3>最新预测</h3></div><div class="panel-body" id="forecastSummary"><div class="empty">请输入店铺 ID 和商品 SKU 后刷新。</div></div></article>
           <article class="panel" style="margin-top:14px"><div class="panel-head"><h3>历史需求事实</h3></div><div class="table-wrap"><table><thead><tr><th>日期</th><th>可履约需求</th><th>总需求</th><th>需求状态</th><th>缺货</th><th>质量</th></tr></thead><tbody id="demandRows"></tbody></table></div></article>
           <article class="panel" style="margin-top:14px"><div class="panel-head"><h3>已观测需求与历史预测对比</h3></div><div class="table-wrap"><table><thead><tr><th>日期</th><th>实际需求</th><th>预测需求</th><th>偏差</th><th>预测方法</th></tr></thead><tbody id="backtestRows"></tbody></table></div></article>
-          <article class="panel" style="margin-top:14px"><div class="panel-head"><h3>未来每日需求预测</h3></div><div class="table-wrap"><table><thead><tr><th>日期</th><th>P50</th><th>P80</th><th>P95</th></tr></thead><tbody id="forecastRows"></tbody></table></div></article>
+          <article class="panel" style="margin-top:14px"><div class="panel-head"><h3>未来每日需求预测</h3></div><div class="table-wrap"><table><thead><tr><th>日期</th><th>50% 把握需求（P50）</th><th>80% 把握需求（P80）</th><th>95% 把握需求（P95）</th></tr></thead><tbody id="forecastRows"></tbody></table></div></article>
         </section>
 
         <section class="view" id="view-orders">
@@ -2167,7 +2166,6 @@
       const storeId = $('forecastStore').value.trim();
       const skuId = $('forecastSku').value.trim();
       if (!storeId || !skuId) {
-        $('forecastSummary').innerHTML = '<div class="empty">请输入店铺 ID 和商品 SKU 后刷新。</div>';
         $('forecastMethod').innerHTML = '<div class="empty">请输入店铺 ID 和商品 SKU 后刷新。</div>';
         return;
       }
@@ -2178,17 +2176,13 @@
           api(`/v1/forecasting/demand${query}&sku_id=${encodeURIComponent(skuId)}`),
           api(`/v1/forecasting/skus/${encodeURIComponent(skuId)}/backtest${query}`)
         ]);
-        const topBacktest = (forecast.backtest_summary || backtest.backtests || []).slice(0, 3).map((item) => `${forecastDisplayName(item.model_name || item.model)} ${escapeHtml(item.wape || '-')}`).join(' · ');
-        const quality = forecast.data_quality || demand.quality || {};
-        $('forecastMethod').innerHTML = `<div class="stack"><div><strong>${escapeHtml(forecastDisplayName(forecast.champion_model))}</strong><div class="muted">预测窗口 ${escapeHtml(forecast.forecast_horizon)} 天 · 历史回测 ${forecast.backtests?.length || 0} 个窗口</div></div><div class="muted">选择结论：${escapeHtml(forecastDisplayName(forecast.champion_reason))}</div><div class="muted">需求类型：${escapeHtml(forecastDisplayName(forecast.demand_type))}</div></div>`;
-        $('forecastSummary').innerHTML = `<div class="stack"><div class="muted">预测运行 ${escapeHtml(forecast.run_id)} · 训练截止 ${escapeHtml(forecast.training_end)}</div><span class="status ${quality.quality_level === 'good' ? 'ok' : 'warn'}">数据质量 ${escapeHtml(forecastDisplayName(quality.quality_level || quality.level || 'unknown'))} · ${demand.facts.length} 条日需求事实</span><div class="muted">来源水位：${escapeHtml(quality.source_watermark || '-')}</div><div class="muted">回测 WAPE：${topBacktest || '-'}</div></div>`;
+        $('forecastMethod').innerHTML = `<div class="stack"><div><strong>${escapeHtml(forecastDisplayName(forecast.champion_model))}</strong><div class="muted">基于 ${escapeHtml(demand.facts.length)} 天历史销售数据，预测未来 ${escapeHtml(forecast.forecast_horizon)} 天需求</div></div><div class="muted">选择结论：${escapeHtml(forecastDisplayName(forecast.champion_reason))}</div><div class="muted">需求类型：${escapeHtml(forecastDisplayName(forecast.demand_type))}</div></div>`;
         const visibleDemandFacts = demand.facts.slice(-90);
         $('demandRows').innerHTML = visibleDemandFacts.length ? visibleDemandFacts.map((item) => `<tr><td>${escapeHtml(item.business_date)}</td><td>${escapeHtml(item.eligible_units)}</td><td>${escapeHtml(item.gross_units)}</td><td>${escapeHtml(demandStateDisplayName(item.stockout_evidence?.demand_state))}</td><td>${escapeHtml(stockoutDisplayName(item.stockout_flag))}</td><td>${item.quality?.missing_source_date ? '<span class="status warn">来源缺口</span>' : '<span class="status ok">已观测</span>'}</td></tr>`).join('') : '<tr><td colspan="6"><div class="empty">暂无需求事实</div></td></tr>';
         $('backtestRows').innerHTML = renderBacktestRows(forecast);
         $('forecastRows').innerHTML = forecast.forecast_points.map((point) => `<tr><td>${escapeHtml(point.forecast_date)}</td><td>${escapeHtml(point.p50)}</td><td>${escapeHtml(point.p80)}</td><td>${escapeHtml(point.p95)}</td></tr>`).join('');
       } catch (error) {
-        $('forecastSummary').innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
-        $('forecastMethod').innerHTML = '<div class="empty">暂无预测方法信息</div>';
+        $('forecastMethod').innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
         $('demandRows').innerHTML = '';
         $('backtestRows').innerHTML = '';
         $('forecastRows').innerHTML = '';

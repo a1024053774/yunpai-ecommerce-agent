@@ -156,13 +156,16 @@ def test_admin_console_page_and_audit_api(tmp_path) -> None:
             "店铺 ID",
             "商品 SKU",
             "时序预测方法",
-            "最新预测",
+            "基于 ${escapeHtml(demand.facts.length)} 天历史销售数据，预测未来 ${escapeHtml(forecast.forecast_horizon)} 天需求",
             "已观测需求与历史预测对比",
             "历史需求事实",
             "可履约需求",
             "总需求",
             "需求状态",
             "未来每日需求预测",
+            "50% 把握需求（P50）",
+            "80% 把握需求（P80）",
+            "95% 把握需求（P95）",
             "请输入店铺 ID 和商品 SKU 后刷新。",
         ):
             assert label in page.text
@@ -302,11 +305,16 @@ def test_admin_console_forecasting_view_is_prediction_only(tmp_path) -> None:
     assert page.status_code == 200
     assert 'id="forecastMethod"' in page.text
     assert 'id="backtestRows"' in page.text
+    assert 'id="forecastSummary"' not in page.text
     assert 'id="forecastWarehouse"' not in page.text
     assert 'id="forecastRisk"' not in page.text
     assert "inventory-plan?store_id=" not in page.text
     assert "库存快照" not in page.text
     assert "demand.facts.slice(-90)" in page.text
+    assert "基于 ${escapeHtml(demand.facts.length)} 天历史销售数据，预测未来 ${escapeHtml(forecast.forecast_horizon)} 天需求" in page.text
+    assert "50% 把握需求（P50）" in page.text
+    assert "80% 把握需求（P80）" in page.text
+    assert "95% 把握需求（P95）" in page.text
 
 
 def test_local_admin_bypass_is_loopback_only_and_keeps_client_authentication(tmp_path) -> None:
