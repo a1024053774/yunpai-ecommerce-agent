@@ -336,7 +336,8 @@ def test_admin_console_forecasting_view_shows_three_layers_without_data_connecti
     ):
         assert label in page.text
     assert "purchase-order" not in page.text
-    assert "创建采购单" not in page.text
+    assert 'id="createPurchaseOrder"' not in page.text
+    assert "/v1/purchase-orders" not in page.text
 
 
 def test_local_admin_bypass_is_loopback_only_and_keeps_client_authentication(tmp_path) -> None:
