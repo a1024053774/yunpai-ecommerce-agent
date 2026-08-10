@@ -50,6 +50,8 @@ def test_every_workspace_tool_has_a_customer_facing_chinese_label() -> None:
         "get_governance_status",
         "get_channel_status",
         "get_module_registry",
+        "get_catalog_status",
+        "get_order_management_status",
         "get_operations_assistant_report",
         "generate_marketing_copy_draft",
         "get_product_facts",

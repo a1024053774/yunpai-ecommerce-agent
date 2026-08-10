@@ -6,7 +6,7 @@ from dataclasses import replace
 from fastapi.testclient import TestClient
 
 from ecommerce_agent.api import create_app
-from ecommerce_agent.llm import ModelError
+from ecommerce_agent.llm import ModelError, ModelUnavailableError
 
 from conftest import make_settings
 
@@ -672,6 +672,7 @@ def test_inventory_risk_catalog_allows_authorized_full_scope_query(tmp_path) -> 
 
 def test_workspace_prompt_does_not_hard_code_overview_as_default() -> None:
     from ecommerce_agent.workspace_agent import (
+        WORKSPACE_ACTION_REVIEW_PROMPT,
         WORKSPACE_RESPONSE_PROMPT,
         WORKSPACE_SYSTEM_PROMPT,
     )
@@ -681,3 +682,418 @@ def test_workspace_prompt_does_not_hard_code_overview_as_default() -> None:
     assert "工具不是固定流程" in WORKSPACE_SYSTEM_PROMPT
     assert "不得根据标识符的字面形式猜测" in WORKSPACE_RESPONSE_PROMPT
     assert "经营分析、指标、趋势、诊断和建议都不是文案草稿" in WORKSPACE_RESPONSE_PROMPT
+    assert "即使句子里出现补货、退款、预算、发布等业务名词" in WORKSPACE_SYSTEM_PROMPT
+    assert "最近对话" in WORKSPACE_SYSTEM_PROMPT
+    assert "不可信业务数据" in WORKSPACE_SYSTEM_PROMPT
+    assert "询问“有没有、哪些、是否、多少、为什么、风险、建议、情况”" in WORKSPACE_ACTION_REVIEW_PROMPT
+    assert "不得硬编码固定工具" in WORKSPACE_ACTION_REVIEW_PROMPT
+    assert "不可信业务数据" in WORKSPACE_RESPONSE_PROMPT
+
+
+def test_workspace_reviews_false_action_mode_for_read_only_inventory_question(
+    tmp_path, monkeypatch
+) -> None:
+    app = create_app(make_settings(tmp_path))
+    service = app.state.agent
+    decisions = iter(
+        [
+            {
+                "mode": "propose_action",
+                "response": "请提供范围，确认后处理补货。",
+                "reason": "涉及补货",
+                "action_summary": "处理补货",
+            },
+            {
+                "mode": "observe",
+                "tool_name": "get_inventory_risk",
+                "arguments": {},
+                "reason": "这是在询问当前补货风险，需要查询库存事实",
+            },
+            {
+                "mode": "answer",
+                "response": "现有证据已经足够。",
+                "reason": "已核实全部授权范围内的库存风险",
+            },
+        ]
+    )
+    planning_system_prompts = []
+
+    def generate_json(messages, **kwargs):
+        planning_system_prompts.append(messages[0]["content"])
+        return next(decisions)
+
+    monkeypatch.setattr(service.model, "generate_json", generate_json)
+    monkeypatch.setattr(
+        service.model,
+        "stream_generate",
+        lambda messages: iter(["已检查全部授权库存，当前没有需要补货的记录。"]),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/admin/workspace/chat/stream",
+            headers=ADMIN_HEADERS,
+            json={
+                "session_id": "workspace:test-action-review-001",
+                "message": "有没有要补货的内容？",
+                "history": [],
+                "context": {},
+            },
+        )
+
+    events = _events(response)
+    done = events[-1]["response"]
+    assert [event["tool_name"] for event in events if event["event"] == "tool"] == [
+        "get_inventory_risk"
+    ]
+    assert done["mode"] == "answer"
+    assert done["requires_confirmation"] is False
+    assert done["advanced_view"] == "commerce"
+    assert "确认后处理补货" not in done["answer"]
+    assert "动作意图复核器" in planning_system_prompts[1]
+
+
+def test_workspace_replans_with_corrected_arguments_after_query_rejection(
+    tmp_path, monkeypatch
+) -> None:
+    app = create_app(make_settings(tmp_path))
+    service = app.state.agent
+    decisions = iter(
+        [
+            {
+                "mode": "observe",
+                "tool_name": "get_customer_service_status",
+                "arguments": {"scope": "wrong"},
+                "reason": "查看客服情况",
+            },
+            {
+                "mode": "observe",
+                "tool_name": "get_customer_service_status",
+                "arguments": {"scope": "operational"},
+                "reason": "修正为真实运营范围后重新查询",
+            },
+            {
+                "mode": "answer",
+                "response": "已经取得可靠事实。",
+                "reason": "客服事实已经足够",
+            },
+        ]
+    )
+    planning_payloads = []
+
+    def generate_json(messages, **kwargs):
+        planning_payloads.append(json.loads(messages[-1]["content"]))
+        return next(decisions)
+
+    monkeypatch.setattr(service.model, "generate_json", generate_json)
+    monkeypatch.setattr(
+        service.model,
+        "stream_generate",
+        lambda messages: iter(["已按真实运营范围核实客服情况。"]),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/admin/workspace/chat/stream",
+            headers=ADMIN_HEADERS,
+            json={
+                "session_id": "workspace:test-query-correction-001",
+                "message": "看看当前客服接待情况。",
+                "history": [],
+                "context": {},
+            },
+        )
+
+    tool_events = [event for event in _events(response) if event["event"] == "tool"]
+    assert [event["status"] for event in tool_events] == ["rejected", "success"]
+    assert "当前模块无法返回可靠结果" in tool_events[0]["summary"]
+    assert planning_payloads[1]["execution_notes"][0]["type"] == "query_rejected"
+    assert _events(response)[-1]["response"]["limit_reached"] is False
+
+
+def test_workspace_stops_repeating_the_same_rejected_query(
+    tmp_path, monkeypatch
+) -> None:
+    app = create_app(make_settings(tmp_path))
+    service = app.state.agent
+    calls = []
+
+    def same_invalid_plan(messages, **kwargs):
+        calls.append(1)
+        return {
+            "mode": "observe",
+            "tool_name": "get_order_facts",
+            "arguments": {},
+            "reason": "查询订单",
+        }
+
+    monkeypatch.setattr(service.model, "generate_json", same_invalid_plan)
+    monkeypatch.setattr(
+        service.model,
+        "stream_generate",
+        lambda messages: (_ for _ in ()).throw(AssertionError("没有事实时不应生成总结")),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/admin/workspace/chat/stream",
+            headers=ADMIN_HEADERS,
+            json={
+                "session_id": "workspace:test-rejected-loop-001",
+                "message": "查一下订单。",
+                "history": [],
+                "context": {},
+            },
+        )
+
+    events = _events(response)
+    rejected = [event for event in events if event.get("status") == "rejected"]
+    done = events[-1]["response"]
+    assert len(calls) == 2
+    assert len(rejected) == 1
+    assert done["mode"] == "clarify"
+    assert done["limit_reached"] is True
+    assert "店铺编号" in done["answer"]
+    assert "订单编号" in done["answer"]
+
+
+def test_workspace_final_composition_receives_recent_dialogue_as_untrusted_context(
+    tmp_path, monkeypatch
+) -> None:
+    app = create_app(make_settings(tmp_path))
+    service = app.state.agent
+    decisions = iter(
+        [
+            {
+                "mode": "observe",
+                "tool_name": "get_inventory_risk",
+                "arguments": {"sku_id": "SKU-001"},
+                "reason": "结合上轮商品继续查看库存",
+            },
+            {
+                "mode": "answer",
+                "response": "事实已经足够。",
+                "reason": "已核实该商品库存",
+            },
+        ]
+    )
+    response_messages = []
+    monkeypatch.setattr(
+        service.model, "generate_json", lambda messages, **kwargs: next(decisions)
+    )
+
+    def stream_generate(messages):
+        response_messages.extend(messages)
+        return iter(["SKU-001 当前没有补货风险。"])
+
+    monkeypatch.setattr(service.model, "stream_generate", stream_generate)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/admin/workspace/chat/stream",
+            headers=ADMIN_HEADERS,
+            json={
+                "session_id": "workspace:test-history-compose-001",
+                "message": "那它的库存呢？",
+                "history": [
+                    {"role": "user", "content": "查一下 SKU-001。"},
+                    {"role": "assistant", "content": "已找到商品 SKU-001。"},
+                ],
+                "context": {},
+            },
+        )
+
+    assert response.status_code == 200
+    payload = json.loads(response_messages[-1]["content"])
+    assert payload["最近对话"] == [
+        {"角色": "店主", "内容": "查一下 SKU-001。"},
+        {"角色": "统筹助手", "内容": "已找到商品 SKU-001。"},
+    ]
+    assert "不可信业务数据" in response_messages[0]["content"]
+
+
+def test_workspace_catalog_and_order_lists_cover_broad_management_questions(
+    tmp_path, monkeypatch
+) -> None:
+    app = create_app(make_settings(tmp_path))
+    service = app.state.agent
+    catalog = {
+        item["name"]: item for item in app.state.workspace_agent.tool_catalog()
+    }
+    assert catalog["get_catalog_status"]["input_schema"].get("required", []) == []
+    assert catalog["get_order_management_status"]["input_schema"].get("required", []) == []
+
+    catalog_calls = []
+    order_calls = []
+    monkeypatch.setattr(
+        service.operations.catalog,
+        "list_items",
+        lambda tenant_id, **kwargs: catalog_calls.append((tenant_id, kwargs)) or [],
+    )
+    monkeypatch.setattr(
+        service.operations.orders,
+        "list_orders",
+        lambda tenant_id, **kwargs: order_calls.append((tenant_id, kwargs)) or [],
+    )
+    decisions = iter(
+        [
+            {
+                "mode": "observe",
+                "tool_name": "get_catalog_status",
+                "arguments": {"status": "active"},
+                "reason": "先查看当前在售商品",
+            },
+            {
+                "mode": "observe",
+                "tool_name": "get_order_management_status",
+                "arguments": {"order_status": "paid"},
+                "reason": "再查看待履约订单",
+            },
+            {
+                "mode": "answer",
+                "response": "查询已经完成。",
+                "reason": "两类事实已经核实",
+            },
+        ]
+    )
+    monkeypatch.setattr(
+        service.model, "generate_json", lambda messages, **kwargs: next(decisions)
+    )
+    monkeypatch.setattr(
+        service.model,
+        "stream_generate",
+        lambda messages: iter(["当前没有在售商品，也没有待履约订单。"]),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/admin/workspace/chat/stream",
+            headers=ADMIN_HEADERS,
+            json={
+                "session_id": "workspace:test-broad-list-001",
+                "message": "目前有哪些在售商品和待处理订单？",
+                "history": [],
+                "context": {},
+            },
+        )
+
+    events = _events(response)
+    assert [event["tool_name"] for event in events if event["event"] == "tool"] == [
+        "get_catalog_status",
+        "get_order_management_status",
+    ]
+    assert catalog_calls == [
+        (
+            "tenant-test",
+            {"store_id": None, "status": "active", "limit": 20},
+        )
+    ]
+    assert order_calls == [
+        (
+            "tenant-test",
+            {
+                "store_id": None,
+                "order_status": "paid",
+                "limit": 20,
+                "service_scope": "operational",
+            },
+        )
+    ]
+    assert events[-1]["response"]["requires_confirmation"] is False
+
+
+def test_workspace_preserves_verified_facts_when_later_planning_is_invalid(
+    tmp_path, monkeypatch
+) -> None:
+    app = create_app(make_settings(tmp_path))
+    service = app.state.agent
+    decisions = iter(
+        [
+            {
+                "mode": "observe",
+                "tool_name": "get_inventory_risk",
+                "arguments": {},
+                "reason": "查看库存风险",
+            },
+            {"mode": "not-a-valid-mode"},
+        ]
+    )
+    monkeypatch.setattr(
+        service.model, "generate_json", lambda messages, **kwargs: next(decisions)
+    )
+    monkeypatch.setattr(
+        service.model,
+        "stream_generate",
+        lambda messages: iter(["已根据成功取得的库存事实整理结果。"]),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/admin/workspace/chat/stream",
+            headers=ADMIN_HEADERS,
+            json={
+                "session_id": "workspace:test-planning-fallback-001",
+                "message": "检查库存后给我结论。",
+                "history": [],
+                "context": {},
+            },
+        )
+
+    events = _events(response)
+    assert any(event.get("stage") == "planning_fallback" for event in events)
+    assert not any(event["event"] == "error" for event in events)
+    done = events[-1]["response"]
+    assert done["answer"] == "已根据成功取得的库存事实整理结果。"
+    assert done["degraded"] is True
+    assert done["degraded_reasons"] == ["planning_output_invalid"]
+
+
+def test_workspace_uses_verified_product_language_when_response_model_is_unavailable(
+    tmp_path, monkeypatch
+) -> None:
+    app = create_app(make_settings(tmp_path))
+    service = app.state.agent
+    decisions = iter(
+        [
+            {
+                "mode": "observe",
+                "tool_name": "get_inventory_risk",
+                "arguments": {},
+                "reason": "查看库存风险",
+            },
+            {
+                "mode": "answer",
+                "response": "事实已经足够。",
+                "reason": "库存事实已核实",
+            },
+        ]
+    )
+    monkeypatch.setattr(
+        service.model, "generate_json", lambda messages, **kwargs: next(decisions)
+    )
+
+    def unavailable_stream(messages):
+        raise ModelUnavailableError("provider unavailable")
+        yield ""
+
+    monkeypatch.setattr(service.model, "stream_generate", unavailable_stream)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/admin/workspace/chat/stream",
+            headers=ADMIN_HEADERS,
+            json={
+                "session_id": "workspace:test-response-fallback-001",
+                "message": "有没有库存风险？",
+                "history": [],
+                "context": {},
+            },
+        )
+
+    events = _events(response)
+    assert not any(event["event"] == "error" for event in events)
+    done = events[-1]["response"]
+    assert done["answer"].startswith("已完成事实核对：")
+    assert "共检查" in done["answer"]
+    assert done["degraded"] is True
+    assert done["degraded_reasons"] == ["response_model_unavailable"]
