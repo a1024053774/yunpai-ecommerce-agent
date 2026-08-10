@@ -37,6 +37,9 @@ def test_demo_plan_returns_virtual_inventory_projection_and_draft(tmp_path) -> N
         assert body["plan"]["external_order_created"] is False
         assert len(body["plan"]["inventory_projection"]["days"]) == 30
         assert body["plan"]["recommended_order_qty"] != "0.00"
+        assert body["run"]["run_id"]
+        assert len(body["run"]["forecast_points"]) == 30
+        assert body["run"]["backtests"]
         assert body["plan"]["plan_id"] == second.json()["plan"]["plan_id"]
     finally:
         service.close()

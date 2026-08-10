@@ -169,7 +169,8 @@ def test_inventory_plan_applies_maximum_stock_after_moq_and_multiple(tmp_path) -
         )
 
         assert plan["recommended_order_qty"] == "70.00"
-        assert plan["rounding"]["after_order_multiple"] == "80.00"
+        assert plan["rounding"]["raw_order_qty"] == "110.00"
+        assert plan["rounding"]["after_order_multiple"] == "120.00"
         assert plan["rounding"]["maximum_stock_limit"] == "70.00"
         assert plan["rounding"]["maximum_stock_cap_applied"] is True
     finally:
