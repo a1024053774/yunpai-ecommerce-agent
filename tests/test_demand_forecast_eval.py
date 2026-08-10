@@ -67,4 +67,3 @@ def test_bad_forecasts_fail_the_gate_even_when_the_pipeline_runs() -> None:
         item["status"] == "failed" and "wape_exceeded" in item["failures"]
         for item in report["scenarios"]
     )
-
