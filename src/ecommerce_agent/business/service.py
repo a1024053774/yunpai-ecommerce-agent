@@ -59,8 +59,18 @@ class OrderFactsToolInput(BaseModel):
     store_id: str = Field(min_length=1, max_length=128)
 
 
+class ListingTrafficInsightsToolInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sku_id: str = Field(min_length=1, max_length=128)
+    store_id: str | None = Field(default=None, max_length=128)
+    limit: int = Field(default=20, ge=1, le=100)
+
+
 class OperationsService:
     def __init__(self, db: Database):
+        from ..traffic_lab import TrafficAnalysisEngine, TrafficLabIngestionService
+
         self.db = db
         self.catalog = CatalogService(db)
         self.orders = OrderService(db)
@@ -70,6 +80,8 @@ class OperationsService:
         self.marketing = MarketingService(db)
         self.finance = FinanceService(db)
         self.ops_assistant = OpsAssistantService(db)
+        self.traffic_lab = TrafficLabIngestionService(db)
+        self.traffic_analysis = TrafficAnalysisEngine(db)
         self.metrics = MetricsService(db, self.inventory)
         self.connectors = ConnectorRegistry()
         self.connectors.register(VirtualTaobaoConnector())
@@ -110,6 +122,9 @@ class OperationsService:
         try:
             batch = connector.pull(PullRequest(resource=resource, cursor=cursor, limit=limit))
             applied = 0
+            idempotent = 0
+            quarantined = 0
+            receipts: list[dict[str, Any]] = []
             for record in batch.records:
                 if resource == "catalog":
                     result = self.catalog.upsert(
@@ -121,7 +136,6 @@ class OperationsService:
                             **record.payload,
                         ),
                     )
-                    applied += int(result["write_status"] == "applied")
                 elif resource == "orders":
                     result = self.orders.upsert(
                         tenant_id,
@@ -132,7 +146,6 @@ class OperationsService:
                             **record.payload,
                         ),
                     )
-                    applied += int(result["write_status"] == "applied")
                 elif resource == "inventory":
                     result = self.inventory.upsert(
                         tenant_id,
@@ -143,7 +156,6 @@ class OperationsService:
                             **record.payload,
                         ),
                     )
-                    applied += int(result["write_status"] == "applied")
                 elif resource == "competitor_price":
                     result = self.competitive.record(
                         tenant_id,
@@ -155,9 +167,24 @@ class OperationsService:
                             **record.payload,
                         ),
                     )
-                    applied += int(result["write_status"] == "applied")
+                elif resource == "listing_revision":
+                    result = self.traffic_lab.ingest_listing_revision_record(
+                        tenant_id,
+                        connector_id=connector_id,
+                        record=record,
+                    )
+                    receipts.append(result["receipt"])
+                elif resource == "traffic_metrics":
+                    result = self.traffic_lab.ingest_metric_record(
+                        tenant_id,
+                        connector_id=connector_id,
+                        record=record,
+                    )
                 else:
                     raise ValueError(f"no normalizer is implemented for resource: {resource}")
+                applied += int(result["write_status"] == "applied")
+                idempotent += int(result["write_status"] == "idempotent")
+                quarantined += int(result.get("disposition") == "quarantined")
         except Exception as exc:
             with self.db._write_lock, self.db.connect() as conn:
                 conn.execute(
@@ -202,6 +229,8 @@ class OperationsService:
                 "resource": resource,
                 "items_received": len(batch.records),
                 "items_applied": applied,
+                "items_idempotent": idempotent,
+                "items_quarantined": quarantined,
             },
             tenant_id,
         )
@@ -213,6 +242,9 @@ class OperationsService:
             "status": "succeeded",
             "items_received": len(batch.records),
             "items_applied": applied,
+            "items_idempotent": idempotent,
+            "items_quarantined": quarantined,
+            "receipts": receipts,
             "next_cursor": batch.next_cursor,
             "has_more": batch.has_more,
             "data_as_of": batch.data_as_of,
@@ -326,6 +358,21 @@ class OperationsService:
                     input_model=FinanceReportQuery,
                     handler=self._profit_reconciliation_tool,
                     metadata={"domain": "finance", "risk_level": "L0"},
+                )
+            )
+        if registry.get("get_listing_traffic_insights") is None:
+            registry.register(
+                ToolSpec(
+                    name="get_listing_traffic_insights",
+                    description=(
+                        "读取指定 SKU 已固化的流量实验统计证据、区间、滞后分析与反证；"
+                        "不重算统计，不代表平台权重或因果机制"
+                    ),
+                    kind="read",
+                    input_model=ListingTrafficInsightsToolInput,
+                    handler=self._listing_traffic_insights_tool,
+                    policy=self._catalog_store_scope_policy,
+                    metadata={"domain": "traffic_lab", "risk_level": "L0"},
                 )
             )
 
@@ -486,3 +533,16 @@ class OperationsService:
                 ),
             },
         )
+
+    def _listing_traffic_insights_tool(
+        self, arguments: BaseModel, context: ToolExecutionContext
+    ) -> ToolResult:
+        value = ListingTrafficInsightsToolInput.model_validate(arguments.model_dump())
+        store_id = value.store_id or self._trusted_store_id(context)
+        output = self.traffic_lab.domain.listing_traffic_insights(
+            context.tenant_id,
+            value.sku_id,
+            store_id=store_id,
+            limit=value.limit,
+        )
+        return ToolResult(status="success", output=output)

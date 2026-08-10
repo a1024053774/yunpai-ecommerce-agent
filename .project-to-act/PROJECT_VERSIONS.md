@@ -5,9 +5,52 @@
 ## 当前版本
 
 - 版本号：`0.33.0`
-- 发布状态：工作台渠道与灰度可视化本机候选；生产放行阻塞
-- 兼容性说明（0.33.0 增量）：无 schema / API 契约变化；后台页面新增适配器与灰度面板，发布表单增加可选夜间窗与 SOP 白名单字段（不填时请求与 0.32.0 相同）
-- 最后更新：2026-08-07
+- 发布状态：工作台渠道与灰度可视化、M5-R WP1–WP5 本机候选；生产放行阻塞
+- 兼容性说明（0.33.0 + 未升版补丁）：schema v28 additive 新增 Traffic Lab 六类核心表、一张 metric 隔离表、索引、复合租户外键和 revision 不可变触发器；v27 可前向迁移。WP2 不改 schema 或依赖；虚拟 Connector capability 1.2 additive 增加 `listing_revision` / `traffic_metrics`，通用 sync 响应 additive 增加幂等、隔离计数和回执。WP3 沿用 v28、无新依赖/HTTP API，additive 导出 `TrafficFeatureEngine` 与版本化特征契约；`image-v1` 保留读侧与旧算法，`image-v2` 为当前版本，同一 asset 可显式选择版本重算且不更新资产。WP4 沿用 v28；Python 包不再公开任意统计载荷 `TrafficAnalysisRunCreate`，调用方改用只接收实验 ID 的 `TrafficAnalysisEngine`；当前新分析显式要求 `traffic-analysis-v2`，历史 v1 run 保持可读；黑盒 runner 报告 additive 增加 `ground_truth_boundary`，保留原 `analysis_imported_ground_truth` 字段但改由运行轨迹审计派生。WP5 沿用 v28、无新依赖或迁移，additive 增加管理员限定的 `/v1/traffic-lab/*` 工作流、`traffic_lab` available 模块与模型可见的只读 `get_listing_traffic_insights`；既有 API 响应契约、LangGraph 拓扑和语义路由不变，控制台只在管理员显式点击后运行分析，未加入自动发布、改标题/换图或投放动作
+- 最后更新：2026-08-10
+
+## M5-R WP5 Agent / Admin / Eval（未单独升版）
+
+- 状态：完整管理员 HTTP 工作流、持久化洞察只读 Agent tool、显式触发的实验控制台、D19 虚拟店铺场景和六类机制 Eval 通过本机代码级候选；M5-R 整体仍在开发
+- 兼容性：沿用 schema v28、无迁移或第三方依赖；所有既有 API 响应契约不变，新增端点均要求管理员租户上下文。同步 `origin/main` 时其数据库基线仍为 v27；本分支保留 v28 migration 与读取兼容，迁移专项及全量回归通过
+- 权责边界：动态工具目录供模型选择，不向 `graph.py` 或 `intent.py` 写入 traffic_lab 关键词/正则分支；工具只读取 `traffic_analysis_runs` 已固化的结构化证据，显式标记不重算统计、不主张平台权重。页面的查询仅 GET，分析 POST 只能由管理员操作触发；不会自动发布商品、改标题/图片或投放
+- 验证：8 个机制场景覆盖无影响、CTR/CVR、库存、标题/图片、interaction、时间噪声；每项以数值和结构化字段判定，oracle 与分析调用轨迹隔离。D19 由公开服务写入显式 virtual 数据，并为 available 模块提供通过场景；全量 `668 passed, 1 xfailed`，证据 E-20260810-007
+- 证据：E-20260810-007；`traffic_lab_api.py`；`business/service.py`；`business/registry.py`；`docs/admin-console.html`；`evals/traffic_lab/wp5_mechanism_v1.json`；`tests/test_traffic_lab_wp5.py`
+
+## M5-R WP4 实验与黑盒分析引擎（未单独升版）
+
+- 状态：A/A、switchback uplift、置信区间、lag、数据质量 Gate、带运行轨迹 ground-truth 审计的独立黑盒 Eval 与版本化 AI 解释边界通过本机代码级候选；M5-R 整体仍在开发
+- 兼容性：沿用 schema v28，无新表、迁移、依赖、HTTP API 或模块 available 登记；当前 policy/code 为 `traffic-analysis-v2` / `traffic-analysis-code-v2`，v1 analysis run 仍可读取，但旧 policy 的新分析在写入前明确拒绝，避免静默套用变更后的 Gate
+- 权责边界：v2 固化生成 data window、sample size、effect、95% interval、lag、quality Gate、evidence/counter-evidence 和完整输入值/哈希；确定性 run 先落库，AI 随后只能更新 explanation-only 字段并受硬超时，越权、异常或超时均不改变统计字段。黑盒 runner 在分析完成后才读取 oracle 评分，报告记录分析场景与引擎调用的真实字段集合；oracle 字段重叠或额外调用字段会直接令评测失败
+- 验证：E-20260809-007 保留分析引擎红绿；本次旧报告因无结构化边界证据红灯，对抗 fixture 注入 oracle 字段后整份报告按预期失败。修复后聚焦 16 项、Traffic 相关 46 项、独立黑盒 4/4、工作区全量 `658 passed, 1 xfailed`，证据 E-20260810-006
+- 证据：E-20260810-006（当前黑盒边界）；E-20260809-007（当前分析引擎）；E-20260809-005（v1 历史，已被审查反例取代）；`src/ecommerce_agent/traffic_lab/analysis.py`；`scripts/run_traffic_analysis_eval.py`；`tests/test_traffic_lab_analysis.py`；`tests/test_traffic_lab_blackbox_eval.py`
+
+## M5-R WP3 标题 / 图片特征引擎（未单独升版）
+
+- 状态：标题/图片确定性统计、单点 feature schema、可选语义 signal 与显式降级通过本机代码级候选；M5-R 整体仍在开发
+- 兼容性：沿用 schema v28，无新表、迁移、依赖、HTTP API 或模块 available 登记；Python 包 additive 导出 `TrafficFeatureEngine`、`TitleFeatureContext`、语义 extractor 契约和当前 schema 查询；`CreativeAssetCreate` 对未知 feature schema 明确拒绝，`image-v1` 及旧 extractor 保持有效，`image-v2` 为当前版本
+- 特征契约：v1/v2 共用单点标题/图片特征清单、三类统计词表和阈值；v2 使用 `deterministic-title-v2` / `deterministic-png-v2`，无空格中文重复按归一化字符 bigram 统计，前 10 字密度按唯一信息字符占比计算，图片基础统计使用全分辨率累计与相邻边缘。同一 asset 可显式选择 v1/v2，输入 SHA 相同而版本化输出 SHA 分离，默认仍读取资产登记版本且不更新资产
+- 决策边界：词表命中仅增加 `benefit/scenario/promotion_keyword_count`，不进入对话/分析路由、模型旁路、实验有效性或机制结论；AI 标签固定为 `advisory_signal`，不可用/失败/坏输出只把 extraction 标为降级，确定性块逐字段不变
+- 验证：保留 E-20260809-004 初始接口/关键词反证；本次四项旧实现红灯均按预期失败，修复后聚焦 10 项、WP3 关联 24 项、迁移/灾备/CLI 扩展关联 63 项、工作区全量 `655 passed, 1 xfailed`；PNG 格式矩阵、随机图独立数值核对、compileall/whitespace 通过，证据 E-20260809-006
+- 证据：E-20260809-006（当前）；E-20260809-004（v1 历史）；`src/ecommerce_agent/traffic_feature_schema.py`；`src/ecommerce_agent/traffic_lab/features.py`；`tests/test_traffic_lab_features.py`
+
+## M5-R WP2 数据接入与虚拟推流器（未单独升版）
+
+- 状态：Connector resources、CSV/JSON importer、稳定变更回执、私有隐藏策略和可重放 fixture 本机代码级候选通过；M5-R 整体仍在开发
+- 兼容性：沿用 schema v28，无新表、依赖或专用 HTTP API；`VirtualTaobaoConnector.capability_version` 由 1.1 升至 1.2，并 additive 增加两个只读 pull resource；既有 resource 和 action 行为不变
+- 导入契约：小时/日级输入按显式 `source_timezone` 解释并规范为 UTC，时窗必须对齐粒度；来源 ID 缺失时由 connector/listing/时窗/粒度/流量来源稳定派生；revision 自动解析要求唯一覆盖整个 bucket，归属失败隔离，结构错误或显式身份冲突逐行拒绝
+- 虚拟边界：私有 fixture 生成器保留基础曝光、素材信号、近期 CTR/CVR 反馈、库存惩罚和固定随机种子；公开 Connector、数据库与 Traffic Lab 包只接收观测和回执，不输出 ground truth 或预期方向；公开 revision 以独立缺货时窗提供库存控制变量，使库存惩罚可由观测 Eval 复核
+- 验证：同步最新 `main` 后，聚焦 8 项、Traffic Lab/Connector/迁移/灾备/CLI 关联 52 项、全量 `632 passed, 1 xfailed`；重叠 revision 守卫反证和缺货时窗红绿均成立，证据 E-20260809-003
+- 证据：E-20260809-003；`src/ecommerce_agent/traffic_lab/ingestion.py`；`src/ecommerce_agent/connectors/_virtual_traffic.py`；`tests/test_traffic_lab_ingestion.py`
+
+## M5-R WP1 数据契约（未单独升版）
+
+- 状态：Listing / Creative 数据模型与领域 service 本机代码级候选通过；M5-R 整体仍在开发
+- 兼容性：`Database.SCHEMA_VERSION` 由 27 升至 28；只新增 `creative_assets`、`listing_revisions`、`traffic_metric_buckets`、`traffic_metric_quarantine`、`traffic_experiments`、`traffic_experiment_windows`、`traffic_analysis_runs` 及相关索引/触发器，不重建旧表；既有 API、模块注册表和依赖不变
+- 契约：所有时间输入要求带时区并规范为 UTC；`washout_window` 的整数单位冻结为分钟；`storage_ref` 只接受 `objects/` 项目对象键或无查询参数的 `s3://`、`oss://`、`cos://` URI；跨表引用使用 `tenant_id + id`；revision 不可更新/删除；metric 与隔离记录共享 `data_as_of + payload_hash` 来源版本语义，并按 `tenant_id + source_id` 保持互斥
+- 灾备：v28 迁移前用旧程序生成并验证停机备份；迁移后、恢复业务写入前立即生成并验证新的 v28 全量备份。v28 程序按精确 schema 拒绝 v27 `.ypbak`，旧归档及匹配程序保留到新归档完成隔离恢复演练
+- 验证：初始 E-20260809-001 通过；隔离补丁的最新证据见 E-20260809-002
+- 证据：E-20260809-001、E-20260809-002；`src/ecommerce_agent/traffic_lab/`；`tests/test_traffic_lab.py`；`docs/operations.md`
 
 ## M4 验收补丁（未单独升版）
 
