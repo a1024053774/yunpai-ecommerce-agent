@@ -198,15 +198,48 @@ TERSE_POLICY_QUESTIONS = [
 
 @pytest.mark.parametrize(("message", "expected"), SAMPLES)
 def test_customer_intent_samples(message: str, expected: str) -> None:
-    assert classify(message, model=ChitchatModel()).intent == expected
+    model = CapturingModel({"intent": expected, "confidence": 0.84})
+
+    result = classify(message, model=model)
+
+    assert result.intent == expected
+    rule_match = intent_module._match_rule(message)
+    review = bool(
+        rule_match
+        and (
+            intent_module._requires_model_review(message, rule_match[1])
+            or (
+                intent_module._matches_process_accountability(message)
+                and rule_match[0] != "complaint"
+            )
+        )
+    )
+    if rule_match and not review:
+        assert result.method == "rule"
+        assert result.confidence == intent_module._RULE_CONFIDENCE
+        assert model.calls == []
+    else:
+        assert result.method == "model"
+        assert len(model.calls) == 1
 
 
-def test_rule_result_is_high_confidence_without_model_call() -> None:
-    result = classify("请推荐一款保温杯", model=UnexpectedModel())
+def test_rule_result_is_high_confidence_when_model_is_not_configured() -> None:
+    result = classify("请推荐一款保温杯", model=None)
 
     assert result.intent == "product_inquiry"
     assert result.confidence == intent_module._RULE_CONFIDENCE == 0.95
     assert result.method == "rule"
+
+
+def test_configured_model_does_not_replace_a_simple_rule_result() -> None:
+    model = CapturingModel({"intent": "chitchat", "confidence": 0.12})
+
+    result = classify("我要退款", model=model)
+
+    assert result.intent == "after_sales"
+    assert result.confidence == intent_module._RULE_CONFIDENCE == 0.95
+    assert result.method == "rule"
+    assert model.calls == []
 
 
 @pytest.mark.parametrize(
@@ -218,7 +251,7 @@ def test_rule_result_is_high_confidence_without_model_call() -> None:
     ],
 )
 def test_rule_priority(message: str, expected: str) -> None:
-    assert classify(message, model=UnexpectedModel()).intent == expected
+    assert classify(message, model=None).intent == expected
 
 
 def test_rule_priority_is_explicit_and_mapping_order_independent(monkeypatch) -> None:
@@ -234,7 +267,7 @@ def test_rule_priority_is_explicit_and_mapping_order_independent(monkeypatch) ->
     }
     monkeypatch.setattr(intent_module, "_RULE_KEYWORDS", reordered)
 
-    result = classify("我要投诉退款商品多少钱", model=UnexpectedModel())
+    result = classify("我要投诉退款商品多少钱", model=None)
 
     assert result.intent == "complaint"
 
@@ -269,7 +302,7 @@ def test_business_evidence_from_another_clause_does_not_short_circuit(
 def test_business_evidence_keeps_ambiguous_keyword_on_rule_fast_path(
     message: str, expected: str
 ) -> None:
-    result = classify(message, model=UnexpectedModel())
+    result = classify(message, model=None)
 
     assert result.intent == expected
     assert result.confidence == intent_module._RULE_CONFIDENCE
@@ -281,7 +314,7 @@ def test_business_evidence_keeps_ambiguous_keyword_on_rule_fast_path(
 def test_terse_business_message_stays_on_rule_fast_path(
     message: str, expected: str
 ) -> None:
-    result = classify(message, model=UnexpectedModel())
+    result = classify(message, model=None)
 
     assert result.intent == expected
     assert result.confidence == intent_module._RULE_CONFIDENCE
@@ -355,6 +388,35 @@ def test_neutral_progress_question_requires_model_arbitration(message: str) -> N
 @pytest.mark.parametrize(
     "message",
     (
+        "退货运费明明该你们承担",
+        "保修责任明明该商家负责",
+    ),
+)
+def test_return_and_warranty_accountability_questions_are_reviewed(
+    message: str,
+) -> None:
+    model = CapturingModel({"intent": "complaint", "confidence": 0.88})
+
+    result = classify(message, model=model)
+
+    assert len(model.calls) == 1
+    assert result.method == "model"
+
+
+def test_terse_return_request_stays_on_rule_fast_path() -> None:
+    model = CapturingModel({"intent": "complaint", "confidence": 0.12})
+
+    result = classify("我要退货怎么弄", model=model)
+
+    assert result.intent == "after_sales"
+    assert result.confidence == intent_module._RULE_CONFIDENCE
+    assert result.method == "rule"
+    assert model.calls == []
+
+
+@pytest.mark.parametrize(
+    "message",
+    (
         "售后审核为什么还没有通过",
         "为什么我的订单还没有发货提醒",
     ),
@@ -385,6 +447,8 @@ def test_cross_domain_gate_declares_positive_business_evidence() -> None:
         "推荐",
         "物流",
         "退款",
+        "退货",
+        "保修",
     }
     assert all(intent_module._RULE_BUSINESS_EVIDENCE.values())
 
@@ -434,11 +498,53 @@ def test_empty_or_symbol_only_message_uses_safe_default(message: str) -> None:
     assert result.method == "default"
 
 
-def test_very_long_message_is_classified_without_model_call() -> None:
-    result = classify("投诉" + "服务体验很差" * 2000, model=UnexpectedModel())
+def test_very_long_message_is_classified_without_model_when_disabled() -> None:
+    result = classify("投诉" + "服务体验很差" * 2000, model=None)
 
     assert result.intent == "complaint"
     assert result.method == "rule"
+
+
+@pytest.mark.parametrize(
+    ("message", "model_intent"),
+    (
+        ("还没下单，想先了解保修条件", "product_inquiry"),
+        ("尚未购买，想先看看退货条件", "product_inquiry"),
+        ("不用换货了，只想确认维修进度", "after_sales"),
+        ("东西有划痕，但我现在只是咨询清洁方法", "product_inquiry"),
+    ),
+)
+def test_rule_signal_never_overrides_model_semantics(
+    message: str,
+    model_intent: str,
+) -> None:
+    model = CapturingModel({"intent": model_intent, "confidence": 0.86})
+
+    result = classify(message, model=model)
+
+    assert result.intent == model_intent
+    assert result.method == "model"
+    assert len(model.calls) == 1
+
+
+def test_rule_and_process_matches_are_advisory_signals_in_model_request() -> None:
+    model = CapturingModel({"intent": "after_sales", "confidence": 0.88})
+
+    classify("返修进度一直没更新，但先别投诉", model=model)
+
+    task = json.loads(model.calls[0][0][1]["content"])
+    assert task["advisory_signals"]["rule_candidate"] == "complaint"
+    assert task["advisory_signals"]["matched_keywords"] == ["投诉"]
+    assert task["advisory_signals"]["semantic_authority"] is False
+
+
+def test_rule_miss_keeps_the_classification_advisory_payload_minimal() -> None:
+    model = CapturingModel({"intent": "chitchat", "confidence": 0.88})
+
+    classify("今天心情不错", model=model)
+
+    task = json.loads(model.calls[0][0][1]["content"])
+    assert task["advisory_signals"] == {"semantic_authority": False}
 
 
 def test_rule_miss_uses_bounded_short_few_shot_model_prompt() -> None:
@@ -516,6 +622,52 @@ def test_labelling_policy_keeps_order_invoice_service_in_after_sales() -> None:
     assert "发票开具" in system_prompt
     assert "抬头变更" in system_prompt
     assert "订单服务" in system_prompt
+
+
+def test_labelling_policy_defaults_unresolved_progress_to_after_sales() -> None:
+    model = CapturingModel()
+
+    classify("我想看看有哪些颜色", model=model)
+
+    system_prompt = model.calls[0][0][0]["content"]
+    assert "尚未得到结果的审核、发货、物流、退款或售后进度询问" in system_prompt
+    assert "默认归 after_sales" in system_prompt
+    assert "反复推诿、承诺未履行、要求追责或翻旧账" in system_prompt
+
+
+def test_progress_labelling_policy_reaches_real_gateway_request(tmp_path) -> None:
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": '{"intent":"after_sales","confidence":0.88}'
+                        }
+                    }
+                ]
+            },
+        )
+
+    settings = replace(
+        make_settings(tmp_path),
+        model_enabled=True,
+        model_mock_mode=False,
+        model_streaming=False,
+        model_api_key="test-model-key",
+    )
+    gateway = ModelGateway(settings, transport=httpx.MockTransport(handler))
+    try:
+        result = classify("订单状态一直没更新", model=gateway)
+    finally:
+        gateway.close()
+
+    assert result.intent == "after_sales"
+    assert "默认归 after_sales" in captured["messages"][0]["content"]
 
 
 def test_mixed_after_sales_few_shot_is_paraphrased_in_model_request() -> None:
@@ -752,7 +904,7 @@ def test_model_call_failure_records_the_exception_type() -> None:
 
 
 def test_rule_and_model_hits_carry_no_error() -> None:
-    assert classify("我要投诉", model=UnexpectedModel()).error is None
+    assert classify("我要投诉", model=None).error is None
     assert classify("我想看看有哪些颜色", model=CapturingModel()).error is None
 
 
@@ -762,3 +914,25 @@ def test_intent_classify_timeout_defaults_to_two_seconds(monkeypatch) -> None:
 
     monkeypatch.setenv("INTENT_CLASSIFY_TIMEOUT_SECONDS", "0.25")
     assert Settings.from_env().intent_classify_timeout_seconds == 0.25
+
+
+def test_decision_model_budget_has_safe_defaults_and_env_overrides(monkeypatch) -> None:
+    for name in (
+        "MODEL_DECISION_TIMEOUT_SECONDS",
+        "MODEL_DECISION_MAX_OUTPUT_TOKENS",
+        "MODEL_DECISION_THINKING_ENABLED",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    defaults = Settings.from_env()
+    assert defaults.model_decision_timeout_seconds == 15.0
+    assert defaults.model_decision_max_output_tokens == 300
+    assert defaults.model_decision_thinking_enabled is False
+
+    monkeypatch.setenv("MODEL_DECISION_TIMEOUT_SECONDS", "12.5")
+    monkeypatch.setenv("MODEL_DECISION_MAX_OUTPUT_TOKENS", "256")
+    monkeypatch.setenv("MODEL_DECISION_THINKING_ENABLED", "true")
+    configured = Settings.from_env()
+    assert configured.model_decision_timeout_seconds == 12.5
+    assert configured.model_decision_max_output_tokens == 256
+    assert configured.model_decision_thinking_enabled is True

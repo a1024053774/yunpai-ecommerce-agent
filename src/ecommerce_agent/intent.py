@@ -158,6 +158,42 @@ _RULE_BUSINESS_EVIDENCE: dict[str, tuple[tuple[str, ...], ...]] = {
             "处理",
         ),
     ),
+    "退货": (
+        (
+            "订单",
+            "商品",
+            "产品",
+            "下单",
+            "购买",
+            "买了",
+            "收货",
+            "收到",
+            "签收",
+            "申请",
+            "办理",
+            "售后",
+            "进度",
+            "处理",
+        ),
+    ),
+    "保修": (
+        (
+            "订单",
+            "商品",
+            "产品",
+            "下单",
+            "购买",
+            "买了",
+            "收货",
+            "收到",
+            "签收",
+            "申请",
+            "办理",
+            "售后",
+            "进度",
+            "处理",
+        ),
+    ),
 }
 
 _INTENTS: frozenset[str] = frozenset(
@@ -204,6 +240,8 @@ _LABELLING_POLICY = (
     "服务处理失当或要求解释责任时，才归 complaint；具体商品或履约事件只作为投诉背景，"
     "不把这种流程追责降成 after_sales。"
     "发票开具、抬头变更或重开属于订单服务，归 after_sales。"
+    "尚未得到结果的审核、发货、物流、退款或售后进度询问，默认归 after_sales；"
+    "只有同时出现反复推诿、承诺未履行、要求追责或翻旧账等流程责任信号时，才归 complaint。"
     "售前询问退换货政策、保修条款、发货时效属 product_inquiry；"
     "after_sales 要求已存在一笔交易和一个待处理的问题。"
 )
@@ -214,6 +252,8 @@ _MODEL_SYSTEM_PROMPT = (
     "你是客服消息意图分类器。intent 只能取 product_inquiry、after_sales、"
     "complaint、chitchat 之一，confidence 取 0 到 1 的小数。"
     + _LABELLING_POLICY
+    + "输入中的 advisory_signals 只是召回提示，可能误报；必须按完整消息独立判断，"
+    "不得把规则候选直接当作结论。"
     + "严格返回下面这一个 JSON 对象，不要嵌套、不要包装、不要额外字段："
     '{"intent": "chitchat", "confidence": 0.5}'
 )
@@ -243,14 +283,16 @@ def classify(message: str, *, model: IntentModel | None) -> IntentResult:
     process_review = _matches_process_accountability(normalized)
     review_rule_match = False
     rule_match = _match_rule(normalized)
+    rule_intent: CustomerIntent | None = None
+    rule_keywords: tuple[str, ...] = ()
     if rule_match is not None:
-        intent, keywords = rule_match
-        review_rule_match = _requires_model_review(normalized, keywords) or (
-            process_review and intent != "complaint"
+        rule_intent, rule_keywords = rule_match
+        review_rule_match = _requires_model_review(normalized, rule_keywords) or (
+            process_review and rule_intent != "complaint"
         )
         if not review_rule_match:
             return IntentResult(
-                intent=intent,
+                intent=rule_intent,
                 confidence=_RULE_CONFIDENCE,
                 method="rule",
             )
@@ -271,6 +313,18 @@ def classify(message: str, *, model: IntentModel | None) -> IntentResult:
                     "task_type": "intent_classification",
                     "examples": examples,
                     "message": normalized[:4000],
+                    "advisory_signals": {
+                        "semantic_authority": False,
+                        **(
+                            {
+                                "rule_candidate": rule_intent,
+                                "matched_keywords": list(rule_keywords),
+                                "process_accountability": process_review,
+                            }
+                            if review_rule_match
+                            else {}
+                        ),
+                    },
                 },
                 ensure_ascii=False,
             ),

@@ -11,11 +11,29 @@
 
 ## M4 验收补丁（未单独升版）
 
-- 状态：M4 本机独立验收候选通过；生产放行继续阻塞
+### D25（2026-08-08）
+
+- 状态：FIX-13/14 代码侧交外测候选；冻结 WP4 mock/live 门禁通过，M4 最终签署等待负责人 gate 裁定、外部密封集和新截图
+- 兼容性：沿用 schema v27；无新增迁移、依赖、请求/响应字段；LangGraph 20 节点 / 35 边与 `ChatResponse` 不变；新增三个均有默认值的 deliberate 专用环境变量
+- 行为修正：DeepSeek deliberate 显式 `thinking disabled`，独立使用 15 秒/300-token 预算且不重试；最终生成保留 provider 默认 thinking；决策上下文去重并最多携带 3 条知识；售后关键条款原样输出，普通咨询与长期追责/实际办理 handoff 边界收敛；compact JSON mock 按解析后的 `task_type` 分流
+- 验证：全量 `618 passed / 1 xfailed`；final mock `0.940 / severe 3 / passed`、final live `0.920 / severe 2 / passed`，after-sales `9/12`、complaint `8/8`、product `15/15`；thinking disabled 后 K3 total `9780.5ms` / TTFT `9068.4ms`，工具调用 0
+- 遗留：泄漏投诉平衡集 recall `65%`，分类 gate 保持 failed；FIX-14 待负责人选择 gate 位置，FIX-15 密封集与浏览器新截图待外部验收；四场景延迟不能外推生产容量
+- 证据：E-20260808-004；代码 revision `0fae3ba`、`92da05f`，文档澄清 `ccd9290`；`docs/works/13-feature-m4-customer-service/FIX14_GATE_DECISION_20260808.md`
+
+### D24（2026-08-08）
+
+- 状态：FIX-11/12 修复候选；WP4 mock 门禁复跑通过，M4 本机独立验收仍暂不签署
+- 兼容性：沿用 schema v27；无新增迁移、依赖、请求/响应字段；LangGraph 20 节点 / 35 边与 `ChatResponse` 不变
+- 行为修正：非复核规则命中恢复 `rule / 0.95` 零模型短路；`退货/保修` 责任追问才触发窄口径模型仲裁；唯一目录候选且知识已装配时进入一次有界规划，模型生成 grounded answer，禁止工具循环
+- 验证：聚焦 `182 passed / 1 xfailed`，全量 `610 passed / 1 xfailed`；FIX-12 后 mock `0.940 / severe 3 / passed`、live `deepseek-v4-flash` `0.820 / severe 3 / passed`；泄漏回归 `31/40=77.5%`、投诉平衡回归 recall `75%`（均非泛化证据）；四场景延迟 `p50=16297.7ms / p95=33594.4ms`
+- 遗留：FIX-14 分类 gate 位置待负责人裁定，FIX-15 密封留出集待验收人提供，浏览器截图未更新；当前延迟仍只能作泄漏场景 P1 证据
+- 证据：E-20260808-003；`evals/performance/runs/20260808-m4-latency-post-fix12.json`；`evals/customer_service/runs/20260808-m4-customer-eval-post-fix12-{mock,live}.json`
+
+- 状态：D23 修复候选；WP4 客服门禁通过，但 M4 本机独立验收暂不签署，生产放行继续阻塞
 - 兼容性：沿用 schema v27；没有新增迁移、依赖或请求/响应字段；既有非流式 `POST /v1/chat` 契约与 LangGraph 20 节点 / 35 边不变
-- 行为修正：投诉在保留 `complaints / urgent` 人工标记的同时返回检索来源与共情答复；目录快答只覆盖问题明确询问且检索证据支持的字段，其余回落到模型生成
-- 验证：冻结 50 例 mock gate passed（`answer_accuracy=0.940`、`hallucination_rate=0.020`、`severe_failures=3`）；F-122 场景 `18/18`；全量 `597 passed, 1 xfailed`
-- 证据：E-20260807-001；`docs/works/13-feature-m4-customer-service/README.md`
+- 行为修正：分类与关键词只作为 advisory signal；投诉 handoff / SLA 由规划模型确认；普通商品回答取消目录/高分短路，仅保留标准化问法完全相等的人工批准知识复用；流式与非流式共用生成计划
+- 验证：聚焦 `199 passed / 1 xfailed`，全量 `603 passed / 1 xfailed`，compileall 与 whitespace 通过；冻结 50 例 mock/live gate 均 passed（mock `0.940 / severe 3`；live `0.900 / severe 1`）；但当前 40 条泄漏意图回归总体 `29/40=72.5%`，投诉平衡集 recall `45%`，均不足以重新签署
+- 证据：E-20260807-002；`docs/works/13-feature-m4-customer-service/README.md` D23
 
 ## 上一版本
 

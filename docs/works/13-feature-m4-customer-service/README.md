@@ -873,6 +873,10 @@ mock 诊断；live 密钥仍只由 `env.md` 子进程加载。下一步不是立
 
 ## D22 · FIX-9 / FIX-10 与 M4 最终独立验收（2026-08-07）
 
+> 历史快照：本节记录 FIX-9 / FIX-10 当时的实现和签署。随后 D-034 审计与胡磊独立
+> 测试触发 D23 改造；涉及投诉强制路由、目录快答、live 指标和最终签署状态时，以
+> D23 为准。
+
 ### 先固定回归，再修两条快路径
 
 没有改 `customer_service_eval_v1.json` 的 expected、任何门禁阈值或评测排除范围。以
@@ -980,3 +984,238 @@ FIX-10 后用同一真实 provider、隔离数据目录和四条已泄漏回归�
 结论：M4 达到工作台 14 条验收标准与 WP5 六条交付要求，签署为**本机独立验收通过**。
 生产放行继续受真实客户脱敏数据、真实渠道、长稳、容量与安全 Gate 约束；D21 已列四条
 非阻塞残留继续有效。
+
+## D23 · 独立测试报告复核与 D-034 语义边界修正（2026-08-07）
+
+### 报告复核结论
+
+复核输入是胡磊基于 `7077b17` 的独立测试报告。报告中的三类现象可复现：中性进度问法
+可能被投诉信号吸收；含退货/保修词的复合消息可能不进入分类模型；投诉标签和商品目录
+候选会在规划模型之前直接决定 handoff 或回答。报告把第三项归因于空元组 `all(())`，与
+当前源码不完全一致；实际根因是规则直返后又被图内投诉/商品快路径放大。修复采纳现象与
+下游后果，不照抄该机制判断，也不按报告建议继续枚举语料关键词或调低门槛。
+
+根据 D-034，本轮明确选择如下行为：
+
+- **投诉采用模型语义权威。** 分类规则和四分类结果只作为检索、Prompt 与风险信号；
+  `precheck` 不再写入 `complaint_attention_required`，`deliberate` 和
+  `decision_gate` 不再因分类标签强制 handoff。只有规划模型输出
+  `intent=complaint / mode=handoff` 时，才使用固定共情话术并建立
+  `complaints / urgent` 任务。分类器误报 complaint 时，规划模型的 answer 决策必须存活。
+- **商品采用“精确批准问法”边界。** 删除按目录属性、唯一候选或高检索分数直接作答的
+  快路径。普通商品问题始终进入规划与生成；只有人工批准的 `evolution:` 知识且标准化
+  question 与本轮输入完全相等时，才允许复用固定答案。高分但不同问法仍调用模型。
+- **分类规则仅是 advisory signal。** 模型可用时，所有可分类消息都在 2 秒墙钟预算内
+  调用分类模型；规则候选、命中词和流程追责信号进入
+  `advisory_signals`，并显式携带 `semantic_authority=false`。模型关闭时仍保留原规则信号
+  和可观测 default 降级，不产生外部请求。
+- **流式与非流式共用生成计划。** `prepare_generation` 统一无证据、精确批准问法、
+  Prompt 变体、上下文预算和模型消息构造；`service.py` 不再复制商品/知识快答逻辑。
+
+### 失败证据与回归
+
+实现前新增反例后，意图、图、人工与流式聚焦集为 `22 failed / 137 passed`。失败覆盖：
+规则命中压过模型、投诉标签压过模型 answer、商品知识绕过 deliberation，以及 SSE 丢失
+Prompt 变体。修复后聚焦回归为 `199 passed / 1 xfailed`；另外增加高分 `evolution:`
+非精确问法必须调用模型的反证。全量回归为 `603 passed / 1 xfailed`，compileall 与
+whitespace 检查通过。没有修改冻结客服 fixture、门禁阈值或评测排除范围。
+
+同口径客服评测报告继续使用隔离数据目录，baseline 与 tuned 在同一运行中完全一致：
+
+| 模式 | answer_accuracy | hallucination_rate | pass_rate | severe_failures | gate | complaint | product | after-sales |
+|---|---:|---:|---:|---:|---|---:|---:|---:|
+| mock | 0.940 | 0.020 | 0.940 | 3 | passed | 6/8 | 14/15 | 12/12 |
+| live `deepseek-v4-flash` | 0.900 | 0.020 | 0.900 | 1 | passed | 7/8 | 15/15 | 8/12 |
+
+live 的 `handoff_recall=1.000`、`evidence_coverage=1.000`、主库
+`sessions/messages/handoff_tasks` 新增均为 0。5 条失败分别归因于 Prompt/回答契约 3、
+检索/来源覆盖 1、意图/转人工路由 1；不能只报总分。证据仍写入：
+
+- `evals/customer_service/runs/20260807-customer-service-mock.json`
+- `evals/customer_service/runs/20260807-customer-service-live.json`
+
+### 分类 live 回归与签署状态
+
+所有既有意图语料均已泄漏，因此以下结果只作回归，不作为新泛化成绩：
+
+- 40 条投诉正负平衡集：覆盖率 `20/40=50%`，complaint precision `9/9=100%`、recall
+  `9/20=45%`、负例误报 `0/20`；20 条 default 全为约 1.98 秒的
+  `model_deadline_exceeded`。该文件自己的 recall gate 为 failed。
+- 原 M4 40 条留出回归：覆盖率 `33/40=82.5%`，总体正确 `29/40=72.5%`，低于 75%；
+  作答子集准确率 `29/33=87.9%`。分类为 product `11/11`、after-sales `8/11`、
+  complaint `2/9`、chitchat `8/9`。不能用作答子集分母掩盖弃权。
+
+逐条结果在
+`evals/intent/runs/20260807-m4-complaint-balanced-post-d034-live.json` 与
+`evals/intent/runs/20260807-m4-acceptance-post-d034-live.json`。这两次运行没有据其原句继续
+调 prompt 或规则，避免用泄漏答案修分。
+
+因此当前结论是：**WP4 客服评测门禁已经恢复并优于 D22 live，但 M4 整体暂不重新签署**。
+阻塞项是当前代码下意图 live 回归总体 `72.5% < 75%`，以及投诉平衡集 recall gate failed；
+这不是 FIX-9/FIX-10 回退，也不能通过放宽 2 秒预算、降低门槛或挑选较好一次运行关闭。
+下一轮必须使用本文件、测试和既有报告中均未出现的新留出集，在不泄漏语料的前提下验证
+分类和 provider 容量方案。
+
+D22 的四场景延迟报告也被本轮语义路径变更失效：投诉重新进入模型 deliberation，商品
+不再有目录模板快答。当前全量 p50/p95 **未知**；完整 50 例 baseline/tuned live 运行耗时
+不能替代单轮延迟分布。P1 性能问题继续保留，必须按阶段耗时另行测量。
+
+## D24 · 规则短路与商品有界规划复核（2026-08-08）
+
+### FIX-11：恢复规则零模型短路
+
+D23 的 `model is None and not review_rule_match` 被证明把所有规则候选都送进模型，造成
+高频消息额外延迟和 2 秒弃权面扩大。本轮恢复为：没有流程追责/业务证据冲突的规则命中直接
+返回 `rule / 0.95`，配置模型不会改变该结果；只有规则未命中或复核触发才调用分类模型。
+`退货`、`保修` 的业务证据组只用于识别责任追问，因此“我要退货怎么弄”保留规则快路径，
+“退货运费明明该你们承担”进入仲裁。规则候选继续以 `semantic_authority=false` 作为提示，
+不直接决定规划模型的 answer/handoff。
+
+反证与复核：配置模型下“我要退款”“我要投诉”“多少钱”均为零分类调用、`rule / 0.95`；
+责任追问各发生一次模型调用。全量回归为 `610 passed, 1 xfailed`，没有修改冻结 fixture、
+门禁阈值、schema、拓扑或 `ChatResponse`。
+
+### FIX-12：商品开放问句的一步有界规划
+
+唯一目录候选、检索结果非空且上下文 ready 时，规划请求携带
+`planning_constraint=bounded_product_answer`，只允许一次 `answer / clarify / refuse / handoff`；
+工具目录为空，模型仍负责生成 grounded answer，因此目录快路径不再以模板绕过知识证据，也
+不会进入无界 ReAct。模型若返回 `observe / act`，实现安全转人工并记录约束违反轨迹。
+
+K3 真实 provider 探针本轮 trace 为 `deliberate:bounded_product:answer`，工具调用 0，未出现
+`react_step_limit_reached`；回答仍经过检索、生成和 verify。阶段耗时已写入
+`evals/performance/runs/20260808-m4-latency-post-fix12.json`：
+
+| 场景 | 总耗时 | 分类 provider | 检索 | deliberate provider | 生成 provider | 工具调用 |
+|---|---:|---:|---:|---:|---:|---:|
+| 注入拒答 | 6.6ms | 0 | 0 | 0 | 0 | 0 |
+| 投诉答复 + 人工标记 | 12205.1ms | 1559.0ms | 37.2ms | 10556.0ms | 0 | 0 |
+| K3 商品开放问句 | 20390.2ms | 1061.2ms | 25.1ms | 15167.1ms | 4074.0ms | 0 |
+| 目录无 CE 信息 | 33594.4ms | 880.3ms | 24.6ms | 27970.0ms | 4656.9ms | 0 |
+
+四条已泄漏回归场景的 `p50=16297.7ms`、`p95=33594.4ms`，不代表全链路分布；provider 尾延迟
+仍是 P1，不能再宣称“端到端 p50 已降至 1.45 秒”。after-sales、非单候选商品和工具型
+订单查询的 p50/p95 仍未测全。
+
+### 评测与签署状态
+
+FIX-12 后同 fixture 的 WP4 报告均重新跑完。mock 为 `answer_accuracy=0.940`、
+`hallucination_rate=0.020`、`severe_failures=3`、gate passed；同口径 live
+`deepseek-v4-flash` 为 `answer_accuracy=0.820`、`hallucination_rate=0.060`、
+`severe_failures=3`、gate passed，场景为 complaint `7/8`、product `14/15`、
+after-sales `6/12`。live 与 D23 的 `0.900` 不同，说明 provider/run-to-run 波动，不能
+宣称本轮准确率提升。两份新报告分别为
+`evals/customer_service/runs/20260808-m4-customer-eval-post-fix12-{mock,live}.json`；
+该复跑仍不改变 fixture 的封存性质或 M4 整体签署结论。
+
+意图数据继续按 R2 标记为泄漏回归，不作为泛化成绩。当前复跑为：
+
+- 原 40 条：`31/40=77.5%`，覆盖率 `80%`，作答子集 `31/32=96.875%`；投诉仅 `3/9` 被回答，
+  弃权仍受 2 秒预算和 provider 尾部影响。
+- 平衡 20 正 + 20 负：precision `100%`、recall `75%`、负例误报 `0/20`、覆盖率 `80%`，
+  gate passed；`min_complaint_recall=0.75` 仍是压线门槛，不是新泛化证据。
+
+因此 D24 仍**不能签署 M4**：FIX-14 的分类 gate 应测分类层还是端到端投诉队列，需负责人
+裁定；FIX-15 的密封、全新留出集需由验收人建立并在运行时才解封；浏览器 PNG 仍是 D22
+历史证据，未形成新 UI 实跑。WP4 mock 门禁、规则短路和有界规划已具备回归证据，但不覆盖
+上述签署阻塞项。
+
+## D25 · 售后收敛、DeepSeek 决策预算与 FIX-14 决策包（2026-08-08）
+
+### 红态与实现边界
+
+本轮先固定六类失败：DeepSeek 决策请求没有实际下发 thinking 开关、决策输出与全局
+1600-token 生成预算耦合、售后回复改写来源关键条款、普通售后被过度 handoff、进度询问
+口径未进入分类 Prompt，以及 latency runner 没有真实 TTFT。新增用例先得到 `6 failed`，
+compact JSON 又独立触发 mock 无法识别 `agent_decision` 的 R5 红态；修复均未修改冻结 fixture、
+评测门槛或 strict xfail。
+
+实现结果：
+
+- deliberate 使用独立 `15s / 300 tokens / thinking disabled`；每次带 deadline 的结构化请求
+  只做一次网关尝试，不消耗全局重试预算；
+  429 或连接故障仍按既有契约提示稍后重试，不为了基础设施故障制造人工队列 false positive。
+- DeepSeek 的最终客服生成不下发 thinking 覆盖，继续使用 provider 默认推理和全局 1600-token
+  预算；关闭仅限小 JSON 决策阶段，避免重演 D20 的 reasoning-only 截断。
+- 决策消息最多携带 3 条知识，去除 snapshot 中与独立知识、工具、历史和 observation 字段重复
+  的副本，并用紧凑 JSON 序列化；完整证据仍在持久 context snapshot 中。
+- after-sales 回复变体要求期限、金额、状态、条件和结论保持原文，不做数值单位换算，不主动
+  复述未被询问的订单号、运单号和交易日期，也不让 Markdown 拆开必答短语。
+- 决策边界将普通政策/单次进度查询留在 answer/observe；长期无进展、反复推诿和实际办理但
+  无可用写工具时才 handoff。分类 Prompt 同步加入“未出结果的进度查询默认 after_sales，
+  有流程追责信号才 complaint”的口径。
+- mock 改为解析 JSON 后读取 `task_type`，不再依赖带空格的字符串片段；紧凑 JSON 回归已锁定。
+
+### DeepSeek thinking 单变量 A/B 与真实 TTFT
+
+相同代码、相同 `15s / 300 tokens` 决策预算和四条已泄漏隔离场景，只切 deliberate 的
+thinking 开关：
+
+| deliberate thinking | 有效决策 | 四场景 p50 / p95 | 生成路径 TTFT | K3 |
+|---|---:|---:|---:|---:|
+| enabled | 0/3；三条均 `model_unavailable` | 8251.5 / 10538.8ms | 无 delta | 提前降级并建议重试；不建人工任务 |
+| disabled | 3/3 | 7274.5 / 11201.2ms | p50 9951.8 / p95 10835.2ms | total 9780.5ms；TTFT 9068.4ms |
+
+thinking enabled 的数值更短来自失败提前结束，不能当作性能胜利。disabled 后 K3 deliberate
+为 2139.7ms、生成 6016.2ms、工具调用 0，没有 `react_step_limit_reached`；知识缺口场景总时长
+11201.2ms。该报告首次走真实 `service.chat_stream` 并量到首个 delta，而不是用总时长倒推
+TTFT。四条均为泄漏回归场景，不能外推全量分布；after-sales、非单候选商品和工具型订单
+查询的完整 p50/p95 仍待容量测试。
+
+证据：
+
+- `evals/performance/runs/20260808-m4-latency-fix13-thinking-{on,off}.json`
+- `tests/test_m4_latency_runner.py`
+- `tests/test_llm.py`
+
+### WP4 mock/live 与版本带宽
+
+最终代码的冻结 WP4 结果：
+
+| 模式 | answer_accuracy | hallucination | severe | gate | after-sales | complaint | product | handoff FP |
+|---|---:|---:|---:|---|---:|---:|---:|---:|
+| mock | 0.940 | 0.020 | 3 | passed | 12/12 | 6/8 | 14/15 | 0 |
+| live `deepseek-v4-flash` | 0.920 | 0.000 | 2 | passed | 9/12 | 8/8 | 15/15 | 0 |
+
+live 的 handoff precision=1.000、recall=0.900、主库零写入。中间红态 live
+`0.880 / severe 6 / failed` 也保留，没有挑掉。发布线三次既有 live 点为 0.820、0.900、
+0.920，范围 0.820–0.920、中位 0.900；它们跨实现版本，只能说明版本/provider 带宽，不能
+冒充同一提交的统计置信区间。
+
+证据：
+
+- `evals/customer_service/runs/20260808-m4-customer-eval-fix13-{mock,live-run1,live-run2}.json`
+- `evals/customer_service/runs/20260808-m4-customer-eval-post-fix12-live.json`
+- `evals/customer_service/runs/20260807-customer-service-live.json`
+
+### FIX-14 当前数据与签署状态
+
+现存意图语料继续标为 `leaked regression only; not generalization evidence`：
+
+- 平衡 20 正 + 20 负：coverage 82.5%，complaint precision 100%、recall 65%、负例误报
+  0/20；7 条弃权全部是约 1.98 秒 deadline，gate failed。
+- 原 40 条：`31/40=77.5%`，coverage 85%，作答子集 `31/34=91.2%`；complaint coverage
+  仅 5/9。共同作答子集未出现投诉能力倒退，但不能用该分母掩盖弃权。
+- 端到端 WP4 complaint 8/8、handoff recall 90%，说明 SLA 执法点和分类层数字已不等价。
+
+两种 gate 位置、代价和待签项已写入
+`FIX14_GATE_DECISION_20260808.md`；负责人裁定前不撤分类 gate。FIX-15 密封集和当前页面
+截图仍由外部验收人提供，本轮没有拿泄漏集冒充泛化，也没有声称 M4 已最终签署。
+
+全量回归为 `618 passed, 1 xfailed in 685.07s`。沿用 schema v27，无新依赖或迁移；
+LangGraph 20 节点 / 35 边、非流式 `ChatResponse` 和冻结判据均未改变。
+
+### 服务器外测交接
+
+- 本轮代码 revision 为 `0fae3ba`（规则短路与 K3 有界规划）和 `92da05f`
+  （售后收敛、DeepSeek deliberate 独立预算、真实 TTFT）；`ccd9290` 澄清临时模型故障仍按
+  `model_unavailable + retry_advised` 返回，不创建人工任务。
+- 服务器使用的 `env.md` 继续由部署人通过仓库外安全通道传递，不进入 Git。除既有模型凭据外，
+  必须包含 `MODEL_DECISION_TIMEOUT_SECONDS=15`、`MODEL_DECISION_MAX_OUTPUT_TOKENS=300`、
+  `MODEL_DECISION_THINKING_ENABLED=false`；最终生成继续使用全局 1600-token 预算和 provider
+  默认 thinking。
+- 部署后先执行初始化和现有 `eval` / `simulate-store` 健康检查，再用
+  `scripts/run_customer_eval.py --mode live --env-file env.md` 复跑冻结 WP4；外部验收人另用未公开的
+  FIX-15 密封集核验泛化，并补当前页面截图。运行日志或报告不得回显模型密钥。
+- 交接目标是服务器测试候选，不是生产放行。分类层 complaint recall 65% 的 gate 仍为 failed，
+  FIX-14 的 gate 位置仍需负责人裁定；服务器结果必须作为新证据追加，不能覆盖本机 D25 报告。
