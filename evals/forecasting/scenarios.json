@@ -1,0 +1,123 @@
+{
+  "suite_id": "m6r-demand-forecast-synthetic-v2",
+  "virtual": true,
+  "production_claim": false,
+  "ground_truth_isolated": true,
+  "scenarios": [
+    {
+      "id": "stable_noise",
+      "history": {"generator": "repeat", "pattern": [19, 20, 21, 20, 19, 21, 20, 20, 19, 21], "cycles": 4},
+      "future": {"generator": "repeat", "pattern": [20, 19, 21, 20, 20, 21, 19], "cycles": 1},
+      "expected_type": "stable",
+      "max_wape": "0.08",
+      "max_abs_bias": "0.05"
+    },
+    {
+      "id": "trend_up",
+      "history": {"generator": "linear", "start": 10, "step": 1, "length": 42},
+      "future": {"generator": "linear", "start": 52, "step": 1, "length": 7},
+      "expected_type": "trend_up",
+      "max_wape": "0.03",
+      "max_abs_bias": "0.03"
+    },
+    {
+      "id": "trend_down",
+      "history": {"generator": "linear", "start": 60, "step": -1, "length": 42},
+      "future": {"generator": "linear", "start": 18, "step": -1, "length": 7, "floor": 0},
+      "expected_type": "trend_down",
+      "max_wape": "0.04",
+      "max_abs_bias": "0.04"
+    },
+    {
+      "id": "weekly_seasonal",
+      "history": {"generator": "repeat", "pattern": [8, 9, 11, 12, 15, 24, 19], "cycles": 6},
+      "future": {"generator": "repeat", "pattern": [8, 9, 11, 12, 15, 24, 19], "cycles": 1},
+      "expected_type": "weekly_seasonal",
+      "max_wape": "0.01",
+      "max_abs_bias": "0.01"
+    },
+    {
+      "id": "trend_weekly_seasonal",
+      "history": {"generator": "seasonal_trend", "pattern": [5, 6, 8, 7, 10, 16, 13], "cycles": 6, "cycle_step": 2},
+      "future": {"generator": "seasonal_trend", "pattern": [5, 6, 8, 7, 10, 16, 13], "cycles": 1, "cycle_step": 2, "cycle_offset": 6},
+      "expected_type": "trend_weekly_seasonal",
+      "max_wape": "0.03",
+      "max_abs_bias": "0.03"
+    },
+    {
+      "id": "intermittent",
+      "history": {"generator": "repeat", "pattern": [0, 0, 0, 6, 0, 0, 0], "cycles": 8},
+      "future": {"generator": "repeat", "pattern": [0, 0, 0, 6, 0, 0, 0], "cycles": 1},
+      "expected_type": "intermittent",
+      "baseline": "croston",
+      "model_allowlist": ["croston", "tsb"],
+      "max_wape": "1.55",
+      "max_abs_bias": "0.35"
+    },
+    {
+      "id": "lumpy",
+      "history": {"generator": "repeat", "pattern": [0, 0, 3, 0, 0, 18, 0, 0, 0, 7, 0, 25, 0, 0], "cycles": 4},
+      "future": {"generator": "repeat", "pattern": [0, 0, 4, 0, 0, 20, 0], "cycles": 1},
+      "expected_type": "lumpy",
+      "baseline": "croston",
+      "model_allowlist": ["croston", "tsb"],
+      "max_wape": "1.45",
+      "max_abs_bias": "0.45"
+    },
+    {
+      "id": "volatile",
+      "history": {"generator": "repeat", "pattern": [4, 28, 7, 31, 5, 24, 10, 18], "cycles": 6},
+      "future": {"generator": "repeat", "pattern": [6, 26, 8, 29, 5, 25, 9], "cycles": 1},
+      "expected_type": "volatile",
+      "model_allowlist": ["last_value", "rolling_mean", "weighted_moving_average", "ewma"],
+      "max_wape": "0.65",
+      "max_abs_bias": "0.15"
+    },
+    {
+      "id": "zero_demand",
+      "history": {"generator": "constant", "value": 0, "length": 42},
+      "future": {"generator": "constant", "value": 0, "length": 7},
+      "expected_type": "zero",
+      "expected_all_zero": true
+    },
+    {
+      "id": "cold_start",
+      "history": {"generator": "linear", "start": 3, "step": 1, "length": 3},
+      "future": {"generator": "linear", "start": 6, "step": 1, "length": 7},
+      "expected_type": "cold_start",
+      "expected_status": "cold_start"
+    },
+    {
+      "id": "regime_shift",
+      "history": {"generator": "segments", "segments": [{"value": 8, "length": 28}, {"value": 22, "length": 14}]},
+      "future": {"generator": "constant", "value": 22, "length": 7},
+      "expected_type": "regime_shift",
+      "max_wape": "0.08",
+      "max_abs_bias": "0.08"
+    },
+    {
+      "id": "promotion_without_calendar",
+      "history": {"generator": "repeat", "pattern": [9, 10, 10, 11, 10, 12, 10, 9, 11, 10], "cycles": 4},
+      "future": {"generator": "repeat", "pattern": [10, 10, 45, 38, 12, 11, 10], "cycles": 1},
+      "expected_type": "stable",
+      "quality_flags": ["promotion_calendar_missing"],
+      "expected_status": "degraded"
+    },
+    {
+      "id": "missing_dates",
+      "history": {"generator": "repeat", "pattern": [8, 9, 11, 12, 15, 24, 19], "cycles": 6},
+      "future": {"generator": "repeat", "pattern": [8, 9, 11, 12, 15, 24, 19], "cycles": 1},
+      "expected_type": "weekly_seasonal",
+      "quality_flags": ["missing_dates"],
+      "expected_status": "degraded"
+    },
+    {
+      "id": "stockout_truncated",
+      "history": {"generator": "segments", "segments": [{"value": 14, "length": 28}, {"value": 2, "length": 14}]},
+      "future": {"generator": "constant", "value": 14, "length": 7},
+      "expected_type": "regime_shift",
+      "quality_flags": ["stockout_censored"],
+      "expected_status": "degraded"
+    }
+  ]
+}
