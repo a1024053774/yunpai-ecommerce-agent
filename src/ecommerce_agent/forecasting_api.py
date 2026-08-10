@@ -11,7 +11,11 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .auth import AdminPrincipal
 from .business.demand_facts import DemandFactRebuildRequest
-from .business.forecast_demo import ensure_three_year_demo, ensure_three_year_demo_data
+from .business.forecast_demo import (
+    ensure_three_year_demo,
+    ensure_three_year_demo_data,
+    ensure_three_year_demo_plan,
+)
 from .business.forecasting import ForecastRequest, ForecastRunRequest
 from .business.inventory_planning import InventoryPlanCreateRequest, InventoryPlanningPolicy
 from .service import AgentService
@@ -31,6 +35,12 @@ class ForecastResolveRequest(BaseModel):
         if (self.store_id is None) != (self.sku_id is None):
             raise ValueError("forecast_scope_requires_store_and_sku")
         return self
+
+
+class ForecastDemoPlanRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    horizon_days: Literal[7, 14, 30] = 30
 
 
 def _real_sales_dates(
@@ -255,6 +265,34 @@ def build_forecasting_router(
                 "effective_scope": result["effective_scope"],
                 "source_type": result["source_type"],
                 "real_history_day_count": result["real_history_day_count"],
+            },
+            admin.tenant_id,
+        )
+        return result
+
+    @router.post("/demo-plan")
+    def create_demo_plan(
+        payload: ForecastDemoPlanRequest,
+        admin: AdminPrincipal = Depends(require_admin),
+    ) -> dict[str, Any]:
+        try:
+            result = ensure_three_year_demo_plan(
+                service,
+                tenant_id=admin.tenant_id,
+                horizon_days=payload.horizon_days,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        service.db.audit(
+            "forecasting.demo_plan.generated",
+            admin.admin_id,
+            result["plan"]["plan_id"],
+            {
+                "virtual": True,
+                "store_id": result["store_id"],
+                "sku_id": result["sku_id"],
+                "warehouse_id": result["warehouse_id"],
+                "external_order_created": False,
             },
             admin.tenant_id,
         )

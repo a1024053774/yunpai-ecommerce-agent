@@ -320,6 +320,9 @@ def test_admin_console_forecasting_view_shows_three_layers_without_data_connecti
     assert "point.p95" not in page.text
     assert 'id="inventoryProjection"' in page.text
     assert 'id="replenishmentDraft"' in page.text
+    assert 'id="inventoryProjectionRows"' in page.text
+    assert 'id="replenishmentQuantity"' in page.text
+    assert "'/v1/forecasting/demo-plan'" in page.text
     assert page.text.index('id="demandTrendChart"') < page.text.index('id="inventoryProjection"')
     assert page.text.index('id="inventoryProjection"') < page.text.index('id="replenishmentDraft"')
     for label in (
@@ -338,8 +341,8 @@ def test_admin_console_forecasting_view_shows_three_layers_without_data_connecti
         "包装倍数",
         "建议补货量",
         "预计到货日",
-        "库存、锁定量、到货计划和退货数据接入后，将生成每日库存预测。",
-        "数据接入后生成补货草稿；不会自动创建采购单。",
+            "生成需求预测后展示库存轨迹。",
+            "生成需求预测后展示补货草案；不会自动创建采购单。",
     ):
         assert label in page.text
     assert "purchase-order" not in page.text

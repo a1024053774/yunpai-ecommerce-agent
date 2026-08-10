@@ -5,14 +5,18 @@ from decimal import Decimal
 from typing import Any
 
 from .forecasting import ForecastRunRequest
+from .inventory import InventoryBalanceUpsert
+from .inventory_planning import InventoryPlanningPolicy
 from .orders import OrderLineInput, OrderUpsert
 
 
 DEMO_STORE_ID = "__forecast_demo_store__"
 DEMO_SKU_ID = "__forecast_demo_sku__"
+DEMO_WAREHOUSE_ID = "__forecast_demo_warehouse__"
 START_DATE = date(2023, 8, 9)
 SALES_DAY_COUNT = 1095
 SHANGHAI = timezone(timedelta(hours=8))
+DEMO_SOURCE_UPDATED_AT = datetime(2026, 8, 8, 4, tzinfo=UTC)
 
 
 def virtual_daily_units(day: date, index: int) -> int:
@@ -107,6 +111,85 @@ def ensure_three_year_demo_data(service: Any, *, tenant_id: str) -> dict[str, An
         },
     )
     return _source_view(tenant_id=tenant_id)
+
+
+def ensure_three_year_demo_plan(
+    service: Any,
+    *,
+    tenant_id: str,
+    horizon_days: int,
+) -> dict[str, Any]:
+    demo = ensure_three_year_demo(
+        service,
+        tenant_id=tenant_id,
+        horizon_days=horizon_days,
+    )
+    balances = service.operations.inventory.list_balances(
+        tenant_id,
+        store_id=DEMO_STORE_ID,
+        sku_id=DEMO_SKU_ID,
+    )
+    balance = next(
+        (item for item in balances if item["warehouse_id"] == DEMO_WAREHOUSE_ID),
+        None,
+    )
+    if balance is None:
+        balance = service.operations.inventory.upsert(
+            tenant_id,
+            InventoryBalanceUpsert(
+                connector_id="virtual-forecast-demo",
+                store_id=DEMO_STORE_ID,
+                warehouse_id=DEMO_WAREHOUSE_ID,
+                sku_id=DEMO_SKU_ID,
+                on_hand=Decimal("54"),
+                reserved=Decimal("6"),
+                inbound=Decimal("0"),
+                average_daily_sales=Decimal("18"),
+                source_updated_at=DEMO_SOURCE_UPDATED_AT,
+                source_id="virtual-forecast-demo-inventory-v1",
+            ),
+        )
+    policy = service.operations.inventory_planning.latest_policy(
+        tenant_id,
+        store_id=DEMO_STORE_ID,
+        sku_id=DEMO_SKU_ID,
+        warehouse_id=DEMO_WAREHOUSE_ID,
+    )
+    if policy is None:
+        policy = service.operations.inventory_planning.upsert_policy(
+            tenant_id,
+            InventoryPlanningPolicy(
+                store_id=DEMO_STORE_ID,
+                sku_id=DEMO_SKU_ID,
+                warehouse_id=DEMO_WAREHOUSE_ID,
+                supplier_lead_days=7,
+                review_period_days=7,
+                service_level="p80",
+                minimum_order_qty=Decimal("24"),
+                order_multiple=Decimal("12"),
+                minimum_safety_stock=Decimal("20"),
+                maximum_stock_days=90,
+            ),
+        )
+    plan = service.operations.inventory_planning.latest_plan(
+        tenant_id,
+        store_id=DEMO_STORE_ID,
+        sku_id=DEMO_SKU_ID,
+        warehouse_id=DEMO_WAREHOUSE_ID,
+    )
+    if plan is None or plan["forecast_run_id"] != demo["run"]["run_id"]:
+        plan = service.operations.inventory_planning.create_plan(
+            tenant_id,
+            forecast_run_id=demo["run"]["run_id"],
+            warehouse_id=DEMO_WAREHOUSE_ID,
+        )
+    return {
+        **demo,
+        "warehouse_id": DEMO_WAREHOUSE_ID,
+        "inventory": balance,
+        "policy": policy,
+        "plan": plan,
+    }
 
 
 def _source_view(*, tenant_id: str) -> dict[str, Any]:

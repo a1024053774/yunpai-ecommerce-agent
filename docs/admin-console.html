@@ -385,25 +385,25 @@
           <div class="notice" id="forecastProgress" hidden aria-live="polite" style="margin-top:14px"></div>
           <article class="panel" style="margin-top:14px"><div class="panel-head"><h3>历史需求事实</h3></div><div class="table-wrap"><table><thead><tr><th>日期</th><th>可履约需求</th><th>总需求</th><th>需求状态</th><th>缺货</th><th>质量</th></tr></thead><tbody id="demandRows"></tbody></table></div></article>
           <article class="panel" style="margin-top:14px"><div class="panel-head"><h3>销售需求趋势</h3><div class="demand-legend" aria-label="销售需求趋势图例"><span class="actual"><i></i>实际销售需求</span><span class="historical"><i></i>历史预测销售需求</span><span class="future"><i></i>未来预测销售需求（P50）</span></div></div><div class="demand-trend-wrap"><div class="demand-trend" id="demandTrendChart"><div class="empty">请输入店铺 ID 和商品 SKU 后刷新。</div></div></div></article>
-          <div class="section-head" style="margin-top:22px"><div><h2>库存预测</h2><p>在销量需求预测基础上，结合库存、锁定、到货和退货数据，推演每日剩余库存。</p></div><span class="status warn">数据待接入</span></div>
+          <div class="section-head" style="margin-top:22px"><div><h2>库存预测</h2><p>在销量需求预测基础上，结合库存、锁定、到货和退货数据，推演每日剩余库存。</p></div><span class="status warn" id="inventoryProjectionSource">等待生成</span></div>
           <article class="panel" id="inventoryProjection">
-            <div class="panel-head"><div><h3>未来库存变化</h3><span class="muted">库存数据接入后按日计算，不使用模拟库存替代真实数据。</span></div></div>
-            <div class="table-wrap"><table><thead><tr><th>日期</th><th>期初库存</th><th>锁定库存</th><th>计划到货</th><th>预计退货</th><th>预测销量</th><th>期末库存</th><th>缺货风险</th></tr></thead><tbody><tr><td colspan="8"><div class="empty">库存、锁定量、到货计划和退货数据接入后，将生成每日库存预测。</div></td></tr></tbody></table></div>
+            <div class="panel-head"><div><h3>未来库存变化</h3><span class="muted" id="inventoryProjectionNote">生成需求预测后展示库存轨迹。</span></div></div>
+            <div class="table-wrap"><table><thead><tr><th>日期</th><th>期初库存</th><th>锁定库存</th><th>计划到货</th><th>预计退货</th><th>预测销量</th><th>期末库存</th><th>缺货风险</th></tr></thead><tbody id="inventoryProjectionRows"><tr><td colspan="8"><div class="empty">生成需求预测后展示库存轨迹。</div></td></tr></tbody></table></div>
           </article>
-          <div class="section-head" style="margin-top:22px"><div><h2>补货建议</h2><p>在库存预测基础上，结合采购规则生成可人工确认的补货草稿。</p></div><span class="status warn">数据待接入</span></div>
+          <div class="section-head" style="margin-top:22px"><div><h2>补货建议</h2><p>在库存预测基础上，结合采购规则生成可人工确认的补货草稿。</p></div><span class="status warn" id="replenishmentSource">等待生成</span></div>
           <article class="panel" id="replenishmentDraft">
             <div class="panel-head"><div><h3>补货草稿</h3><span class="muted">仅提供建议，不会自动创建采购单或向供应商下单。</span></div></div>
             <div class="panel-body form-grid">
-              <div class="field"><label>采购提前期</label><div class="muted">待接入采购策略</div></div>
-              <div class="field"><label>复核周期</label><div class="muted">待接入补货规则</div></div>
-              <div class="field"><label>安全库存</label><div class="muted">待接入库存策略</div></div>
-              <div class="field"><label>最低起订量</label><div class="muted">待接入商品采购参数</div></div>
-              <div class="field"><label>包装倍数</label><div class="muted">待接入商品采购参数</div></div>
-              <div class="field"><label>建议补货量</label><div class="muted">待库存预测生成</div></div>
-              <div class="field"><label>预计到货日</label><div class="muted">待采购提前期生成</div></div>
-              <div class="field"><label>草稿状态</label><div class="muted">待数据接入</div></div>
+              <div class="field"><label>采购提前期</label><div class="muted" id="replenishmentLeadDays">-</div></div>
+              <div class="field"><label>复核周期</label><div class="muted" id="replenishmentReviewDays">-</div></div>
+              <div class="field"><label>安全库存</label><div class="muted" id="replenishmentSafetyStock">-</div></div>
+              <div class="field"><label>最低起订量</label><div class="muted" id="replenishmentMinimumOrder">-</div></div>
+              <div class="field"><label>包装倍数</label><div class="muted" id="replenishmentOrderMultiple">-</div></div>
+              <div class="field"><label>建议补货量</label><div class="muted" id="replenishmentQuantity">-</div></div>
+              <div class="field"><label>预计到货日</label><div class="muted" id="replenishmentArrivalDate">-</div></div>
+              <div class="field"><label>草稿状态</label><div class="muted" id="replenishmentStatus">-</div></div>
             </div>
-            <div class="panel-body" style="padding-top:0"><div class="notice">数据接入后生成补货草稿；不会自动创建采购单。</div></div>
+            <div class="panel-body" style="padding-top:0"><div class="notice" id="replenishmentNotice">生成需求预测后展示补货草案；不会自动创建采购单。</div></div>
           </article>
         </section>
 
@@ -2316,6 +2316,43 @@
       $('forecastProgress').hidden = true;
     }
 
+    function renderDemoInventoryPlan(payload) {
+      const inventory = payload.inventory;
+      const policy = payload.policy;
+      const plan = payload.plan;
+      const projection = plan.inventory_projection || {};
+      const days = projection.days || [];
+      $('inventoryProjectionSource').className = 'status warn';
+      $('inventoryProjectionSource').textContent = '本地演示数据';
+      $('replenishmentSource').className = 'status warn';
+      $('replenishmentSource').textContent = '本地演示草案';
+      $('inventoryProjectionNote').textContent = `演示仓库：现货 ${inventory.on_hand}，锁定 ${inventory.reserved}；不代表真实库存。`;
+      $('inventoryProjectionRows').innerHTML = days.map((day, index) => {
+        const risk = Number(day.unmet_demand) > 0;
+        return `<tr><td>${escapeHtml(day.business_date)}</td><td>${escapeHtml(day.opening_available)}</td><td>${index === 0 ? escapeHtml(inventory.reserved) : '-'}</td><td>${escapeHtml(day.scheduled_inbound)}</td><td>${escapeHtml(day.return_adjustment)}</td><td>${escapeHtml(day.forecast_sales)}</td><td>${escapeHtml(day.closing_available)}</td><td>${risk ? '<span class="status warn">缺货风险</span>' : '<span class="status ok">正常</span>'}</td></tr>`;
+      }).join('');
+      $('replenishmentLeadDays').textContent = `${policy.supplier_lead_days} 天`;
+      $('replenishmentReviewDays').textContent = `${policy.review_period_days} 天`;
+      $('replenishmentSafetyStock').textContent = plan.rounding.minimum_safety_stock;
+      $('replenishmentMinimumOrder').textContent = plan.rounding.minimum_order_qty;
+      $('replenishmentOrderMultiple').textContent = plan.rounding.order_multiple;
+      $('replenishmentQuantity').textContent = `${plan.recommended_order_qty}（建议量）`;
+      $('replenishmentArrivalDate').textContent = plan.replenishment_order.recommended_arrival_date || '-';
+      $('replenishmentStatus').textContent = '草案，仅供人工确认';
+      $('replenishmentNotice').textContent = '本地演示数据生成的补货草案，不会创建采购单或向供应商下单。';
+    }
+
+    function renderInventoryDataPending() {
+      $('inventoryProjectionSource').className = 'status warn';
+      $('inventoryProjectionSource').textContent = '真实库存待接入';
+      $('replenishmentSource').className = 'status warn';
+      $('replenishmentSource').textContent = '真实规则待接入';
+      $('inventoryProjectionNote').textContent = '真实库存、锁定量、在途和退货数据接入后生成库存轨迹。';
+      $('inventoryProjectionRows').innerHTML = '<tr><td colspan="8"><div class="empty">真实库存数据待接入，暂不生成补货建议。</div></td></tr>';
+      ['replenishmentLeadDays', 'replenishmentReviewDays', 'replenishmentSafetyStock', 'replenishmentMinimumOrder', 'replenishmentOrderMultiple', 'replenishmentQuantity', 'replenishmentArrivalDate', 'replenishmentStatus'].forEach((id) => { $(id).textContent = '-'; });
+      $('replenishmentNotice').textContent = '真实库存、到货和采购规则接入后，生成可人工确认的补货草案。';
+    }
+
     async function loadForecasting({ generate = false } = {}) {
       const storeId = $('forecastStore').value.trim();
       const skuId = $('forecastSku').value.trim();
@@ -2354,15 +2391,25 @@
           const sourceName = sourceResolution.virtual ? '本地演示数据' : '真实销售数据';
           generateButton.textContent = '正在预测，请稍等...';
           setForecastProgress(`已读取到${sourceName}，正在预测，请稍等...`);
-          phase = '预测';
-          forecast = await api('/v1/forecasting/runs', {
-            method: 'POST',
-            body: JSON.stringify({
-              store_id: effectiveStoreId,
-              sku_id: effectiveSkuId,
-              horizon_days: 30,
-            }),
-          });
+          phase = sourceResolution.virtual ? '预测、库存预测和补货建议' : '预测';
+          if (sourceResolution.virtual) {
+            const demoPlan = await api('/v1/forecasting/demo-plan', {
+              method: 'POST',
+              body: JSON.stringify({ horizon_days: 30 }),
+            });
+            forecast = demoPlan.forecast;
+            renderDemoInventoryPlan(demoPlan);
+          } else {
+            forecast = await api('/v1/forecasting/runs', {
+              method: 'POST',
+              body: JSON.stringify({
+                store_id: effectiveStoreId,
+                sku_id: effectiveSkuId,
+                horizon_days: 30,
+              }),
+            });
+            renderInventoryDataPending();
+          }
         } else {
           const query = `?store_id=${encodeURIComponent(storeId)}`;
           forecast = await api(`/v1/forecasting/skus/${encodeURIComponent(skuId)}/forecast${query}`);
