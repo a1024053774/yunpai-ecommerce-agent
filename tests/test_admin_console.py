@@ -323,6 +323,9 @@ def test_admin_console_forecasting_view_shows_three_layers_without_data_connecti
     assert 'id="inventoryProjectionRows"' in page.text
     assert 'id="replenishmentQuantity"' in page.text
     assert "'/v1/forecasting/demo-plan'" in page.text
+    assert "forecast = demoPlan.run;" in page.text
+    assert "renderDemandTrendChart(visibleDemandFacts, forecast);\n        if (demoPlan) renderDemoInventoryPlan(demoPlan);" in page.text
+    assert "function renderForecastUnavailable()" in page.text
     assert page.text.index('id="demandTrendChart"') < page.text.index('id="inventoryProjection"')
     assert page.text.index('id="inventoryProjection"') < page.text.index('id="replenishmentDraft"')
     for label in (

@@ -2353,6 +2353,17 @@
       $('replenishmentNotice').textContent = '真实库存、到货和采购规则接入后，生成可人工确认的补货草案。';
     }
 
+    function renderForecastUnavailable() {
+      $('inventoryProjectionSource').className = 'status warn';
+      $('inventoryProjectionSource').textContent = '预测未完成';
+      $('replenishmentSource').className = 'status warn';
+      $('replenishmentSource').textContent = '预测未完成';
+      $('inventoryProjectionNote').textContent = '需求预测未完成，暂不展示库存轨迹。';
+      $('inventoryProjectionRows').innerHTML = '<tr><td colspan="8"><div class="empty">需求预测未完成，暂不生成库存预测。</div></td></tr>';
+      ['replenishmentLeadDays', 'replenishmentReviewDays', 'replenishmentSafetyStock', 'replenishmentMinimumOrder', 'replenishmentOrderMultiple', 'replenishmentQuantity', 'replenishmentArrivalDate', 'replenishmentStatus'].forEach((id) => { $(id).textContent = '-'; });
+      $('replenishmentNotice').textContent = '需求预测未完成，暂不生成补货建议。';
+    }
+
     async function loadForecasting({ generate = false } = {}) {
       const storeId = $('forecastStore').value.trim();
       const skuId = $('forecastSku').value.trim();
@@ -2369,6 +2380,7 @@
       }
       try {
         let forecast;
+        let demoPlan = null;
         let effectiveStoreId = storeId;
         let effectiveSkuId = skuId;
         if (generate) {
@@ -2393,12 +2405,11 @@
           setForecastProgress(`已读取到${sourceName}，正在预测，请稍等...`);
           phase = sourceResolution.virtual ? '预测、库存预测和补货建议' : '预测';
           if (sourceResolution.virtual) {
-            const demoPlan = await api('/v1/forecasting/demo-plan', {
+            demoPlan = await api('/v1/forecasting/demo-plan', {
               method: 'POST',
               body: JSON.stringify({ horizon_days: 30 }),
             });
-            forecast = demoPlan.forecast;
-            renderDemoInventoryPlan(demoPlan);
+            forecast = demoPlan.run;
           } else {
             forecast = await api('/v1/forecasting/runs', {
               method: 'POST',
@@ -2408,7 +2419,6 @@
                 horizon_days: 30,
               }),
             });
-            renderInventoryDataPending();
           }
         } else {
           const query = `?store_id=${encodeURIComponent(storeId)}`;
@@ -2421,11 +2431,14 @@
         const visibleDemandFacts = demand.facts.slice(-90);
         $('demandRows').innerHTML = visibleDemandFacts.length ? visibleDemandFacts.map((item) => `<tr><td>${escapeHtml(item.business_date)}</td><td>${escapeHtml(item.eligible_units)}</td><td>${escapeHtml(item.gross_units)}</td><td>${escapeHtml(demandStateDisplayName(item.stockout_evidence?.demand_state))}</td><td>${escapeHtml(stockoutDisplayName(item.stockout_flag))}</td><td>${item.quality?.missing_source_date ? '<span class="status warn">来源缺口</span>' : '<span class="status ok">已观测</span>'}</td></tr>`).join('') : '<tr><td colspan="6"><div class="empty">暂无需求事实</div></td></tr>';
         renderDemandTrendChart(visibleDemandFacts, forecast);
+        if (demoPlan) renderDemoInventoryPlan(demoPlan);
+        else renderInventoryDataPending();
       } catch (error) {
         setForecastProgress(`${phase}失败：${error.message}`, 'error');
         if (!sourceResolution) renderForecastSource(null);
         $('demandRows').innerHTML = '';
         $('demandTrendChart').innerHTML = '<div class="empty">暂无可绘制的销售需求数据</div>';
+        renderForecastUnavailable();
       } finally {
         if (generate) {
           generateButton.disabled = false;
