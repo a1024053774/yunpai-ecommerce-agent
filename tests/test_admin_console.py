@@ -153,12 +153,10 @@ def test_admin_console_page_and_audit_api(tmp_path) -> None:
         assert "需求预测" in page.text
         assert "Demand Forecast" not in page.text
         for label in (
-            "店铺 ID",
-            "商品 SKU",
-            "时序预测方法",
-            "数据来源",
-            "基于 ${escapeHtml(demand.facts.length)} 天历史销售数据，预测未来 ${escapeHtml(forecast.forecast_horizon)} 天需求",
-            "历史需求事实",
+                "店铺 ID",
+                "商品 SKU",
+                "数据来源",
+                "历史需求事实",
             "可履约需求",
             "总需求",
             "需求状态",
@@ -170,7 +168,7 @@ def test_admin_console_page_and_audit_api(tmp_path) -> None:
         ):
             assert label in page.text
         assert 'id="demandRows"' in page.text
-        assert 'id="forecastMethod"' in page.text
+        assert 'id="forecastProgress"' in page.text
         assert 'id="forecastSource"' in page.text
         assert 'id="demandTrendChart"' in page.text
         assert "api('/v1/forecasting/resolve-source'" in page.text
@@ -179,6 +177,7 @@ def test_admin_console_page_and_audit_api(tmp_path) -> None:
         assert "已读取到" in page.text
         assert "正在预测，请稍等" in page.text
         assert "generateButton.disabled = true" in page.text
+        assert "forecastMethod" not in page.text
         assert "/v1/forecasting/skus/" in page.text
         assert "竞品分析" in page.text
         assert "商品与库存" in page.text
@@ -309,14 +308,14 @@ def test_admin_console_forecasting_view_shows_three_layers_without_data_connecti
         page = client.get("/admin")
 
     assert page.status_code == 200
-    assert 'id="forecastMethod"' in page.text
+    assert 'id="forecastProgress"' in page.text
+    assert "forecastMethod" not in page.text
     assert 'id="demandTrendChart"' in page.text
     assert "renderDemandTrendChart" in page.text
     assert "实际销售需求" in page.text
     assert "历史预测销售需求" in page.text
     assert "未来预测销售需求（P50）" in page.text
     assert "demand.facts.slice(-90)" in page.text
-    assert "基于 ${escapeHtml(demand.facts.length)} 天历史销售数据，预测未来 ${escapeHtml(forecast.forecast_horizon)} 天需求" in page.text
     assert "point.p80" not in page.text
     assert "point.p95" not in page.text
     assert 'id="inventoryProjection"' in page.text
