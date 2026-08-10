@@ -23,7 +23,7 @@ from .registry import business_module_catalog
 class InventoryRiskToolInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    sku_id: str = Field(min_length=1, max_length=128)
+    sku_id: str | None = Field(default=None, min_length=1, max_length=128)
     store_id: str | None = Field(default=None, max_length=128)
     reorder_lead_days: int = Field(default=7, ge=1, le=180)
     target_days: int = Field(default=30, ge=1, le=365)
@@ -309,7 +309,10 @@ class OperationsService:
             registry.register(
                 ToolSpec(
                     name="get_inventory_risk",
-                    description="查询当前租户指定 SKU 的库存、缺货、滞销和补货风险",
+                    description=(
+                        "查询当前租户授权范围内的库存、缺货、滞销和补货风险；"
+                        "商品和店铺筛选均可省略，省略时查询全部，补货目标默认覆盖未来 30 天"
+                    ),
                     kind="read",
                     input_model=InventoryRiskToolInput,
                     handler=self._inventory_risk_tool,

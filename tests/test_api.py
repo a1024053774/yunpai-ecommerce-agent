@@ -1,3 +1,4 @@
+import json
 from dataclasses import replace
 
 from fastapi.testclient import TestClient
@@ -148,11 +149,77 @@ def test_loopback_customer_test_page_and_chat_are_isolated(tmp_path) -> None:
     remote_app = create_app(replace(make_settings(tmp_path / "remote"), customer_test_enabled=True))
     with TestClient(remote_app, client=("192.0.2.10", 50000)) as client:
         assert client.get("/v1/test/customer-chat/cases").status_code == 403
+        assert client.post(
+            "/v1/test/customer-chat/stream",
+            json={
+                "session_id": "customer-test:remote-stream-001",
+                "message": "你好",
+                "context": {},
+            },
+        ).status_code == 403
         assert client.get("/customer-test").status_code == 403
+
+
+def test_loopback_customer_test_stream_exposes_live_progress_and_result(tmp_path) -> None:
+    settings = replace(make_settings(tmp_path), customer_test_enabled=True)
+    app = create_app(settings)
+    with TestClient(app, client=("127.0.0.1", 50000)) as client:
+        response = client.post(
+            "/v1/test/customer-chat/stream",
+            json={
+                "session_id": "customer-test:stream-warranty-001",
+                "message": "晴川 AF5 空气炸锅保修多久？",
+                "context": {
+                    "shop_id": "qingchuan-flagship-001",
+                    "sku_id": "QC-AF5-WHITE",
+                },
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+        events = [
+            json.loads(line.removeprefix("data: "))
+            for line in response.text.splitlines()
+            if line.startswith("data: ")
+        ]
+        event_names = [event["event"] for event in events]
+        assert event_names[0] == "status"
+        assert events[0]["stage"] == "accepted"
+        assert "meta" in event_names
+        assert "delta" in event_names
+        assert event_names[-1] == "done"
+
+        result = events[-1]["response"]
+        streamed_answer = "".join(
+            event["text"] for event in events if event["event"] == "delta"
+        )
+        assert streamed_answer == result["answer"]
+        assert result["source_type"] == "simulation"
+        assert result["source_reference"] == "local-customer-test"
+
+        operational = client.get(
+            "/v1/admin/overview",
+            headers={"X-Admin-Id": "admin-test", "X-Admin-Key": "test-admin-key-123456"},
+        ).json()
+        simulation = client.get(
+            "/v1/admin/overview?scope=simulation",
+            headers={"X-Admin-Id": "admin-test", "X-Admin-Key": "test-admin-key-123456"},
+        ).json()
+        assert operational["counts"]["conversations"] == 0
+        assert simulation["counts"]["conversations"] == 1
 
 
 def test_customer_test_interface_is_disabled_by_default(tmp_path) -> None:
     app = create_app(make_settings(tmp_path))
     with TestClient(app, client=("127.0.0.1", 50000)) as client:
         assert client.get("/v1/test/customer-chat/cases").status_code == 404
+        assert client.post(
+            "/v1/test/customer-chat/stream",
+            json={
+                "session_id": "customer-test:disabled-stream-001",
+                "message": "你好",
+                "context": {},
+            },
+        ).status_code == 404
         assert client.get("/customer-test").status_code == 404

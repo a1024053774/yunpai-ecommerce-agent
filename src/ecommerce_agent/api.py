@@ -85,11 +85,14 @@ from .taobao import (
     TaobaoError,
     TaobaoRemoteError,
 )
+from .workspace_agent import WorkspaceAgent
+from .workspace_api import build_workspace_router
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     service = AgentService(settings)
     evolution = EvolutionService(service.db, service.knowledge)
+    workspace_agent = WorkspaceAgent(service, evolution)
     limiter = SlidingWindowRateLimiter(service.settings.rate_limit_requests_per_minute)
 
     @asynccontextmanager
@@ -108,6 +111,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.agent = service
     app.state.evolution = evolution
+    app.state.workspace_agent = workspace_agent
     app.state.rate_limiter = limiter
 
     architecture_page = Path(__file__).resolve().parents[2] / "docs" / "architecture-inspector.html"
@@ -187,6 +191,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(build_release_router(service, require_admin))
     app.include_router(build_evaluation_router(service, require_admin))
     app.include_router(build_simulation_router(service, require_admin))
+    app.include_router(build_workspace_router(workspace_agent, require_admin))
     app.include_router(build_customer_test_router(service, require_local_customer_test))
     app.include_router(build_chat_sessions_router(service, require_client))
 
@@ -227,9 +232,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return FileResponse(pressure_report_data, media_type="application/json; charset=utf-8")
 
     admin_console_page = Path(__file__).resolve().parents[2] / "docs" / "admin-console.html"
+    workspace_page = Path(__file__).resolve().parents[2] / "docs" / "agent-workspace.html"
 
     @app.get("/admin", include_in_schema=False)
     def admin_console() -> FileResponse:
+        if not workspace_page.is_file():
+            raise HTTPException(status_code=404, detail="agent workspace is not built")
+        return FileResponse(workspace_page, media_type="text/html; charset=utf-8")
+
+    @app.get("/admin/advanced", include_in_schema=False)
+    def advanced_admin_console() -> FileResponse:
         if not admin_console_page.is_file():
             raise HTTPException(status_code=404, detail="admin console is not built")
         return FileResponse(admin_console_page, media_type="text/html; charset=utf-8")

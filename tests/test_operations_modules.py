@@ -110,6 +110,35 @@ def test_virtual_connector_syncs_inventory_and_competitor_data(tmp_path) -> None
         )
         assert tool_result.postcondition_met is True
         assert tool_result.output["risks"][0]["sku_id"] == "YP-SKU-001"
+
+        all_spec, all_arguments = service.tools.validate_selection(
+            name="get_inventory_risk",
+            arguments={},
+            requested_mode="observe",
+            context=ToolExecutionContext(
+                tenant_id="tenant-test",
+                client_id="client-test",
+                session_id="session-test",
+                trace_id="trace-all-inventory",
+                trusted_context={},
+            ),
+        )
+        all_result = service.tools.execute(
+            spec=all_spec,
+            arguments=all_arguments,
+            context=ToolExecutionContext(
+                tenant_id="tenant-test",
+                client_id="client-test",
+                session_id="session-test",
+                trace_id="trace-all-inventory",
+                trusted_context={},
+            ),
+        )
+        assert all_result.postcondition_met is True
+        assert {item["sku_id"] for item in all_result.output["risks"]} == {
+            "YP-SKU-001",
+            "YP-SKU-002",
+        }
     finally:
         service.close()
 

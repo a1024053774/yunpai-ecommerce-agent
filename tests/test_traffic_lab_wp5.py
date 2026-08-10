@@ -34,7 +34,7 @@ def test_traffic_lab_console_has_structured_evidence_and_manual_analysis(tmp_pat
         before = app.state.agent.operations.traffic_lab.domain.list_analysis_runs(
             "tenant-test", "not-created"
         )
-        page = client.get("/admin")
+        page = client.get("/admin/advanced")
         after = app.state.agent.operations.traffic_lab.domain.list_analysis_runs(
             "tenant-test", "not-created"
         )
