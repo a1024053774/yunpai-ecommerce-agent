@@ -41,7 +41,7 @@ class SessionScopeError(ValueError):
 
 
 class Database:
-    SCHEMA_VERSION = 28
+    SCHEMA_VERSION = 31
 
     def __init__(self, path: Path):
         self.path = path
@@ -163,6 +163,9 @@ class Database:
             if 28 not in applied:
                 self._apply_v28(conn)
                 conn.execute("INSERT INTO schema_migrations VALUES (28, ?)", (utc_now(),))
+            if 31 not in applied:
+                self._apply_v31(conn)
+                conn.execute("INSERT INTO schema_migrations VALUES (31, ?)", (utc_now(),))
             conn.execute(f"PRAGMA user_version = {self.SCHEMA_VERSION}")
             self._validate_schema(conn)
 
@@ -2423,6 +2426,48 @@ class Database:
         )
 
     @staticmethod
+    def _apply_v31(conn: sqlite3.Connection) -> None:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS workspace_conversations (
+                id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                admin_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                status TEXT NOT NULL CHECK(status IN ('active','archived')),
+                message_count INTEGER NOT NULL DEFAULT 0 CHECK(message_count >= 0),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(tenant_id, id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_workspace_conversations_owner
+                ON workspace_conversations(tenant_id, admin_id, status, updated_at DESC);
+            CREATE TABLE IF NOT EXISTS workspace_messages (
+                id TEXT PRIMARY KEY,
+                conversation_id TEXT NOT NULL,
+                tenant_id TEXT NOT NULL,
+                admin_id TEXT NOT NULL,
+                role TEXT NOT NULL CHECK(role IN ('user','assistant')),
+                content TEXT NOT NULL,
+                status TEXT NOT NULL CHECK(status IN ('completed','generating','incomplete')),
+                trace_id TEXT,
+                tool_name TEXT,
+                tool_label TEXT,
+                tool_summary TEXT,
+                requires_confirmation INTEGER NOT NULL DEFAULT 0 CHECK(requires_confirmation IN (0,1)),
+                action_summary TEXT,
+                processing_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(conversation_id) REFERENCES workspace_conversations(id) ON DELETE CASCADE,
+                UNIQUE(tenant_id, id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_workspace_messages_conversation_time
+                ON workspace_messages(tenant_id, conversation_id, created_at, id);
+            """
+        )
+
+    @staticmethod
     def _ensure_column(conn: sqlite3.Connection, table: str, column: str, declaration: str) -> None:
         columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
         if column not in columns:
@@ -2671,6 +2716,14 @@ class Database:
                 "intent_confidence",
                 "intent_method",
             },
+            "workspace_conversations": {
+                "id", "tenant_id", "admin_id", "title", "status", "message_count",
+                "created_at", "updated_at",
+            },
+            "workspace_messages": {
+                "id", "conversation_id", "tenant_id", "admin_id", "role", "content",
+                "status", "trace_id", "processing_json", "created_at", "updated_at",
+            },
             "qa_results": {"tenant_id", "issues_json", "review_status", "record_version"},
             "channel_reply_drafts": {"outbox_id", "record_version", "status"},
             "channel_outbox": {
@@ -2912,6 +2965,121 @@ class Database:
                 ),
             )
         return event_id
+
+    def create_workspace_conversation(
+        self, *, tenant_id: str, admin_id: str, title: str
+    ) -> dict[str, Any]:
+        now = utc_now()
+        conversation = {
+            "id": f"workspace:{uuid.uuid4().hex}",
+            "tenant_id": tenant_id,
+            "admin_id": admin_id,
+            "title": title,
+            "status": "active",
+            "message_count": 0,
+            "created_at": now,
+            "updated_at": now,
+        }
+        with self._write_lock, self.connect() as conn:
+            conn.execute(
+                """INSERT INTO workspace_conversations
+                (id, tenant_id, admin_id, title, status, message_count, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                tuple(conversation.values()),
+            )
+        return conversation
+
+    def list_workspace_conversations(
+        self, *, tenant_id: str, admin_id: str, limit: int = 20
+    ) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """SELECT id, title, status, message_count, created_at, updated_at
+                FROM workspace_conversations
+                WHERE tenant_id=? AND admin_id=?
+                ORDER BY updated_at DESC, id DESC LIMIT ?""",
+                (tenant_id, admin_id, max(1, min(limit, 100))),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_workspace_conversation(
+        self, *, tenant_id: str, admin_id: str, conversation_id: str
+    ) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                """SELECT id, title, status, message_count, created_at, updated_at
+                FROM workspace_conversations WHERE id=? AND tenant_id=? AND admin_id=?""",
+                (conversation_id, tenant_id, admin_id),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def update_workspace_conversation_title(
+        self, *, tenant_id: str, admin_id: str, conversation_id: str, title: str
+    ) -> None:
+        with self._write_lock, self.connect() as conn:
+            conn.execute(
+                """UPDATE workspace_conversations SET title=?, updated_at=?
+                WHERE id=? AND tenant_id=? AND admin_id=?""",
+                (title, utc_now(), conversation_id, tenant_id, admin_id),
+            )
+
+    def append_workspace_message(
+        self, *, tenant_id: str, admin_id: str, conversation_id: str,
+        role: str, content: str, status: str = "completed", trace_id: str | None = None,
+        processing: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        message = {
+            "id": f"workspace-message:{uuid.uuid4().hex}",
+            "conversation_id": conversation_id,
+            "tenant_id": tenant_id,
+            "admin_id": admin_id,
+            "role": role,
+            "content": content,
+            "status": status,
+            "trace_id": trace_id,
+            "processing_json": json.dumps(processing or {}, ensure_ascii=False),
+            "created_at": utc_now(),
+        }
+        with self._write_lock, self.connect() as conn:
+            owner = conn.execute(
+                "SELECT 1 FROM workspace_conversations WHERE id=? AND tenant_id=? AND admin_id=?",
+                (conversation_id, tenant_id, admin_id),
+            ).fetchone()
+            if owner is None:
+                raise KeyError("workspace_conversation_not_found")
+            conn.execute(
+                """INSERT INTO workspace_messages
+                (id, conversation_id, tenant_id, admin_id, role, content, status, trace_id, processing_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (*message.values(), message["created_at"]),
+            )
+            conn.execute(
+                """UPDATE workspace_conversations SET message_count=message_count+1, updated_at=?
+                WHERE id=? AND tenant_id=? AND admin_id=?""",
+                (message["created_at"], conversation_id, tenant_id, admin_id),
+            )
+        message["processing"] = processing or {}
+        message.pop("processing_json")
+        message["updated_at"] = message["created_at"]
+        return message
+
+    def list_workspace_messages(
+        self, *, tenant_id: str, admin_id: str, conversation_id: str, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """SELECT id, conversation_id, role, content, status, trace_id,
+                processing_json, created_at, updated_at FROM workspace_messages
+                WHERE conversation_id=? AND tenant_id=? AND admin_id=?
+                ORDER BY created_at, id LIMIT ?""",
+                (conversation_id, tenant_id, admin_id, max(1, min(limit, 500))),
+            ).fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            item["processing"] = json.loads(item.pop("processing_json") or "{}")
+            result.append(item)
+        return result
 
     def recent_messages(self, session_id: str, limit: int) -> list[dict[str, Any]]:
         with self.connect() as conn:

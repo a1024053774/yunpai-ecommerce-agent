@@ -80,6 +80,14 @@
     .chat-shell { border-radius: 26px; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; }
     .chat-head { padding: 22px 26px 17px; border-bottom: 1px solid var(--line); }
     .chat-head-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+    .conversation-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; padding-bottom: 9px; border-bottom: 1px solid var(--line); }
+    .conversation-toolbar strong { font-size: 12px; }
+    .conversation-list { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 12px; scrollbar-width: thin; }
+    .conversation-item { flex: 0 0 160px; min-height: 48px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 5px; background: #fff; color: var(--ink); text-align: left; cursor: pointer; }
+    .conversation-item:hover, .conversation-item.active { border-color: var(--green); background: var(--green-soft); }
+    .conversation-item strong, .conversation-item span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .conversation-item strong { font-size: 11px; }
+    .conversation-item span { margin-top: 4px; color: var(--muted); font-size: 10px; }
     .chat-head h1 { margin: 5px 0 4px; font: 600 clamp(25px, 3vw, 38px)/1.15 Georgia, "Songti SC", serif; letter-spacing: -.025em; }
     .chat-head p { max-width: 720px; margin: 0; color: var(--muted); font-size: 13px; }
     .agent-orbit { position: relative; width: 44px; height: 44px; flex: 0 0 auto; }
@@ -593,6 +601,11 @@
       <main class="layout">
       <section class="chat-shell" aria-label="统筹 Agent 对话">
         <header class="chat-head">
+          <div class="conversation-toolbar">
+            <strong>历史会话</strong>
+            <button class="button small" id="newConversationButton" type="button">＋ 新建会话</button>
+          </div>
+          <div class="conversation-list" id="conversationList" aria-label="历史会话列表"></div>
           <div class="chat-head-row">
             <div><span class="eyebrow">统筹经营工作台</span><h1>今天想把什么交给我？</h1><p>直接描述经营目标。我会选择商品、订单、库存、客服、竞品、营销、利润、知识或发布模块；涉及写操作时先请你确认。</p></div>
             <span class="agent-orbit" id="agentOrbit" aria-hidden="true"></span>
@@ -680,9 +693,8 @@
     const state = {
       adminId: sessionStorage.getItem('yunpai.adminId') || '',
       adminKey: sessionStorage.getItem('yunpai.adminKey') || '',
-      adminAuthRequired: true,
-      sessionId: `workspace:${crypto.randomUUID ? crypto.randomUUID() : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`}`,
-      history: [], running: false, startedAt: 0, timer: null, currentMeta: null, currentTool: null
+      adminAuthRequired: true, sessionId: '', history: [], messages: [], conversations: [],
+      running: false, startedAt: 0, timer: null, currentMeta: null, currentTool: null
     };
     const eventLabels = {
       'chat.completed':'客服完成回复', 'evolution.approved':'新知识已批准', 'evolution.evaluated':'知识候选已评估',
@@ -694,6 +706,35 @@
       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
       .replace(/\n/g, '<br>');
     const formatTime = (value) => value ? new Date(value).toLocaleString('zh-CN', {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}) : '—';
+
+    const newWorkspaceSessionId = () => `workspace:${crypto.randomUUID ? crypto.randomUUID() : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`}`;
+    function clearRenderedMessages() { $('messageList').innerHTML = ''; }
+    function renderConversationList() {
+      $('conversationList').innerHTML = state.conversations.length ? state.conversations.map((item) =>
+        `<button class="conversation-item ${item.id === state.sessionId ? 'active' : ''}" data-conversation-id="${escapeHtml(item.id)}" type="button"><strong>${escapeHtml(item.title)}</strong><span>${item.message_count} 条消息 · ${escapeHtml(formatTime(item.updated_at))}</span></button>`
+      ).join('') : '<span class="empty-note">暂无历史会话</span>';
+    }
+    async function loadConversations(selectCurrent = true) {
+      state.conversations = await api('/v1/admin/workspace/conversations?limit=20');
+      if (!state.conversations.length) {
+        const conversation = await api('/v1/admin/workspace/conversations', {method:'POST', body:JSON.stringify({})});
+        state.conversations = [conversation]; state.sessionId = conversation.id; state.history = []; state.messages = []; clearRenderedMessages();
+      }
+      if (!state.sessionId && state.conversations.length) state.sessionId = state.conversations[0].id;
+      renderConversationList();
+      if (selectCurrent && state.sessionId) await selectConversation(state.sessionId, false);
+    }
+    async function selectConversation(conversationId, refreshList = true) {
+      const messages = await api(`/v1/admin/workspace/conversations/${encodeURIComponent(conversationId)}/messages`);
+      state.sessionId = conversationId; state.messages = messages; state.history = messages.filter((item) => ['user','assistant'].includes(item.role)).slice(-12).map((item) => ({role:item.role, content:item.content}));
+      clearRenderedMessages(); state.messages.forEach((item) => appendMessage(item.role, item.content, item.processing || {}, false));
+      if (refreshList) renderConversationList();
+    }
+    async function createConversation() {
+      const conversation = await api('/v1/admin/workspace/conversations', {method:'POST', body:JSON.stringify({})});
+      state.sessionId = conversation.id; state.history = []; state.messages = []; clearRenderedMessages();
+      state.conversations = [conversation, ...state.conversations.filter((item) => item.id !== conversation.id)]; renderConversationList();
+    }
 
     async function api(path, options = {}) {
       const headers = new Headers(options.headers || {});
@@ -713,7 +754,7 @@
       const headers = new Headers({'Content-Type':'application/json'});
       if (state.adminId) headers.set('X-Admin-Id', state.adminId);
       if (state.adminKey) headers.set('X-Admin-Key', state.adminKey);
-      const response = await fetch('/v1/admin/workspace/chat/stream', {method:'POST', headers, body:JSON.stringify(payload)});
+      const response = await fetch(`/v1/admin/workspace/conversations/${encodeURIComponent(state.sessionId)}/chat/stream`, {method:'POST', headers, body:JSON.stringify(payload)});
       if (!response.ok) throw new Error((await response.json().catch(() => ({}))).detail || `请求失败 (${response.status})`);
       const reader = response.body?.getReader();
       if (!reader) throw new Error('浏览器不支持流式读取');
@@ -734,7 +775,7 @@
       if (buffer.trim()) emit(buffer);
     }
 
-    function appendMessage(role, content, details = {}) {
+    function appendMessage(role, content, details = {}, persist = false) {
       const row = document.createElement('div'); row.className = `message-row ${role}`;
       const avatar = role === 'assistant' ? '<span class="avatar">Y</span>' : '';
       const message = role === 'assistant' ? formatAgentText(content) : escapeHtml(content);
@@ -753,12 +794,12 @@
 
     async function sendMessage(message) {
       if (state.running || !message.trim()) return;
-      appendMessage('user', message); state.history.push({role:'user', content:message}); state.history = state.history.slice(-10);
+      appendMessage('user', message); state.messages.push({role:'user', content:message}); state.history.push({role:'user', content:message}); state.history = state.history.slice(-10);
       $('messageInput').value = ''; $('messageInput').style.height = '48px'; state.currentMeta = null; state.currentTool = null;
       startWork(); let answer = ''; let bubble = null;
       const context = Object.fromEntries([['store_id',$('storeId').value.trim()],['sku_id',$('skuId').value.trim()],['order_id',$('orderId').value.trim()]].filter(([,value]) => value));
       try {
-        await streamWorkspace({session_id:state.sessionId,message,history:state.history.slice(0,-1),context}, (event) => {
+        await streamWorkspace({message,context}, (event) => {
           if (event.event === 'status') setWork(event.message || 'Agent 正在工作');
           if (event.event === 'meta') state.currentMeta = event;
           if (event.event === 'tool') state.currentTool = event;
@@ -771,11 +812,13 @@
             const details = {toolLabel:result.tool_label || state.currentTool?.tool_label,toolSummary:state.currentTool?.summary,requiresConfirmation:result.requires_confirmation,actionSummary:result.action_summary};
             if (details.toolLabel || details.toolSummary) card.insertAdjacentHTML('beforeend', `<details class="trace"><summary>查看处理过程</summary><div class="trace-body"><span><strong>查看内容：</strong>${escapeHtml(details.toolLabel || '业务信息')}</span>${details.toolSummary ? `<span><strong>核对结果：</strong>${escapeHtml(details.toolSummary)}</span>` : ''}</div></details>`);
             if (details.requiresConfirmation) card.insertAdjacentHTML('beforeend', `<div class="action-card"><strong>需要你确认后再执行</strong><p>${escapeHtml(details.actionSummary || '该请求会改变业务状态。')}</p><a class="button small" href="/admin/advanced">进入高级管理确认 ↗</a></div>`);
+            const savedDetails = {toolLabel:details.toolLabel, toolSummary:details.toolSummary, requiresConfirmation:details.requiresConfirmation, actionSummary:details.actionSummary};
+            state.messages.push({role:'assistant', content:answer, details:savedDetails});
             state.history.push({role:'assistant',content:answer}); state.history = state.history.slice(-10);
           }
         });
       } catch (error) { appendMessage('assistant', `这次没有完成：${error.message}`); setWork('处理失败'); }
-      finally { finishWork(); loadSnapshot().catch(() => {}); }
+      finally { finishWork(); loadSnapshot().catch(() => {}); loadConversations(false).catch(() => {}); }
     }
 
     function renderSnapshot(overview, handoffs, dispatch, modules) {
@@ -806,6 +849,11 @@
     }
 
     $('composer').addEventListener('submit', (event) => { event.preventDefault(); sendMessage($('messageInput').value); });
+    $('newConversationButton').addEventListener('click', () => createConversation().catch((error) => appendMessage('assistant', `新建会话失败：${error.message}`)));
+    $('conversationList').addEventListener('click', (event) => {
+      const item = event.target.closest('[data-conversation-id]');
+      if (item) selectConversation(item.dataset.conversationId).catch((error) => appendMessage('assistant', `读取会话失败：${error.message}`));
+    });
     $('messageInput').addEventListener('keydown', (event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); $('composer').requestSubmit(); } });
     $('messageInput').addEventListener('input', (event) => { event.target.style.height='48px'; event.target.style.height=`${Math.min(event.target.scrollHeight,150)}px`; });
     document.addEventListener('click', (event) => { const chip = event.target.closest('[data-prompt]'); if (chip) { $('messageInput').value = chip.dataset.prompt; $('messageInput').focus(); } });
@@ -813,7 +861,7 @@
     $('logoutButton').addEventListener('click', () => { state.adminId=''; state.adminKey=''; sessionStorage.removeItem('yunpai.adminId'); sessionStorage.removeItem('yunpai.adminKey'); $('loginOverlay').classList.remove('hidden'); });
     $('loginForm').addEventListener('submit', async (event) => {
       event.preventDefault(); state.adminId=$('adminId').value.trim(); state.adminKey=$('adminKey').value; $('loginError').textContent='';
-      try { await api('/v1/admin/overview'); sessionStorage.setItem('yunpai.adminId',state.adminId); sessionStorage.setItem('yunpai.adminKey',state.adminKey); $('adminKey').value=''; $('loginOverlay').classList.add('hidden'); await loadSnapshot(); }
+      try { await api('/v1/admin/overview'); sessionStorage.setItem('yunpai.adminId',state.adminId); sessionStorage.setItem('yunpai.adminKey',state.adminKey); $('adminKey').value=''; $('loginOverlay').classList.add('hidden'); await loadConversations(); await loadSnapshot(); }
       catch (error) { $('loginError').textContent=error.message; }
     });
 
@@ -823,8 +871,8 @@
         state.adminAuthRequired = health.administrator?.authentication_required !== false;
         const modelOk = health.model?.ok || health.model?.detail === 'configured' || health.model?.enabled;
         $('healthStatus').textContent = modelOk ? '系统在线' : '安全兜底模式'; $('healthStatus').className = `health-pill ${modelOk ? '' : 'warn'}`;
-        if (!state.adminAuthRequired) { state.adminId = health.administrator?.local_principal_id || 'local-admin'; state.adminKey=''; $('logoutButton').hidden=true; await loadSnapshot(); return; }
-        if (state.adminId && state.adminKey) { $('adminId').value=state.adminId; try { await loadSnapshot(); return; } catch (_) {} }
+        if (!state.adminAuthRequired) { state.adminId = health.administrator?.local_principal_id || 'local-admin'; state.adminKey=''; $('logoutButton').hidden=true; await loadConversations(); await loadSnapshot(); return; }
+        if (state.adminId && state.adminKey) { $('adminId').value=state.adminId; try { await loadConversations(); await loadSnapshot(); return; } catch (_) {} }
         $('loginOverlay').classList.remove('hidden');
       } catch (_) { $('healthStatus').textContent='服务未连接'; $('healthStatus').className='health-pill bad'; }
     }

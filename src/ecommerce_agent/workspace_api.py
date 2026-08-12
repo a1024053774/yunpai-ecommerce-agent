@@ -1,13 +1,34 @@
 from __future__ import annotations
 
 import json
+import uuid
 from collections.abc import Callable
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, ConfigDict, Field
 from fastapi.responses import StreamingResponse
 
 from .auth import AdminPrincipal
-from .workspace_agent import WorkspaceAgent, WorkspaceChatRequest
+from .workspace_agent import (
+    WorkspaceAgent,
+    WorkspaceChatRequest,
+    WorkspaceContext,
+    WorkspaceHistoryItem,
+)
+from .workspace_conversations import derive_workspace_title
+
+
+class WorkspaceConversationCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str | None = Field(default=None, min_length=1, max_length=120)
+
+
+class WorkspaceConversationChatRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    message: str = Field(min_length=1, max_length=4000)
+    context: WorkspaceContext = Field(default_factory=WorkspaceContext)
 
 
 def build_workspace_router(
@@ -15,6 +36,48 @@ def build_workspace_router(
     require_admin: Callable[..., AdminPrincipal],
 ) -> APIRouter:
     router = APIRouter(prefix="/v1/admin/workspace", tags=["workspace-agent"])
+
+    @router.post("/conversations", status_code=201)
+    def create_conversation(
+        payload: WorkspaceConversationCreateRequest | None = None,
+        admin: AdminPrincipal = Depends(require_admin),
+    ) -> dict:
+        title = (payload.title if payload else None) or "新会话"
+        conversation = agent.service.db.create_workspace_conversation(
+            tenant_id=admin.tenant_id,
+            admin_id=admin.admin_id,
+            title=derive_workspace_title(title),
+        )
+        return {key: conversation[key] for key in ("id", "title", "status", "message_count", "created_at", "updated_at")}
+
+    @router.get("/conversations")
+    def list_conversations(
+        limit: int = Query(default=20, ge=1, le=100),
+        admin: AdminPrincipal = Depends(require_admin),
+    ) -> list[dict]:
+        return agent.service.db.list_workspace_conversations(
+            tenant_id=admin.tenant_id, admin_id=admin.admin_id, limit=limit
+        )
+
+    @router.get("/conversations/{conversation_id}/messages")
+    def list_conversation_messages(
+        conversation_id: str,
+        limit: int = Query(default=100, ge=1, le=500),
+        admin: AdminPrincipal = Depends(require_admin),
+    ) -> list[dict]:
+        conversation = agent.service.db.get_workspace_conversation(
+            tenant_id=admin.tenant_id,
+            admin_id=admin.admin_id,
+            conversation_id=conversation_id,
+        )
+        if conversation is None:
+            raise HTTPException(status_code=404, detail="workspace conversation not found")
+        return agent.service.db.list_workspace_messages(
+            tenant_id=admin.tenant_id,
+            admin_id=admin.admin_id,
+            conversation_id=conversation_id,
+            limit=limit,
+        )
 
     @router.get("/capabilities")
     def capabilities(
@@ -26,6 +89,100 @@ def build_workspace_router(
             "write_requests": "confirmation_required",
             "tools": agent.tool_catalog(),
         }
+
+    @router.post("/conversations/{conversation_id}/chat/stream")
+    def conversation_chat_stream(
+        conversation_id: str,
+        payload: WorkspaceConversationChatRequest,
+        admin: AdminPrincipal = Depends(require_admin),
+    ) -> StreamingResponse:
+        db = agent.service.db
+        conversation = db.get_workspace_conversation(
+            tenant_id=admin.tenant_id,
+            admin_id=admin.admin_id,
+            conversation_id=conversation_id,
+        )
+        if conversation is None:
+            raise HTTPException(status_code=404, detail="workspace conversation not found")
+        persisted = db.list_workspace_messages(
+            tenant_id=admin.tenant_id,
+            admin_id=admin.admin_id,
+            conversation_id=conversation_id,
+            limit=12,
+        )
+        history = [
+            WorkspaceHistoryItem(role=item["role"], content=item["content"])
+            for item in persisted
+            if item["status"] == "completed" and item["role"] in {"user", "assistant"}
+        ][-12:]
+        if conversation["message_count"] == 0:
+            db.update_workspace_conversation_title(
+                tenant_id=admin.tenant_id,
+                admin_id=admin.admin_id,
+                conversation_id=conversation_id,
+                title=derive_workspace_title(payload.message),
+            )
+        db.append_workspace_message(
+            tenant_id=admin.tenant_id,
+            admin_id=admin.admin_id,
+            conversation_id=conversation_id,
+            role="user",
+            content=payload.message,
+        )
+        request = WorkspaceChatRequest(
+            session_id=conversation_id,
+            message=payload.message,
+            history=history,
+            context=payload.context,
+        )
+
+        def events():
+            latest_tool: dict = {}
+            try:
+                for event in agent.stream(request, admin):
+                    if event.get("event") == "tool":
+                        latest_tool = event
+                    if event.get("event") == "done":
+                        result = event.get("response") or {}
+                        db.append_workspace_message(
+                            tenant_id=admin.tenant_id,
+                            admin_id=admin.admin_id,
+                            conversation_id=conversation_id,
+                            role="assistant",
+                            content=str(result.get("answer") or ""),
+                            trace_id=result.get("trace_id"),
+                            processing={
+                                "stage": "completed",
+                                "trace_id": result.get("trace_id"),
+                                "tool_name": result.get("tool_name"),
+                                "tool_label": result.get("tool_label"),
+                                "tool_summary": latest_tool.get("summary"),
+                                "requires_confirmation": bool(result.get("requires_confirmation")),
+                                "action_summary": result.get("action_summary"),
+                            },
+                        )
+                    encoded = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
+                    yield f"data: {encoded}\n\n"
+            except Exception as exc:
+                trace_id = f"workspace-error-{uuid.uuid4().hex}"
+                message = "本轮回答未完成，请稍后重试。"
+                db.append_workspace_message(
+                    tenant_id=admin.tenant_id,
+                    admin_id=admin.admin_id,
+                    conversation_id=conversation_id,
+                    role="assistant",
+                    content=message,
+                    status="incomplete",
+                    trace_id=trace_id,
+                    processing={"stage": "error", "error_type": type(exc).__name__},
+                )
+                yield f"data: {json.dumps({'event': 'error', 'code': 'workspace_stream_failed', 'message': message, 'trace_id': trace_id}, ensure_ascii=False)}\n\n"
+
+        return StreamingResponse(
+            events(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     @router.post("/chat/stream")
     def chat_stream(
