@@ -163,6 +163,12 @@ class Database:
             if 28 not in applied:
                 self._apply_v28(conn)
                 conn.execute("INSERT INTO schema_migrations VALUES (28, ?)", (utc_now(),))
+            if 29 not in applied:
+                self._apply_v29(conn)
+                conn.execute("INSERT INTO schema_migrations VALUES (29, ?)", (utc_now(),))
+            if 30 not in applied:
+                self._apply_v30(conn)
+                conn.execute("INSERT INTO schema_migrations VALUES (30, ?)", (utc_now(),))
             if 31 not in applied:
                 self._apply_v31(conn)
                 conn.execute("INSERT INTO schema_migrations VALUES (31, ?)", (utc_now(),))
@@ -2468,6 +2474,300 @@ class Database:
         )
 
     @staticmethod
+    def _apply_v29(conn: sqlite3.Connection) -> None:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS demand_daily_facts (
+                id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                store_id TEXT NOT NULL,
+                sku_id TEXT NOT NULL,
+                business_date TEXT NOT NULL,
+                gross_units INTEGER,
+                eligible_units INTEGER,
+                order_count INTEGER,
+                sales_amount TEXT,
+                available_stock TEXT,
+                stockout_flag TEXT NOT NULL
+                    CHECK(stockout_flag IN ('true','false','unknown')),
+                stockout_evidence_json TEXT NOT NULL,
+                price TEXT,
+                promotion_flag TEXT NOT NULL
+                    CHECK(promotion_flag IN ('true','false','unknown')),
+                source_watermark TEXT NOT NULL,
+                fact_version INTEGER NOT NULL CHECK(fact_version >= 1),
+                demand_policy_version TEXT NOT NULL,
+                quality_flags_json TEXT NOT NULL,
+                lineage_json TEXT NOT NULL,
+                payload_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                CHECK(gross_units IS NULL OR gross_units >= 0),
+                CHECK(eligible_units IS NULL OR eligible_units >= 0),
+                CHECK(order_count IS NULL OR order_count >= 0),
+                UNIQUE(
+                    tenant_id, store_id, sku_id, business_date,
+                    demand_policy_version, fact_version
+                ),
+                UNIQUE(tenant_id, id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_demand_daily_facts_latest
+                ON demand_daily_facts(
+                    tenant_id, store_id, sku_id, business_date,
+                    demand_policy_version, fact_version DESC
+                );
+            CREATE TRIGGER IF NOT EXISTS trg_demand_daily_facts_immutable_update
+            BEFORE UPDATE ON demand_daily_facts
+            BEGIN
+                SELECT RAISE(ABORT, 'demand_daily_fact_immutable');
+            END;
+            CREATE TRIGGER IF NOT EXISTS trg_demand_daily_facts_immutable_delete
+            BEFORE DELETE ON demand_daily_facts
+            BEGIN
+                SELECT RAISE(ABORT, 'demand_daily_fact_immutable');
+            END;
+
+            CREATE TABLE IF NOT EXISTS forecast_policies (
+                policy_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                store_id TEXT NOT NULL,
+                sku_id TEXT,
+                horizons_json TEXT NOT NULL,
+                minimum_history_days INTEGER NOT NULL CHECK(minimum_history_days >= 1),
+                candidate_models_json TEXT NOT NULL,
+                backtest_windows INTEGER NOT NULL CHECK(backtest_windows >= 1),
+                interval_levels_json TEXT NOT NULL,
+                demand_policy_version TEXT NOT NULL,
+                policy_version TEXT NOT NULL,
+                active_from TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(tenant_id, policy_id)
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_forecast_policies_store_default
+                ON forecast_policies(tenant_id, store_id, policy_version)
+                WHERE sku_id IS NULL;
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_forecast_policies_sku_version
+                ON forecast_policies(tenant_id, store_id, sku_id, policy_version)
+                WHERE sku_id IS NOT NULL;
+
+            CREATE TABLE IF NOT EXISTS forecast_runs (
+                run_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                store_id TEXT NOT NULL,
+                sku_id TEXT NOT NULL,
+                training_start TEXT NOT NULL,
+                training_end TEXT NOT NULL,
+                data_hash TEXT NOT NULL,
+                demand_policy_version TEXT NOT NULL,
+                forecast_policy_version TEXT NOT NULL,
+                candidate_models_json TEXT NOT NULL,
+                champion_model TEXT,
+                champion_reason TEXT NOT NULL,
+                model_version TEXT NOT NULL,
+                wape REAL,
+                bias REAL,
+                smape REAL,
+                rmse REAL,
+                forecast_horizon INTEGER NOT NULL CHECK(forecast_horizon >= 1),
+                status TEXT NOT NULL
+                    CHECK(status IN ('running','completed','failed','degraded')),
+                created_at TEXT NOT NULL,
+                CHECK(training_end >= training_start),
+                UNIQUE(tenant_id, run_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_forecast_runs_scope
+                ON forecast_runs(tenant_id, store_id, sku_id, created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS forecast_backtests (
+                backtest_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                run_id TEXT NOT NULL,
+                model_name TEXT NOT NULL,
+                origin_date TEXT NOT NULL,
+                training_start TEXT NOT NULL,
+                training_end TEXT NOT NULL,
+                forecast_start TEXT NOT NULL,
+                forecast_end TEXT NOT NULL,
+                actual_json TEXT NOT NULL,
+                forecast_json TEXT NOT NULL,
+                metrics_json TEXT NOT NULL,
+                failure_reason TEXT,
+                created_at TEXT NOT NULL,
+                CHECK(training_end >= training_start),
+                CHECK(forecast_end >= forecast_start),
+                UNIQUE(
+                    tenant_id, run_id, model_name, origin_date,
+                    forecast_start, forecast_end
+                ),
+                UNIQUE(tenant_id, backtest_id),
+                FOREIGN KEY(tenant_id, run_id)
+                    REFERENCES forecast_runs(tenant_id, run_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_forecast_backtests_run
+                ON forecast_backtests(tenant_id, run_id, model_name, origin_date);
+
+            CREATE TABLE IF NOT EXISTS forecast_points (
+                point_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                run_id TEXT NOT NULL,
+                forecast_date TEXT NOT NULL,
+                p50 REAL NOT NULL,
+                p80 REAL NOT NULL,
+                p95 REAL NOT NULL,
+                created_at TEXT NOT NULL,
+                CHECK(p50 <= p80 AND p80 <= p95),
+                UNIQUE(tenant_id, run_id, forecast_date),
+                UNIQUE(tenant_id, point_id),
+                FOREIGN KEY(tenant_id, run_id)
+                    REFERENCES forecast_runs(tenant_id, run_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_forecast_points_run_date
+                ON forecast_points(tenant_id, run_id, forecast_date);
+
+            CREATE TABLE IF NOT EXISTS forecast_anomalies (
+                anomaly_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                store_id TEXT NOT NULL,
+                sku_id TEXT,
+                run_id TEXT,
+                anomaly_type TEXT NOT NULL,
+                severity TEXT NOT NULL CHECK(severity IN ('low','medium','high','critical')),
+                evidence_json TEXT NOT NULL,
+                resolution_status TEXT NOT NULL
+                    CHECK(resolution_status IN ('open','acknowledged','resolved')),
+                created_at TEXT NOT NULL,
+                resolved_at TEXT,
+                UNIQUE(tenant_id, anomaly_id),
+                FOREIGN KEY(tenant_id, run_id)
+                    REFERENCES forecast_runs(tenant_id, run_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_forecast_anomalies_scope
+                ON forecast_anomalies(
+                    tenant_id, store_id, sku_id, resolution_status, created_at DESC
+                );
+            """
+        )
+
+    @staticmethod
+    def _apply_v30(conn: sqlite3.Connection) -> None:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS inventory_planning_policies (
+                policy_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                store_id TEXT NOT NULL,
+                sku_id TEXT NOT NULL,
+                warehouse_id TEXT,
+                supplier_lead_days INTEGER NOT NULL CHECK(supplier_lead_days >= 0),
+                review_period_days INTEGER NOT NULL CHECK(review_period_days >= 1),
+                service_level TEXT NOT NULL,
+                minimum_order_qty TEXT NOT NULL,
+                order_multiple TEXT NOT NULL,
+                minimum_safety_stock TEXT NOT NULL,
+                maximum_stock_days INTEGER NOT NULL CHECK(maximum_stock_days >= 1),
+                policy_version TEXT NOT NULL,
+                active_from TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(tenant_id, policy_id),
+                UNIQUE(tenant_id, policy_id, policy_version)
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_inventory_planning_policy_default
+                ON inventory_planning_policies(
+                    tenant_id, store_id, sku_id, policy_version
+                ) WHERE warehouse_id IS NULL;
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_inventory_planning_policy_warehouse
+                ON inventory_planning_policies(
+                    tenant_id, store_id, sku_id, warehouse_id, policy_version
+                ) WHERE warehouse_id IS NOT NULL;
+            CREATE TRIGGER IF NOT EXISTS trg_inventory_planning_policies_immutable_update
+            BEFORE UPDATE ON inventory_planning_policies
+            BEGIN
+                SELECT RAISE(ABORT, 'inventory_planning_policy_immutable');
+            END;
+            CREATE TRIGGER IF NOT EXISTS trg_inventory_planning_policies_immutable_delete
+            BEFORE DELETE ON inventory_planning_policies
+            BEGIN
+                SELECT RAISE(ABORT, 'inventory_planning_policy_immutable');
+            END;
+
+            CREATE TABLE IF NOT EXISTS inventory_plans (
+                plan_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                store_id TEXT NOT NULL,
+                sku_id TEXT NOT NULL,
+                warehouse_id TEXT,
+                forecast_run_id TEXT NOT NULL,
+                planning_policy_id TEXT NOT NULL,
+                planning_policy_version TEXT NOT NULL,
+                inventory_snapshot_json TEXT NOT NULL,
+                inventory_snapshot_hash TEXT NOT NULL,
+                inventory_as_of TEXT NOT NULL,
+                forecast_evidence_json TEXT NOT NULL,
+                selected_quantile TEXT NOT NULL
+                    CHECK(selected_quantile IN ('p50','p80','p95')),
+                on_hand TEXT NOT NULL,
+                reserved TEXT NOT NULL,
+                inbound TEXT NOT NULL,
+                available TEXT NOT NULL,
+                reservation_shortfall TEXT NOT NULL,
+                future_supply TEXT NOT NULL,
+                lead_time_demand TEXT NOT NULL,
+                lead_review_demand TEXT NOT NULL,
+                reorder_point TEXT NOT NULL,
+                target_stock TEXT NOT NULL,
+                maximum_stock TEXT NOT NULL,
+                recommended_order_qty TEXT,
+                quantity_status TEXT NOT NULL
+                    CHECK(quantity_status IN ('advisory','withheld')),
+                quantity_reason TEXT,
+                stockout_dates_json TEXT NOT NULL,
+                risk_level TEXT NOT NULL
+                    CHECK(risk_level IN ('low','medium','high','critical')),
+                risk_evidence_json TEXT NOT NULL,
+                overstock_risk INTEGER NOT NULL CHECK(overstock_risk IN (0, 1)),
+                plan_quality TEXT NOT NULL
+                    CHECK(plan_quality IN ('standard','degraded')),
+                quality_issues_json TEXT NOT NULL,
+                assumptions_json TEXT NOT NULL,
+                allocation_boundary_json TEXT NOT NULL,
+                calculation_steps_json TEXT NOT NULL,
+                action_mode TEXT NOT NULL CHECK(action_mode = 'advisory_only'),
+                input_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(tenant_id, plan_id),
+                UNIQUE(tenant_id, input_hash),
+                FOREIGN KEY(tenant_id, forecast_run_id)
+                    REFERENCES forecast_runs(tenant_id, run_id),
+                FOREIGN KEY(
+                    tenant_id, planning_policy_id, planning_policy_version
+                ) REFERENCES inventory_planning_policies(
+                    tenant_id, policy_id, policy_version
+                ),
+                CHECK(
+                    (quantity_status='advisory'
+                        AND recommended_order_qty IS NOT NULL
+                        AND quantity_reason IS NULL)
+                    OR
+                    (quantity_status='withheld'
+                        AND recommended_order_qty IS NULL
+                        AND quantity_reason IS NOT NULL)
+                )
+            );
+            CREATE INDEX IF NOT EXISTS idx_inventory_plans_scope
+                ON inventory_plans(tenant_id, store_id, sku_id, created_at DESC);
+            CREATE TRIGGER IF NOT EXISTS trg_inventory_plans_immutable_update
+            BEFORE UPDATE ON inventory_plans
+            BEGIN
+                SELECT RAISE(ABORT, 'inventory_plan_immutable');
+            END;
+            CREATE TRIGGER IF NOT EXISTS trg_inventory_plans_immutable_delete
+            BEFORE DELETE ON inventory_plans
+            BEGIN
+                SELECT RAISE(ABORT, 'inventory_plan_immutable');
+            END;
+            """
+        )
+
+    @staticmethod
     def _ensure_column(conn: sqlite3.Connection, table: str, column: str, declaration: str) -> None:
         columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
         if column not in columns:
@@ -2543,6 +2843,63 @@ class Database:
                 "confidence_interval_json", "evidence_json", "counter_evidence_json",
                 "hypotheses_json", "model_provider", "model_name", "prompt_version",
                 "analysis_code_version", "payload_hash", "created_at", "updated_at",
+            },
+            "demand_daily_facts": {
+                "id", "tenant_id", "store_id", "sku_id", "business_date",
+                "gross_units", "eligible_units", "order_count", "sales_amount",
+                "available_stock", "stockout_flag", "stockout_evidence_json",
+                "price", "promotion_flag",
+                "source_watermark", "fact_version", "demand_policy_version",
+                "quality_flags_json", "lineage_json", "payload_hash", "created_at",
+            },
+            "forecast_policies": {
+                "policy_id", "tenant_id", "store_id", "sku_id", "horizons_json",
+                "minimum_history_days", "candidate_models_json", "backtest_windows",
+                "interval_levels_json", "demand_policy_version", "policy_version",
+                "active_from", "created_at",
+            },
+            "forecast_runs": {
+                "run_id", "tenant_id", "store_id", "sku_id", "training_start",
+                "training_end", "data_hash", "demand_policy_version",
+                "forecast_policy_version", "candidate_models_json", "champion_model",
+                "champion_reason", "model_version", "wape", "bias", "smape", "rmse",
+                "forecast_horizon", "status", "created_at",
+            },
+            "forecast_backtests": {
+                "backtest_id", "tenant_id", "run_id", "model_name", "origin_date",
+                "training_start", "training_end", "forecast_start", "forecast_end",
+                "actual_json", "forecast_json", "metrics_json", "failure_reason",
+                "created_at",
+            },
+            "forecast_points": {
+                "point_id", "tenant_id", "run_id", "forecast_date", "p50", "p80",
+                "p95", "created_at",
+            },
+            "forecast_anomalies": {
+                "anomaly_id", "tenant_id", "store_id", "sku_id", "run_id",
+                "anomaly_type", "severity", "evidence_json", "resolution_status",
+                "created_at", "resolved_at",
+            },
+            "inventory_planning_policies": {
+                "policy_id", "tenant_id", "store_id", "sku_id", "warehouse_id",
+                "supplier_lead_days", "review_period_days", "service_level",
+                "minimum_order_qty", "order_multiple", "minimum_safety_stock",
+                "maximum_stock_days", "policy_version", "active_from", "created_at",
+            },
+            "inventory_plans": {
+                "plan_id", "tenant_id", "store_id", "sku_id", "warehouse_id",
+                "forecast_run_id", "planning_policy_id", "planning_policy_version",
+                "inventory_snapshot_json", "inventory_snapshot_hash",
+                "inventory_as_of", "forecast_evidence_json", "selected_quantile",
+                "on_hand", "reserved", "inbound", "available",
+                "reservation_shortfall", "future_supply",
+                "lead_time_demand", "lead_review_demand", "reorder_point",
+                "target_stock", "maximum_stock", "recommended_order_qty",
+                "quantity_status", "quantity_reason", "stockout_dates_json",
+                "risk_level", "risk_evidence_json", "overstock_risk",
+                "plan_quality", "quality_issues_json", "assumptions_json",
+                "allocation_boundary_json", "calculation_steps_json", "action_mode",
+                "input_hash", "created_at",
             },
             "staged_rollouts": {
                 "tenant_id", "subject_type", "subject_key", "candidate_id",
