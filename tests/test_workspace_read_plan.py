@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import threading
+
 import pytest
 
 from ecommerce_agent.workspace_read_plan import (
     WorkspaceReadPlan,
     WorkspaceReadTask,
+    WorkspaceTaskResult,
+    execute_read_plan,
     ready_task_batches,
     validate_read_plan,
 )
@@ -105,3 +109,107 @@ def test_ready_task_batches_waits_for_dependencies() -> None:
     )
 
     assert ready_task_batches(plan, batch_size=3) == [["search"], ["competitor"]]
+
+
+def _success(task: WorkspaceReadTask) -> WorkspaceTaskResult:
+    return WorkspaceTaskResult(
+        task_id=task.task_id,
+        objective=task.objective,
+        tool_name=task.tool_name,
+        tool_label="Business information",
+        status="success",
+        verified_facts=[f"Verified {task.task_id}"],
+    )
+
+
+def test_execute_read_plan_runs_three_independent_tasks_together() -> None:
+    active = 0
+    peak = 0
+    lock = threading.Lock()
+    barrier = threading.Barrier(3)
+
+    def runner(task: WorkspaceReadTask) -> WorkspaceTaskResult:
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        barrier.wait(timeout=2)
+        with lock:
+            active -= 1
+        return _success(task)
+
+    plan = WorkspaceReadPlan(tasks=[_task(task_id) for task_id in "abc"])
+    results = execute_read_plan(plan, runner=runner, maximum_parallel=3)
+
+    assert peak == 3
+    assert [item.task_id for item in results] == ["a", "b", "c"]
+
+
+def test_execute_read_plan_caps_four_tasks_at_three_and_preserves_order() -> None:
+    active = 0
+    peak = 0
+    lock = threading.Lock()
+    first_batch = threading.Barrier(3)
+
+    def runner(task: WorkspaceReadTask) -> WorkspaceTaskResult:
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        if task.task_id in {"a", "b", "c"}:
+            first_batch.wait(timeout=2)
+        with lock:
+            active -= 1
+        return _success(task)
+
+    plan = WorkspaceReadPlan(tasks=[_task(task_id) for task_id in "abcd"])
+    results = execute_read_plan(plan, runner=runner, maximum_parallel=3)
+
+    assert peak == 3
+    assert [item.task_id for item in results] == ["a", "b", "c", "d"]
+
+
+def test_execute_read_plan_isolates_failure_and_skips_dependent_task() -> None:
+    called: list[str] = []
+
+    def runner(task: WorkspaceReadTask) -> WorkspaceTaskResult:
+        called.append(task.task_id)
+        if task.task_id == "inventory":
+            raise ValueError("inventory_source_unavailable")
+        return _success(task)
+
+    plan = WorkspaceReadPlan(
+        tasks=[
+            _task("inventory"),
+            _task("revenue", tool_name="get_business_metric"),
+            _task("restock", depends_on=["inventory"]),
+        ]
+    )
+    results = execute_read_plan(plan, runner=runner, maximum_parallel=3)
+
+    assert set(called) == {"inventory", "revenue"}
+    assert [item.status for item in results] == ["failed", "success", "skipped"]
+    assert results[0].error_summary == "inventory_source_unavailable"
+    assert results[2].error_summary == "Prerequisite information was not verified."
+
+
+def test_execute_read_plan_skips_dependency_after_no_data() -> None:
+    called: list[str] = []
+
+    def runner(task: WorkspaceReadTask) -> WorkspaceTaskResult:
+        called.append(task.task_id)
+        return WorkspaceTaskResult(
+            task_id=task.task_id,
+            objective=task.objective,
+            tool_name=task.tool_name,
+            tool_label="Business information",
+            status="no_data",
+        )
+
+    plan = WorkspaceReadPlan(
+        tasks=[_task("search"), _task("competitor", depends_on=["search"])]
+    )
+    results = execute_read_plan(plan, runner=runner)
+
+    assert called == ["search"]
+    assert [item.status for item in results] == ["no_data", "skipped"]

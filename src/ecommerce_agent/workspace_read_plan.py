@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -34,6 +36,9 @@ class WorkspaceTaskResult(BaseModel):
     critical_values: list[str] = Field(default_factory=list)
     error_summary: str | None = None
     data_as_of: str | None = None
+
+
+ReadTaskRunner = Callable[[WorkspaceReadTask], WorkspaceTaskResult]
 
 
 def validate_read_plan(
@@ -106,3 +111,52 @@ def ready_task_batches(
         completed.update(batch_ids)
         remaining = [task for task in remaining if task.task_id not in completed]
     return batches
+
+
+def execute_read_plan(
+    plan: WorkspaceReadPlan,
+    *,
+    runner: ReadTaskRunner,
+    maximum_parallel: int = 3,
+) -> list[WorkspaceTaskResult]:
+    if maximum_parallel < 1:
+        raise ValueError("read_parallelism_invalid")
+
+    tasks_by_id = {task.task_id: task for task in plan.tasks}
+    results_by_id: dict[str, WorkspaceTaskResult] = {}
+    for batch in ready_task_batches(plan, batch_size=maximum_parallel):
+        runnable: list[WorkspaceReadTask] = []
+        for task_id in batch:
+            task = tasks_by_id[task_id]
+            dependency_results = [results_by_id[item] for item in task.depends_on]
+            if any(item.status != "success" for item in dependency_results):
+                results_by_id[task_id] = WorkspaceTaskResult(
+                    task_id=task.task_id,
+                    objective=task.objective,
+                    tool_name=task.tool_name,
+                    tool_label="Business information",
+                    status="skipped",
+                    error_summary="Prerequisite information was not verified.",
+                )
+                continue
+            runnable.append(task)
+
+        if not runnable:
+            continue
+        with ThreadPoolExecutor(max_workers=min(maximum_parallel, len(runnable))) as pool:
+            futures = {pool.submit(runner, task): task for task in runnable}
+            for future in as_completed(futures):
+                task = futures[future]
+                try:
+                    results_by_id[task.task_id] = future.result()
+                except Exception as exc:  # Each read failure is isolated to its task.
+                    results_by_id[task.task_id] = WorkspaceTaskResult(
+                        task_id=task.task_id,
+                        objective=task.objective,
+                        tool_name=task.tool_name,
+                        tool_label="Business information",
+                        status="failed",
+                        error_summary=str(exc),
+                    )
+
+    return [results_by_id[task.task_id] for task in plan.tasks]
