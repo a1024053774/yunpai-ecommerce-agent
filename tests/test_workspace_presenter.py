@@ -65,6 +65,20 @@ def test_inventory_presenter_distinguishes_empty_scope_from_zero_replenishment()
     )
 
 
+def test_product_search_requires_unique_resolution_before_dependent_query() -> None:
+    ambiguous = {
+        "resolution": "ambiguous",
+        "items": [{"sku_id": "SKU-A"}, {"sku_id": "SKU-B"}],
+    }
+    resolved = {
+        "resolution": "resolved",
+        "items": [{"sku_id": "SKU-A"}],
+    }
+
+    assert observation_data_status("search_products", ambiguous) == "no_data"
+    assert observation_data_status("search_products", resolved) == "success"
+
+
 def test_customer_service_is_expressed_as_people_and_work_not_internal_fields() -> None:
     view = present_observation(
         "get_customer_service_status",

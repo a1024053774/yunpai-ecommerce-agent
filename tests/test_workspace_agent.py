@@ -184,7 +184,9 @@ def test_workspace_composite_partial_failure_does_not_turn_failure_into_zero(
     monkeypatch.setattr(
         service.model,
         "stream_generate",
-        lambda _messages: iter(["库存风险已核实，收入为 0 元。"]),
+        lambda _messages: iter(
+            ["共检查 10 个库存记录，其中 4 个需要优先关注；收入为 0 元。"]
+        ),
     )
 
     with TestClient(app) as client:
@@ -268,6 +270,62 @@ def test_workspace_composite_rejects_answer_that_changes_verified_amount(
     assert "4811.00" not in done["answer"]
     assert "4181.00" in done["answer"]
     assert "critical_value_mismatch" in done["degraded_reasons"]
+
+
+def test_workspace_composite_no_data_cannot_be_rewritten_as_zero(
+    tmp_path, monkeypatch
+) -> None:
+    app = create_app(make_settings(tmp_path))
+    service = app.state.agent
+    workspace = app.state.workspace_agent
+    monkeypatch.setattr(
+        service.model,
+        "generate_json",
+        lambda _messages, **_kwargs: {
+            "tasks": [
+                {
+                    "task_id": "revenue",
+                    "objective": "核对最近收入",
+                    "tool_name": "get_business_metric",
+                    "arguments": {"metric": "gross_revenue"},
+                    "depends_on": [],
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        workspace,
+        "_run_read_task",
+        lambda task, *_args: WorkspaceTaskResult(
+            task_id=task.task_id,
+            objective=task.objective,
+            tool_name=task.tool_name,
+            tool_label="经营指标",
+            status="no_data",
+            verified_facts=["当前查询范围内暂无数据。"],
+        ),
+    )
+    monkeypatch.setattr(
+        service.model,
+        "stream_generate",
+        lambda _messages: iter(["最近收入为 0.00 元。"]),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/admin/workspace/chat/stream",
+            headers=ADMIN_HEADERS,
+            json={
+                "session_id": "workspace:test-composite-no-data-001",
+                "message": "查看最近收入。",
+                "history": [],
+                "context": {},
+            },
+        )
+
+    done = _events(response)[-1]["response"]
+    assert "0.00" not in done["answer"]
+    assert "暂无数据" in done["answer"]
 
 
 def test_workspace_replaces_default_admin_page_and_preserves_advanced_console(tmp_path) -> None:

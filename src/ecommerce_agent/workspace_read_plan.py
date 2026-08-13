@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import json
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -124,8 +125,11 @@ def execute_read_plan(
 
     tasks_by_id = {task.task_id: task for task in plan.tasks}
     results_by_id: dict[str, WorkspaceTaskResult] = {}
+    results_by_signature: dict[str, WorkspaceTaskResult] = {}
     for batch in ready_task_batches(plan, batch_size=maximum_parallel):
         runnable: list[WorkspaceReadTask] = []
+        aliases: dict[str, str] = {}
+        pending_signatures: dict[str, str] = {}
         for task_id in batch:
             task = tasks_by_id[task_id]
             dependency_results = [results_by_id[item] for item in task.depends_on]
@@ -139,6 +143,22 @@ def execute_read_plan(
                     error_summary="Prerequisite information was not verified.",
                 )
                 continue
+            signature = json.dumps(
+                {"tool_name": task.tool_name, "arguments": task.arguments},
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            existing = results_by_signature.get(signature)
+            if existing is not None:
+                results_by_id[task_id] = existing.model_copy(
+                    update={"task_id": task.task_id, "objective": task.objective}
+                )
+                continue
+            if signature in pending_signatures:
+                aliases[task_id] = pending_signatures[signature]
+                continue
+            pending_signatures[signature] = task_id
             runnable.append(task)
 
         if not runnable:
@@ -148,9 +168,10 @@ def execute_read_plan(
             for future in as_completed(futures):
                 task = futures[future]
                 try:
-                    results_by_id[task.task_id] = future.result()
+                    result = future.result()
+                    results_by_id[task.task_id] = result
                 except Exception as exc:  # Each read failure is isolated to its task.
-                    results_by_id[task.task_id] = WorkspaceTaskResult(
+                    result = WorkspaceTaskResult(
                         task_id=task.task_id,
                         objective=task.objective,
                         tool_name=task.tool_name,
@@ -158,5 +179,20 @@ def execute_read_plan(
                         status="failed",
                         error_summary=str(exc),
                     )
+                    results_by_id[task.task_id] = result
+                signature = json.dumps(
+                    {"tool_name": task.tool_name, "arguments": task.arguments},
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                results_by_signature[signature] = result
+
+        for alias_id, source_id in aliases.items():
+            source = results_by_id[source_id]
+            alias = tasks_by_id[alias_id]
+            results_by_id[alias_id] = source.model_copy(
+                update={"task_id": alias.task_id, "objective": alias.objective}
+            )
 
     return [results_by_id[task.task_id] for task in plan.tasks]

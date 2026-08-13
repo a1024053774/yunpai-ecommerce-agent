@@ -27,6 +27,7 @@ def _task(
         task_id=task_id,
         objective=f"Verify {task_id}",
         tool_name=tool_name,
+        arguments={"test_scope": task_id},
         depends_on=depends_on or [],
     )
 
@@ -104,7 +105,11 @@ def test_ready_task_batches_waits_for_dependencies() -> None:
     plan = WorkspaceReadPlan(
         tasks=[
             _task("search"),
-            _task("competitor", depends_on=["search"]),
+            _task(
+                "competitor",
+                tool_name="get_business_metric",
+                depends_on=["search"],
+            ),
         ]
     )
 
@@ -133,9 +138,11 @@ def test_execute_read_plan_runs_three_independent_tasks_together() -> None:
         with lock:
             active += 1
             peak = max(peak, active)
-        barrier.wait(timeout=2)
-        with lock:
-            active -= 1
+        try:
+            barrier.wait(timeout=2)
+        finally:
+            with lock:
+                active -= 1
         return _success(task)
 
     plan = WorkspaceReadPlan(tasks=[_task(task_id) for task_id in "abc"])
@@ -143,6 +150,7 @@ def test_execute_read_plan_runs_three_independent_tasks_together() -> None:
 
     assert peak == 3
     assert [item.task_id for item in results] == ["a", "b", "c"]
+    assert all(item.status == "success" for item in results)
 
 
 def test_execute_read_plan_caps_four_tasks_at_three_and_preserves_order() -> None:
@@ -156,10 +164,12 @@ def test_execute_read_plan_caps_four_tasks_at_three_and_preserves_order() -> Non
         with lock:
             active += 1
             peak = max(peak, active)
-        if task.task_id in {"a", "b", "c"}:
-            first_batch.wait(timeout=2)
-        with lock:
-            active -= 1
+        try:
+            if task.task_id in {"a", "b", "c"}:
+                first_batch.wait(timeout=2)
+        finally:
+            with lock:
+                active -= 1
         return _success(task)
 
     plan = WorkspaceReadPlan(tasks=[_task(task_id) for task_id in "abcd"])
@@ -167,6 +177,7 @@ def test_execute_read_plan_caps_four_tasks_at_three_and_preserves_order() -> Non
 
     assert peak == 3
     assert [item.task_id for item in results] == ["a", "b", "c", "d"]
+    assert all(item.status == "success" for item in results)
 
 
 def test_execute_read_plan_isolates_failure_and_skips_dependent_task() -> None:
@@ -213,3 +224,66 @@ def test_execute_read_plan_skips_dependency_after_no_data() -> None:
 
     assert called == ["search"]
     assert [item.status for item in results] == ["no_data", "skipped"]
+
+
+def test_execute_read_plan_reuses_identical_tool_arguments_for_multiple_objectives() -> None:
+    calls: list[str] = []
+    plan = WorkspaceReadPlan(
+        tasks=[
+            WorkspaceReadTask(
+                task_id="inventory_summary",
+                objective="Summarize inventory",
+                tool_name="get_inventory_risk",
+                arguments={"store_id": "store-001", "target_days": 30},
+            ),
+            WorkspaceReadTask(
+                task_id="inventory_alerts",
+                objective="List inventory alerts",
+                tool_name="get_inventory_risk",
+                arguments={"target_days": 30, "store_id": "store-001"},
+            ),
+        ]
+    )
+
+    def runner(task: WorkspaceReadTask) -> WorkspaceTaskResult:
+        calls.append(task.task_id)
+        return _success(task)
+
+    results = execute_read_plan(plan, runner=runner)
+
+    assert calls == ["inventory_summary"]
+    assert [item.task_id for item in results] == [
+        "inventory_summary",
+        "inventory_alerts",
+    ]
+    assert [item.objective for item in results] == [
+        "Summarize inventory",
+        "List inventory alerts",
+    ]
+    assert all(item.status == "success" for item in results)
+
+
+def test_execute_read_plan_completes_dependency_before_running_child() -> None:
+    timeline: list[str] = []
+    plan = WorkspaceReadPlan(
+        tasks=[
+            _task("search"),
+            _task("competitor", depends_on=["search"]),
+        ]
+    )
+
+    def runner(task: WorkspaceReadTask) -> WorkspaceTaskResult:
+        timeline.append(f"start:{task.task_id}")
+        result = _success(task)
+        timeline.append(f"finish:{task.task_id}")
+        return result
+
+    results = execute_read_plan(plan, runner=runner)
+
+    assert timeline == [
+        "start:search",
+        "finish:search",
+        "start:competitor",
+        "finish:competitor",
+    ]
+    assert [item.status for item in results] == ["success", "success"]

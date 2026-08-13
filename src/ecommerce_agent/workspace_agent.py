@@ -331,8 +331,8 @@ class WorkspaceAgent:
         while decision_steps < max_tool_calls + 2:
             decision_steps += 1
             try:
-                    plan = self._plan(
-                        request,
+                plan = self._plan(
+                    request,
                     observations=observations,
                     execution_notes=execution_notes,
                     decision_step=decision_steps,
@@ -816,14 +816,18 @@ class WorkspaceAgent:
         messages = self._response_messages(request, answer_plan, observations, [])
         answer = ""
         degraded_reasons: list[str] = []
-        try:
-            answer = "".join(self.service.model.stream_generate(messages))
-        except (ModelUnavailableError, ModelError):
-            degraded_reasons.append("response_generation_failed")
+        all_tasks_succeeded = all(result.status == "success" for result in results)
+        if not all_tasks_succeeded:
             answer = self._deterministic_answer(observations, [])
-        if not answer_preserves_critical_values(answer, results):
-            degraded_reasons.append("critical_value_mismatch")
-            answer = self._deterministic_answer(observations, [])
+        else:
+            try:
+                answer = "".join(self.service.model.stream_generate(messages))
+            except (ModelUnavailableError, ModelError):
+                degraded_reasons.append("response_generation_failed")
+                answer = self._deterministic_answer(observations, [])
+            if not answer_preserves_critical_values(answer, results):
+                degraded_reasons.append("critical_value_mismatch")
+                answer = self._deterministic_answer(observations, [])
         if answer:
             yield {"event": "delta", "text": answer}
 

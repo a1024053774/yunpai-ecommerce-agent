@@ -113,6 +113,10 @@ def observation_data_status(
             return "no_data"
     if tool_name == "get_inventory_risk" and not _list(observation.get("risks")):
         return "no_data"
+    if tool_name == "search_products" and str(
+        observation.get("resolution") or "no_match"
+    ) != "resolved":
+        return "no_data"
     return "success"
 
 

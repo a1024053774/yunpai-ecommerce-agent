@@ -82,7 +82,7 @@ def validate_read_plan(
 def ready_task_batches(plan: WorkspaceReadPlan, *, batch_size: int = 3) -> list[list[str]]
 ```
 
-- [ ] **步骤 1：写计划校验失败测试**
+- [x] **步骤 1：写计划校验失败测试**
 
 在 `tests/test_workspace_read_plan.py` 固定以下用例：
 
@@ -115,7 +115,7 @@ def test_read_plan_rejects_unknown_non_read_and_cyclic_tasks() -> None:
 
 同时覆盖任务数大于 4、重复 task_id、未知依赖、自依赖和空任务计划。
 
-- [ ] **步骤 2：运行红灯**
+- [x] **步骤 2：运行红灯**
 
 运行：
 
@@ -125,7 +125,7 @@ python -m pytest -q tests/test_workspace_read_plan.py
 
 预期：收集阶段因 `workspace_read_plan` 不存在而失败。
 
-- [ ] **步骤 3：实现 Pydantic 类型与计划校验**
+- [x] **步骤 3：实现 Pydantic 类型与计划校验**
 
 实现以下确定性规则：
 
@@ -140,7 +140,7 @@ if task.tool_name not in readable_tools:
 
 用 DFS 的 `visiting/visited` 集合检查循环，不根据 objective 内容判断工具。
 
-- [ ] **步骤 4：写并通过批次测试**
+- [x] **步骤 4：写并通过批次测试**
 
 ```python
 def test_ready_task_batches_caps_independent_queries_at_three() -> None:
@@ -174,7 +174,7 @@ python -m pytest -q tests/test_workspace_read_plan.py
 
 预期：全部通过。
 
-- [ ] **步骤 5：提交任务 1**
+- [x] **步骤 5：提交任务 1**
 
 ```powershell
 git add src/ecommerce_agent/workspace_read_plan.py tests/test_workspace_read_plan.py
@@ -203,7 +203,7 @@ def execute_read_plan(
 ) -> list[WorkspaceTaskResult]
 ```
 
-- [ ] **步骤 1：写并发峰值与顺序红灯测试**
+- [x] **步骤 1：写并发峰值与顺序红灯测试**
 
 使用 `threading.Barrier` 和加锁计数器记录同时运行数量，不使用 `sleep` 判断并发：
 
@@ -231,7 +231,7 @@ def test_execute_read_plan_runs_three_independent_tasks_together() -> None:
 
 另写四任务测试，断言峰值仍为 3 且返回顺序与原计划一致。
 
-- [ ] **步骤 2：运行红灯**
+- [x] **步骤 2：运行红灯**
 
 运行：
 
@@ -241,7 +241,7 @@ python -m pytest -q tests/test_workspace_read_plan.py -k "execute_read_plan"
 
 预期：因 `execute_read_plan` 未定义而失败。
 
-- [ ] **步骤 3：实现批次并发执行**
+- [x] **步骤 3：实现批次并发执行**
 
 每个批次使用：
 
@@ -252,7 +252,7 @@ with ThreadPoolExecutor(max_workers=min(maximum_parallel, len(batch))) as pool:
 
 捕获每个 future 的异常并转换为该任务的 `failed` 结果，不从工作线程传播到整个请求。完成后按原计划 task_id 顺序返回结果。
 
-- [ ] **步骤 4：实现依赖失败跳过**
+- [x] **步骤 4：实现依赖失败跳过**
 
 若任一依赖结果不是 `success`，后置任务不调用 runner，直接生成：
 
@@ -269,7 +269,7 @@ WorkspaceTaskResult(
 
 测试必须断言 runner 没有收到后置 task_id。
 
-- [ ] **步骤 5：运行任务 2 全部测试**
+- [x] **步骤 5：运行任务 2 全部测试**
 
 ```powershell
 python -m pytest -q tests/test_workspace_read_plan.py
@@ -277,7 +277,7 @@ python -m pytest -q tests/test_workspace_read_plan.py
 
 预期：全部通过，无超时、无后台线程残留。
 
-- [ ] **步骤 6：提交任务 2**
+- [x] **步骤 6：提交任务 2**
 
 ```powershell
 git add src/ecommerce_agent/workspace_read_plan.py tests/test_workspace_read_plan.py
@@ -307,7 +307,7 @@ def WorkspaceAgent._run_read_task(
 ) -> WorkspaceTaskResult
 ```
 
-- [ ] **步骤 1：写真实“库存 + 收入”红灯测试**
+- [x] **步骤 1：写真实“库存 + 收入”红灯测试**
 
 在 fixture 中通过现有领域服务写入 `qingchuan-flagship-001` 的 10 条库存记录和已支付订单，使库存高风险数为 4、收入为 `4181.00`。模型只返回一次计划：
 
@@ -349,7 +349,7 @@ assert "4" in done["answer"]
 assert "4181.00" in done["answer"]
 ```
 
-- [ ] **步骤 2：运行旧实现红灯并保存原因**
+- [x] **步骤 2：运行旧实现红灯并保存原因**
 
 ```powershell
 python -m pytest -q tests/test_workspace_agent.py -k "composite_inventory_and_revenue"
@@ -357,7 +357,7 @@ python -m pytest -q tests/test_workspace_agent.py -k "composite_inventory_and_re
 
 预期：旧 `WorkspacePlan` 不接受 `tasks`，或旧循环需要多次规划，测试失败。这是人工报告的自动化复现证据。
 
-- [ ] **步骤 3：新增只读计划 Prompt**
+- [x] **步骤 3：新增只读计划 Prompt**
 
 将 `WORKSPACE_PROMPT_VERSION` 升为 `workspace-router-v4`。规划 Prompt 明确：
 
@@ -368,7 +368,7 @@ python -m pytest -q tests/test_workspace_agent.py -k "composite_inventory_and_re
 
 可读工具集合从 `tool_catalog()` 中 `kind == "read"` 动态取得，不能建立固定业务关键词表。
 
-- [ ] **步骤 4：接入并发执行器**
+- [x] **步骤 4：接入并发执行器**
 
 `stream()` 新路径：
 
@@ -394,7 +394,7 @@ accepted -> planning -> planned -> observing(batch/task events)
 
 保留已有 `tools_used`、`trace_id`、`requires_confirmation` 等字段，避免页面和 PR #11 持久化接线回归。
 
-- [ ] **步骤 5：保留写门禁和直接回答路径**
+- [x] **步骤 5：保留写门禁和直接回答路径**
 
 在调用 `_read_plan` 前继续使用 `_requires_confirmation_request(request.message)`：明确业务写请求直接生成现有确认响应，不提交到线程池。直接回答计划不执行工具。
 
@@ -406,7 +406,7 @@ python -m pytest -q tests/test_workspace_agent.py -k "write or direct_answer or 
 
 预期：全部通过。
 
-- [ ] **步骤 6：提交任务 3**
+- [x] **步骤 6：提交任务 3**
 
 ```powershell
 git add src/ecommerce_agent/workspace_agent.py tests/test_workspace_agent.py
@@ -434,7 +434,7 @@ def critical_fact_values(product_view: dict[str, Any]) -> list[str]
 def answer_preserves_critical_values(answer: str, results: list[WorkspaceTaskResult]) -> bool
 ```
 
-- [ ] **步骤 1：写无数据与真实零值红灯测试**
+- [x] **步骤 1：写无数据与真实零值红灯测试**
 
 ```python
 def test_metric_presenter_distinguishes_no_data_from_verified_zero() -> None:
@@ -449,7 +449,7 @@ def test_metric_presenter_distinguishes_no_data_from_verified_zero() -> None:
 
 库存空列表同样判 `no_data`，而存在库存记录且建议补货为 0 仍判 `success`。
 
-- [ ] **步骤 2：运行红灯**
+- [x] **步骤 2：运行红灯**
 
 ```powershell
 python -m pytest -q tests/test_workspace_presenter.py -k "no_data or verified_zero"
@@ -457,7 +457,7 @@ python -m pytest -q tests/test_workspace_presenter.py -k "no_data or verified_ze
 
 预期：旧 presenter 将两者都表达为零，测试失败。
 
-- [ ] **步骤 3：实现数据状态和关键值提取**
+- [x] **步骤 3：实现数据状态和关键值提取**
 
 产品化结果增加内部使用的 `data_status` 和 `critical_values`；传给最终模型时仅提供产品语言和关键值约束，不暴露原始字段。关键值包括：
 
@@ -465,7 +465,7 @@ python -m pytest -q tests/test_workspace_presenter.py -k "no_data or verified_ze
 - 计数，如库存记录 `10`、优先关注 `4`。
 - SKU、订单号和店铺号等原样标识符。
 
-- [ ] **步骤 4：写部分失败测试**
+- [x] **步骤 4：写部分失败测试**
 
 让库存 runner 成功、收入 runner 抛出 `ValueError("metric_source_unavailable")`，断言：
 
@@ -478,15 +478,15 @@ assert "收入" in done["answer"]
 assert "0" not in failed_section(done["answer"])
 ```
 
-- [ ] **步骤 5：写数字篡改反证测试**
+- [x] **步骤 5：写数字篡改反证测试**
 
 让回答模型返回“收入 4811.00 元”。断言最终回答不包含 `4811.00`，而是切换到确定性摘要并包含 `4181.00`。守卫只检查来自核实结果的完整关键值集合，不从自然语言重新计算业务数字。
 
-- [ ] **步骤 6：实现按子目标确定性摘要**
+- [x] **步骤 6：实现按子目标确定性摘要**
 
 替换旧 `_deterministic_answer` 的全局三条截断：每个任务至少取第一条核实事实；剩余事实按总长度上限截断，但不得删除整个子目标。失败、无数据和跳过任务各输出一条范围说明。
 
-- [ ] **步骤 7：运行任务 4 测试**
+- [x] **步骤 7：运行任务 4 测试**
 
 ```powershell
 python -m pytest -q tests/test_workspace_presenter.py tests/test_workspace_agent.py -k "no_data or verified_zero or partial or critical_values or composite"
@@ -494,7 +494,7 @@ python -m pytest -q tests/test_workspace_presenter.py tests/test_workspace_agent
 
 预期：全部通过。
 
-- [ ] **步骤 8：提交任务 4**
+- [x] **步骤 8：提交任务 4**
 
 ```powershell
 git add src/ecommerce_agent/workspace_presenter.py src/ecommerce_agent/workspace_agent.py tests/test_workspace_presenter.py tests/test_workspace_agent.py
@@ -512,17 +512,17 @@ git commit -m "fix: preserve every composite query result"
 - 修改：`docs/tasks/WORKSPACE_COMPOSITE_QUERY_DESIGN.md`（仅在实现与设计发生已确认偏差时）
 - 修改：`docs/tasks/WORKSPACE_COMPOSITE_QUERY_PLAN.md`（勾选实际完成项并记录新鲜测试结果）
 
-- [ ] **步骤 1：增加依赖链验收测试**
+- [x] **步骤 1：增加依赖链验收测试**
 
 计划包含 `search_products -> get_competitive_intelligence`。断言后置任务在线程执行时间线上严格晚于前置完成；前置返回 ambiguous/no_data 时，后置状态为 `skipped` 且未执行。
 
-- [ ] **步骤 2：增加重复任务与四任务测试**
+- [x] **步骤 2：增加重复任务与四任务测试**
 
 - 相同 `tool_name + normalized arguments` 只执行一次，但两个 task_id 都获得同一结果引用。
 - 四个独立任务分两批完成，并发峰值不超过 3。
 - 返回的 `task_results` 始终按原计划顺序排列，而不是按线程完成顺序排列。
 
-- [ ] **步骤 3：运行统筹 Agent 全部专项**
+- [x] **步骤 3：运行统筹 Agent 全部专项**
 
 ```powershell
 python -m pytest -q tests/test_workspace_read_plan.py tests/test_workspace_agent.py tests/test_workspace_presenter.py
@@ -530,7 +530,7 @@ python -m pytest -q tests/test_workspace_read_plan.py tests/test_workspace_agent
 
 预期：全部通过，记录实际数量和耗时。
 
-- [ ] **步骤 4：运行相关业务回归**
+- [x] **步骤 4：运行相关业务回归**
 
 ```powershell
 python -m pytest -q tests/test_catalog_orders_metrics.py tests/test_operations_modules.py tests/test_api.py
@@ -540,7 +540,7 @@ git diff --check
 
 预期：全部通过；不沿用历史测试数量。
 
-- [ ] **步骤 5：执行两项反证**
+- [x] **步骤 5：执行两项反证**
 
 反证 A：临时把 `maximum_parallel=1`，并发峰值测试必须失败；还原后复验。
 
@@ -548,7 +548,7 @@ git diff --check
 
 只记录测试名称、退出状态、恢复后的提交和摘要，不保存完整模型输入或敏感业务数据。
 
-- [ ] **步骤 6：项目管理校验**
+- [x] **步骤 6：项目管理校验**
 
 ```powershell
 python D:\AppData\Codex\home-config\skills\project-to-act\scripts\init_project_management.py --project-root D:\yunpai\.worktrees\workspace-composite-queries --validate
@@ -556,7 +556,7 @@ python D:\AppData\Codex\home-config\skills\project-to-act\scripts\init_project_m
 
 预期：managed 且无缺失模板。若主线账本已有其他人更新，重新读取并保留最新主线，不覆盖规范账本。
 
-- [ ] **步骤 7：提交验收证据**
+- [x] **步骤 7：提交验收证据**
 
 ```powershell
 git add tests/test_workspace_read_plan.py tests/test_workspace_agent.py docs/tasks/WORKSPACE_COMPOSITE_QUERY_PLAN.md
@@ -578,6 +578,18 @@ PR 描述必须包含：
 - 部分失败、无数据/零值、依赖跳过和数字防篡改契约。
 - 定向与相关回归的实际测试数量。
 - 两项反证过程。
+
+### 实施证据（2026-08-13）
+
+- 提交：`6016d49`（计划契约）、`2c76f88`（并发执行器）、`2f74282`（一次性复合规划）、`1763aff`（结果守卫）。
+- 真实复现：同一店铺写入 10 条库存记录，其中 4 条高风险；已支付且未取消订单金额为 `4181.00`，规划模型只调用一次，两个工具均执行。
+- 专项：`python -m pytest -q tests/test_workspace_read_plan.py tests/test_workspace_agent.py tests/test_workspace_presenter.py` -> `49 passed in 187.78s`。
+- 相关回归：`python -m pytest -q tests/test_catalog_orders_metrics.py tests/test_operations_modules.py tests/test_api.py` -> `16 passed in 106.15s`。
+- 静态验证：`python -m compileall -q src` 与 `git diff --check` 退出码均为 0。
+- 项目管理：`project-to-act --validate` 返回 `valid=true, mode=managed`；未修改 `.project-to-act`。
+- 反证 A：临时强制 `maximum_parallel=1` 后，`test_execute_read_plan_runs_three_independent_tasks_together` 以 `peak 1 != 3` 失败；恢复后通过。该过程同时修复了测试异常路径未在 `finally` 递减计数、可能产生假峰值的问题。
+- 反证 B：临时令关键值守卫无条件放行后，`test_workspace_composite_rejects_answer_that_changes_verified_amount` 因错误金额 `4811.00` 穿透而失败；恢复后通过并保留 `4181.00`。
+- 未运行全量仓库测试；遵照本轮用户要求，仅运行统筹专项与直接相关业务回归。
 
 ---
 
