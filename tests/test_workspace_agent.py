@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
 
 from ecommerce_agent.api import create_app
+from ecommerce_agent.business import OrderUpsert
+from ecommerce_agent.business.inventory import InventoryBalanceUpsert
+from ecommerce_agent.business.orders import OrderLineInput
 from ecommerce_agent.llm import ModelError, ModelUnavailableError
 
 from conftest import make_settings
@@ -23,6 +27,114 @@ def _events(response) -> list[dict]:
         for line in response.text.splitlines()
         if line.startswith("data: ")
     ]
+
+
+def test_workspace_composite_inventory_and_revenue_uses_one_read_plan(
+    tmp_path, monkeypatch
+) -> None:
+    app = create_app(make_settings(tmp_path))
+    service = app.state.agent
+    source_time = datetime.now(UTC) - timedelta(days=1)
+    for index in range(10):
+        service.operations.inventory.upsert(
+            "tenant-test",
+            InventoryBalanceUpsert(
+                connector_id="composite-fixture",
+                store_id="qingchuan-flagship-001",
+                warehouse_id="warehouse-001",
+                sku_id=f"QC-COMPOSITE-{index:02d}",
+                on_hand="1" if index < 4 else "100",
+                average_daily_sales="10" if index < 4 else "1",
+                source_updated_at=source_time,
+                source_id=f"inventory-composite-{index:02d}",
+            ),
+        )
+    service.operations.orders.upsert(
+        "tenant-test",
+        OrderUpsert(
+            connector_id="composite-fixture",
+            store_id="qingchuan-flagship-001",
+            order_id="ORDER-COMPOSITE-001",
+            order_status="paid",
+            payment_status="paid",
+            total_amount="4181.00",
+            placed_at=source_time,
+            lines=[
+                OrderLineInput(
+                    line_id="line-composite-001",
+                    sku_id="QC-COMPOSITE-00",
+                    title="Composite fixture product",
+                    quantity=1,
+                    unit_price="4181.00",
+                )
+            ],
+            source_updated_at=source_time,
+            source_id="order-composite-001",
+        ),
+    )
+    planning_calls: list[list[dict[str, str]]] = []
+
+    def plan_once(messages, **_kwargs):
+        planning_calls.append(messages)
+        return {
+            "tasks": [
+                {
+                    "task_id": "inventory",
+                    "objective": "核对库存风险",
+                    "tool_name": "get_inventory_risk",
+                    "arguments": {"store_id": "qingchuan-flagship-001"},
+                    "depends_on": [],
+                },
+                {
+                    "task_id": "revenue",
+                    "objective": "核对已支付收入",
+                    "tool_name": "get_business_metric",
+                    "arguments": {
+                        "metric": "gross_revenue",
+                        "store_id": "qingchuan-flagship-001",
+                    },
+                    "depends_on": [],
+                },
+            ]
+        }
+
+    monkeypatch.setattr(service.model, "generate_json", plan_once)
+    monkeypatch.setattr(
+        service.model,
+        "stream_generate",
+        lambda _messages: iter(
+            ["共检查 10 个库存记录，其中 4 个需要优先关注；", "已支付收入为 4181.00 元。"]
+        ),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/admin/workspace/chat/stream",
+            headers=ADMIN_HEADERS,
+            json={
+                "session_id": "workspace:test-composite-inventory-revenue-001",
+                "message": "查看库存风险和最近收入。",
+                "history": [],
+                "context": {"store_id": "qingchuan-flagship-001"},
+            },
+        )
+
+    assert response.status_code == 200
+    events = _events(response)
+    done = events[-1]["response"]
+    assert len(planning_calls) == 1
+    assert [item["tool_name"] for item in done["tools_used"]] == [
+        "get_inventory_risk",
+        "get_business_metric",
+    ]
+    assert done["completion_status"] == "completed"
+    assert [item["status"] for item in done["task_results"]] == [
+        "success",
+        "success",
+    ]
+    assert "10" in done["answer"]
+    assert "4" in done["answer"]
+    assert "4181.00" in done["answer"]
 
 
 def test_workspace_replaces_default_admin_page_and_preserves_advanced_console(tmp_path) -> None:
