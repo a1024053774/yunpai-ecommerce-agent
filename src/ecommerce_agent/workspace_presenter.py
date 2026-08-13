@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 
@@ -90,11 +91,54 @@ def present_observation(tool_name: str | None, observation: dict[str, Any]) -> d
         "get_profit_reconciliation": _finance_facts,
         "get_listing_traffic_insights": _traffic_insight_facts,
     }
-    facts = handlers.get(tool_name or "", _fallback_facts)(observation)
+    data_status = observation_data_status(tool_name or "", observation)
+    facts = (
+        ["当前查询范围内暂无数据。"]
+        if data_status == "no_data"
+        else handlers.get(tool_name or "", _fallback_facts)(observation)
+    )
     return {
         "查询内容": tool_label(tool_name),
         "已核实信息": facts or ["目前没有查到对应记录。"],
     }
+
+
+def observation_data_status(
+    tool_name: str, observation: dict[str, Any]
+) -> str:
+    if tool_name == "get_business_metric":
+        quality = str(observation.get("quality") or "")
+        evidence_count = _number(observation.get("evidence_count"))
+        if quality == "no_data" or evidence_count == 0:
+            return "no_data"
+    if tool_name == "get_inventory_risk" and not _list(observation.get("risks")):
+        return "no_data"
+    return "success"
+
+
+def critical_fact_values(product_view: dict[str, Any]) -> list[str]:
+    values: list[str] = []
+    identifier_pattern = re.compile(r"\b(?=[A-Za-z0-9-]*\d)[A-Za-z][A-Za-z0-9-]*\b")
+    number_pattern = re.compile(r"(?<![A-Za-z0-9])\d+(?:\.\d+)?")
+    for fact in product_view.get("已核实信息") or []:
+        text = str(fact)
+        for match in [*identifier_pattern.findall(text), *number_pattern.findall(text)]:
+            if match not in values:
+                values.append(match)
+    return values
+
+
+def answer_preserves_critical_values(
+    answer: str, results: list[Any]
+) -> bool:
+    required = {
+        str(value)
+        for result in results
+        if getattr(result, "status", None) == "success"
+        for value in getattr(result, "critical_values", [])
+        if str(value)
+    }
+    return all(value in answer for value in required)
 
 
 def observation_summary(product_view: dict[str, Any]) -> str:

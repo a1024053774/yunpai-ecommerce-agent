@@ -16,7 +16,14 @@ from .policy import is_business_action_request
 from .service import AgentService
 from .text_utils import redact_sensitive
 from .tools import ToolExecutionContext
-from .workspace_presenter import observation_summary, present_observation, tool_label
+from .workspace_presenter import (
+    answer_preserves_critical_values,
+    critical_fact_values,
+    observation_data_status,
+    observation_summary,
+    present_observation,
+    tool_label,
+)
 from .workspace_read_plan import (
     WorkspaceReadPlan,
     WorkspaceReadTask,
@@ -810,12 +817,14 @@ class WorkspaceAgent:
         answer = ""
         degraded_reasons: list[str] = []
         try:
-            for delta in self.service.model.stream_generate(messages):
-                answer += delta
-                yield {"event": "delta", "text": delta}
+            answer = "".join(self.service.model.stream_generate(messages))
         except (ModelUnavailableError, ModelError):
             degraded_reasons.append("response_generation_failed")
             answer = self._deterministic_answer(observations, [])
+        if not answer_preserves_critical_values(answer, results):
+            degraded_reasons.append("critical_value_mismatch")
+            answer = self._deterministic_answer(observations, [])
+        if answer:
             yield {"event": "delta", "text": answer}
 
         completed = all(result.status in {"success", "no_data"} for result in results)
@@ -874,15 +883,19 @@ class WorkspaceAgent:
             trace_id,
         )
         product_view = present_observation(task.tool_name, observation)
+        status = observation_data_status(task.tool_name, observation)
         return WorkspaceTaskResult(
             task_id=task.task_id,
             objective=task.objective,
             tool_name=task.tool_name,
             tool_label=tool_label(task.tool_name),
-            status="success",
+            status=status,
             verified_facts=[
                 str(item) for item in product_view.get("已核实信息") or []
             ],
+            critical_values=(
+                critical_fact_values(product_view) if status == "success" else []
+            ),
         )
 
     def _execute(
@@ -1098,20 +1111,32 @@ class WorkspaceAgent:
         observations: list[dict[str, Any]],
         execution_notes: list[dict[str, str]],
     ) -> str:
-        facts: list[str] = []
+        sections: list[str] = []
         for observation in observations:
+            objective = str(
+                observation.get("objective")
+                or observation.get("tool_label")
+                or "业务信息"
+            )
+            status = str(observation.get("status") or "success")
+            if status in {"failed", "skipped"}:
+                sections.append(f"{objective}：暂时无法判断，请稍后重试。")
+                continue
+            if status == "no_data":
+                sections.append(f"{objective}：当前查询范围内暂无数据。")
+                continue
             result = observation.get("result")
             if not isinstance(result, dict):
                 continue
+            first_fact = ""
             for fact in result.get("已核实信息") or []:
                 text = str(fact).strip()
-                if text and text not in facts:
-                    facts.append(text)
-                if len(facts) >= 3:
+                if text:
+                    first_fact = text
                     break
-            if len(facts) >= 3:
-                break
-        if not facts:
+            if first_fact:
+                sections.append(f"{objective}：{first_fact}")
+        if not sections:
             note = next(
                 (
                     str(item.get("message") or "").strip()
@@ -1121,7 +1146,7 @@ class WorkspaceAgent:
                 "目前没有查到对应记录。",
             )
             return note
-        return "已完成事实核对：\n" + "\n".join(f"- {fact}" for fact in facts)
+        return "已完成事实核对：\n" + "\n".join(f"- {item}" for item in sections)
 
     @staticmethod
     def _requires_confirmation_request(message: str) -> bool:
