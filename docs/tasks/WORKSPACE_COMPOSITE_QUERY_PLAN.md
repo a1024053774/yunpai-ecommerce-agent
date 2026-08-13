@@ -563,7 +563,7 @@ git add tests/test_workspace_read_plan.py tests/test_workspace_agent.py docs/tas
 git commit -m "test: verify composite workspace query boundaries"
 ```
 
-- [ ] **步骤 8：同步依赖并创建 Draft PR**
+- [x] **步骤 8：同步依赖并创建 Draft PR**
 
 先检查 PR #9：
 
@@ -590,6 +590,8 @@ PR 描述必须包含：
 - 反证 A：临时强制 `maximum_parallel=1` 后，`test_execute_read_plan_runs_three_independent_tasks_together` 以 `peak 1 != 3` 失败；恢复后通过。该过程同时修复了测试异常路径未在 `finally` 递减计数、可能产生假峰值的问题。
 - 反证 B：临时令关键值守卫无条件放行后，`test_workspace_composite_rejects_answer_that_changes_verified_amount` 因错误金额 `4811.00` 穿透而失败；恢复后通过并保留 `4181.00`。
 - 未运行全量仓库测试；遵照本轮用户要求，仅运行统筹专项与直接相关业务回归。
+- 交付：Draft PR [#12](https://github.com/a1024053774/yunpai-ecommerce-agent/pull/12)，head 为 `zouchuheiye:codex/workspace-composite-queries`，base 为 `a1024053774:main`，明确依赖仍未合并的 Draft PR #9。
+- 远端回读时 PR #12 为 `OPEN/Draft/DIRTY`；`DIRTY` 继承自 PR #9 相对当前 main 的冲突状态，因此不申请合并。等待 #9 同步或合并后，再同步最新 main、复验并请求复审。
 
 ---
 
