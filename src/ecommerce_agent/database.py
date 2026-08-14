@@ -13,6 +13,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterator
 
+from .traffic_source_identity import LEGACY_UNSCOPED_CONNECTOR_ID
+
 
 SESSION_SOURCE_TYPES = {"api", "channel", "simulation", "evaluation"}
 SESSION_SCOPES = {"operational", "simulation", "evaluation", "all"}
@@ -41,7 +43,7 @@ class SessionScopeError(ValueError):
 
 
 class Database:
-    SCHEMA_VERSION = 28
+    SCHEMA_VERSION = 32
 
     def __init__(self, path: Path):
         self.path = path
@@ -163,6 +165,15 @@ class Database:
             if 28 not in applied:
                 self._apply_v28(conn)
                 conn.execute("INSERT INTO schema_migrations VALUES (28, ?)", (utc_now(),))
+            if 29 not in applied:
+                self._apply_v29(conn)
+                conn.execute("INSERT INTO schema_migrations VALUES (29, ?)", (utc_now(),))
+            if 30 not in applied:
+                self._apply_v30(conn)
+                conn.execute("INSERT INTO schema_migrations VALUES (30, ?)", (utc_now(),))
+            if 32 not in applied:
+                self._apply_v32(conn)
+                conn.execute("INSERT INTO schema_migrations VALUES (32, ?)", (utc_now(),))
             conn.execute(f"PRAGMA user_version = {self.SCHEMA_VERSION}")
             self._validate_schema(conn)
 
@@ -2423,6 +2434,575 @@ class Database:
         )
 
     @staticmethod
+    def _apply_v29(conn: sqlite3.Connection) -> None:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS demand_daily_facts (
+                id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                store_id TEXT NOT NULL,
+                sku_id TEXT NOT NULL,
+                business_date TEXT NOT NULL,
+                gross_units INTEGER,
+                eligible_units INTEGER,
+                order_count INTEGER,
+                sales_amount TEXT,
+                available_stock TEXT,
+                stockout_flag TEXT NOT NULL
+                    CHECK(stockout_flag IN ('true','false','unknown')),
+                stockout_evidence_json TEXT NOT NULL,
+                price TEXT,
+                promotion_flag TEXT NOT NULL
+                    CHECK(promotion_flag IN ('true','false','unknown')),
+                source_watermark TEXT NOT NULL,
+                fact_version INTEGER NOT NULL CHECK(fact_version >= 1),
+                demand_policy_version TEXT NOT NULL,
+                quality_flags_json TEXT NOT NULL,
+                lineage_json TEXT NOT NULL,
+                payload_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                CHECK(gross_units IS NULL OR gross_units >= 0),
+                CHECK(eligible_units IS NULL OR eligible_units >= 0),
+                CHECK(order_count IS NULL OR order_count >= 0),
+                UNIQUE(
+                    tenant_id, store_id, sku_id, business_date,
+                    demand_policy_version, fact_version
+                ),
+                UNIQUE(tenant_id, id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_demand_daily_facts_latest
+                ON demand_daily_facts(
+                    tenant_id, store_id, sku_id, business_date,
+                    demand_policy_version, fact_version DESC
+                );
+            CREATE TRIGGER IF NOT EXISTS trg_demand_daily_facts_immutable_update
+            BEFORE UPDATE ON demand_daily_facts
+            BEGIN
+                SELECT RAISE(ABORT, 'demand_daily_fact_immutable');
+            END;
+            CREATE TRIGGER IF NOT EXISTS trg_demand_daily_facts_immutable_delete
+            BEFORE DELETE ON demand_daily_facts
+            BEGIN
+                SELECT RAISE(ABORT, 'demand_daily_fact_immutable');
+            END;
+
+            CREATE TABLE IF NOT EXISTS forecast_policies (
+                policy_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                store_id TEXT NOT NULL,
+                sku_id TEXT,
+                horizons_json TEXT NOT NULL,
+                minimum_history_days INTEGER NOT NULL CHECK(minimum_history_days >= 1),
+                candidate_models_json TEXT NOT NULL,
+                backtest_windows INTEGER NOT NULL CHECK(backtest_windows >= 1),
+                interval_levels_json TEXT NOT NULL,
+                demand_policy_version TEXT NOT NULL,
+                policy_version TEXT NOT NULL,
+                active_from TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(tenant_id, policy_id)
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_forecast_policies_store_default
+                ON forecast_policies(tenant_id, store_id, policy_version)
+                WHERE sku_id IS NULL;
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_forecast_policies_sku_version
+                ON forecast_policies(tenant_id, store_id, sku_id, policy_version)
+                WHERE sku_id IS NOT NULL;
+
+            CREATE TABLE IF NOT EXISTS forecast_runs (
+                run_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                store_id TEXT NOT NULL,
+                sku_id TEXT NOT NULL,
+                training_start TEXT NOT NULL,
+                training_end TEXT NOT NULL,
+                data_hash TEXT NOT NULL,
+                demand_policy_version TEXT NOT NULL,
+                forecast_policy_version TEXT NOT NULL,
+                candidate_models_json TEXT NOT NULL,
+                champion_model TEXT,
+                champion_reason TEXT NOT NULL,
+                model_version TEXT NOT NULL,
+                wape REAL,
+                bias REAL,
+                smape REAL,
+                rmse REAL,
+                forecast_horizon INTEGER NOT NULL CHECK(forecast_horizon >= 1),
+                status TEXT NOT NULL
+                    CHECK(status IN ('running','completed','failed','degraded')),
+                created_at TEXT NOT NULL,
+                CHECK(training_end >= training_start),
+                UNIQUE(tenant_id, run_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_forecast_runs_scope
+                ON forecast_runs(tenant_id, store_id, sku_id, created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS forecast_backtests (
+                backtest_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                run_id TEXT NOT NULL,
+                model_name TEXT NOT NULL,
+                origin_date TEXT NOT NULL,
+                training_start TEXT NOT NULL,
+                training_end TEXT NOT NULL,
+                forecast_start TEXT NOT NULL,
+                forecast_end TEXT NOT NULL,
+                actual_json TEXT NOT NULL,
+                forecast_json TEXT NOT NULL,
+                metrics_json TEXT NOT NULL,
+                failure_reason TEXT,
+                created_at TEXT NOT NULL,
+                CHECK(training_end >= training_start),
+                CHECK(forecast_end >= forecast_start),
+                UNIQUE(
+                    tenant_id, run_id, model_name, origin_date,
+                    forecast_start, forecast_end
+                ),
+                UNIQUE(tenant_id, backtest_id),
+                FOREIGN KEY(tenant_id, run_id)
+                    REFERENCES forecast_runs(tenant_id, run_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_forecast_backtests_run
+                ON forecast_backtests(tenant_id, run_id, model_name, origin_date);
+
+            CREATE TABLE IF NOT EXISTS forecast_points (
+                point_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                run_id TEXT NOT NULL,
+                forecast_date TEXT NOT NULL,
+                p50 REAL NOT NULL,
+                p80 REAL NOT NULL,
+                p95 REAL NOT NULL,
+                created_at TEXT NOT NULL,
+                CHECK(p50 <= p80 AND p80 <= p95),
+                UNIQUE(tenant_id, run_id, forecast_date),
+                UNIQUE(tenant_id, point_id),
+                FOREIGN KEY(tenant_id, run_id)
+                    REFERENCES forecast_runs(tenant_id, run_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_forecast_points_run_date
+                ON forecast_points(tenant_id, run_id, forecast_date);
+
+            CREATE TABLE IF NOT EXISTS forecast_anomalies (
+                anomaly_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                store_id TEXT NOT NULL,
+                sku_id TEXT,
+                run_id TEXT,
+                anomaly_type TEXT NOT NULL,
+                severity TEXT NOT NULL CHECK(severity IN ('low','medium','high','critical')),
+                evidence_json TEXT NOT NULL,
+                resolution_status TEXT NOT NULL
+                    CHECK(resolution_status IN ('open','acknowledged','resolved')),
+                created_at TEXT NOT NULL,
+                resolved_at TEXT,
+                UNIQUE(tenant_id, anomaly_id),
+                FOREIGN KEY(tenant_id, run_id)
+                    REFERENCES forecast_runs(tenant_id, run_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_forecast_anomalies_scope
+                ON forecast_anomalies(
+                    tenant_id, store_id, sku_id, resolution_status, created_at DESC
+                );
+            """
+        )
+
+    @staticmethod
+    def _apply_v30(conn: sqlite3.Connection) -> None:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS inventory_planning_policies (
+                policy_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                store_id TEXT NOT NULL,
+                sku_id TEXT NOT NULL,
+                warehouse_id TEXT,
+                supplier_lead_days INTEGER NOT NULL CHECK(supplier_lead_days >= 0),
+                review_period_days INTEGER NOT NULL CHECK(review_period_days >= 1),
+                service_level TEXT NOT NULL,
+                minimum_order_qty TEXT NOT NULL,
+                order_multiple TEXT NOT NULL,
+                minimum_safety_stock TEXT NOT NULL,
+                maximum_stock_days INTEGER NOT NULL CHECK(maximum_stock_days >= 1),
+                policy_version TEXT NOT NULL,
+                active_from TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(tenant_id, policy_id),
+                UNIQUE(tenant_id, policy_id, policy_version)
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_inventory_planning_policy_default
+                ON inventory_planning_policies(
+                    tenant_id, store_id, sku_id, policy_version
+                ) WHERE warehouse_id IS NULL;
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_inventory_planning_policy_warehouse
+                ON inventory_planning_policies(
+                    tenant_id, store_id, sku_id, warehouse_id, policy_version
+                ) WHERE warehouse_id IS NOT NULL;
+            CREATE TRIGGER IF NOT EXISTS trg_inventory_planning_policies_immutable_update
+            BEFORE UPDATE ON inventory_planning_policies
+            BEGIN
+                SELECT RAISE(ABORT, 'inventory_planning_policy_immutable');
+            END;
+            CREATE TRIGGER IF NOT EXISTS trg_inventory_planning_policies_immutable_delete
+            BEFORE DELETE ON inventory_planning_policies
+            BEGIN
+                SELECT RAISE(ABORT, 'inventory_planning_policy_immutable');
+            END;
+
+            CREATE TABLE IF NOT EXISTS inventory_plans (
+                plan_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                store_id TEXT NOT NULL,
+                sku_id TEXT NOT NULL,
+                warehouse_id TEXT,
+                forecast_run_id TEXT NOT NULL,
+                planning_policy_id TEXT NOT NULL,
+                planning_policy_version TEXT NOT NULL,
+                inventory_snapshot_json TEXT NOT NULL,
+                inventory_snapshot_hash TEXT NOT NULL,
+                inventory_as_of TEXT NOT NULL,
+                forecast_evidence_json TEXT NOT NULL,
+                selected_quantile TEXT NOT NULL
+                    CHECK(selected_quantile IN ('p50','p80','p95')),
+                on_hand TEXT NOT NULL,
+                reserved TEXT NOT NULL,
+                inbound TEXT NOT NULL,
+                available TEXT NOT NULL,
+                reservation_shortfall TEXT NOT NULL,
+                future_supply TEXT NOT NULL,
+                lead_time_demand TEXT NOT NULL,
+                lead_review_demand TEXT NOT NULL,
+                reorder_point TEXT NOT NULL,
+                target_stock TEXT NOT NULL,
+                maximum_stock TEXT NOT NULL,
+                recommended_order_qty TEXT,
+                quantity_status TEXT NOT NULL
+                    CHECK(quantity_status IN ('advisory','withheld')),
+                quantity_reason TEXT,
+                stockout_dates_json TEXT NOT NULL,
+                risk_level TEXT NOT NULL
+                    CHECK(risk_level IN ('low','medium','high','critical')),
+                risk_evidence_json TEXT NOT NULL,
+                overstock_risk INTEGER NOT NULL CHECK(overstock_risk IN (0, 1)),
+                plan_quality TEXT NOT NULL
+                    CHECK(plan_quality IN ('standard','degraded')),
+                quality_issues_json TEXT NOT NULL,
+                assumptions_json TEXT NOT NULL,
+                allocation_boundary_json TEXT NOT NULL,
+                calculation_steps_json TEXT NOT NULL,
+                action_mode TEXT NOT NULL CHECK(action_mode = 'advisory_only'),
+                input_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(tenant_id, plan_id),
+                UNIQUE(tenant_id, input_hash),
+                FOREIGN KEY(tenant_id, forecast_run_id)
+                    REFERENCES forecast_runs(tenant_id, run_id),
+                FOREIGN KEY(
+                    tenant_id, planning_policy_id, planning_policy_version
+                ) REFERENCES inventory_planning_policies(
+                    tenant_id, policy_id, policy_version
+                ),
+                CHECK(
+                    (quantity_status='advisory'
+                        AND recommended_order_qty IS NOT NULL
+                        AND quantity_reason IS NULL)
+                    OR
+                    (quantity_status='withheld'
+                        AND recommended_order_qty IS NULL
+                        AND quantity_reason IS NOT NULL)
+                )
+            );
+            CREATE INDEX IF NOT EXISTS idx_inventory_plans_scope
+                ON inventory_plans(tenant_id, store_id, sku_id, created_at DESC);
+            CREATE TRIGGER IF NOT EXISTS trg_inventory_plans_immutable_update
+            BEFORE UPDATE ON inventory_plans
+            BEGIN
+                SELECT RAISE(ABORT, 'inventory_plan_immutable');
+            END;
+            CREATE TRIGGER IF NOT EXISTS trg_inventory_plans_immutable_delete
+            BEFORE DELETE ON inventory_plans
+            BEGIN
+                SELECT RAISE(ABORT, 'inventory_plan_immutable');
+            END;
+            """
+        )
+
+    @classmethod
+    def _apply_v32(cls, conn: sqlite3.Connection) -> None:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS store_business_calendars (
+                calendar_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                store_id TEXT NOT NULL,
+                timezone TEXT NOT NULL,
+                record_version INTEGER NOT NULL CHECK(record_version >= 1),
+                effective_from TEXT NOT NULL,
+                changed_by TEXT NOT NULL,
+                policy_version TEXT NOT NULL,
+                payload_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(tenant_id, calendar_id),
+                UNIQUE(tenant_id, store_id, record_version),
+                UNIQUE(tenant_id, store_id, effective_from)
+            );
+            CREATE INDEX IF NOT EXISTS idx_store_business_calendars_effective
+                ON store_business_calendars(
+                    tenant_id, store_id, effective_from DESC, record_version DESC
+                );
+            CREATE TRIGGER IF NOT EXISTS trg_store_business_calendars_immutable_update
+            BEFORE UPDATE ON store_business_calendars
+            BEGIN
+                SELECT RAISE(ABORT, 'store_business_calendar_immutable');
+            END;
+            CREATE TRIGGER IF NOT EXISTS trg_store_business_calendars_immutable_delete
+            BEFORE DELETE ON store_business_calendars
+            BEGIN
+                SELECT RAISE(ABORT, 'store_business_calendar_immutable');
+            END;
+            """
+        )
+        cls._ensure_column(
+            conn, "traffic_experiments", "business_calendar_id", "TEXT"
+        )
+        cls._ensure_column(
+            conn, "traffic_experiments", "business_calendar_version", "INTEGER"
+        )
+        cls._ensure_column(
+            conn, "traffic_experiments", "business_timezone", "TEXT"
+        )
+        cls._ensure_column(
+            conn,
+            "traffic_experiments",
+            "business_calendar_policy_version",
+            "TEXT",
+        )
+        cls._migrate_v32_traffic_metric_identity(conn)
+
+    @staticmethod
+    def _migrate_v32_traffic_metric_identity(conn: sqlite3.Connection) -> None:
+        conn.execute("DROP TABLE IF EXISTS traffic_metric_buckets_v32")
+        conn.execute("DROP TABLE IF EXISTS traffic_metric_quarantine_v32")
+        conn.execute(
+            f"""
+            CREATE TABLE traffic_metric_buckets_v32 (
+                id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                connector_id TEXT NOT NULL
+                    CHECK(connector_id <> '{LEGACY_UNSCOPED_CONNECTOR_ID}'),
+                listing_revision_id TEXT NOT NULL,
+                metric_start TEXT NOT NULL,
+                metric_end TEXT NOT NULL,
+                bucket_granularity TEXT NOT NULL
+                    CHECK(bucket_granularity IN ('hour','day')),
+                traffic_source TEXT NOT NULL,
+                impressions INTEGER NOT NULL CHECK(impressions >= 0),
+                clicks INTEGER NOT NULL CHECK(clicks >= 0 AND clicks <= impressions),
+                visitors INTEGER NOT NULL CHECK(visitors >= 0),
+                favorites INTEGER NOT NULL CHECK(favorites >= 0),
+                cart_adds INTEGER NOT NULL CHECK(cart_adds >= 0),
+                orders INTEGER NOT NULL CHECK(orders >= 0),
+                sales_amount TEXT NOT NULL,
+                ad_spend TEXT NOT NULL,
+                search_impressions INTEGER NOT NULL CHECK(search_impressions >= 0),
+                recommend_impressions INTEGER NOT NULL CHECK(recommend_impressions >= 0),
+                data_as_of TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                payload_hash TEXT NOT NULL,
+                quality_flags_json TEXT NOT NULL DEFAULT '[]',
+                version INTEGER NOT NULL CHECK(version >= 1),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                CHECK(metric_end > metric_start),
+                UNIQUE(tenant_id, connector_id, source_id),
+                UNIQUE(tenant_id, id),
+                FOREIGN KEY(tenant_id, listing_revision_id)
+                    REFERENCES listing_revisions(tenant_id, id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE traffic_metric_quarantine_v32 (
+                quarantine_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                connector_id TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                reason_code TEXT NOT NULL CHECK(
+                    reason_code IN (
+                        'listing_revision_missing',
+                        'listing_revision_not_found',
+                        'listing_revision_ambiguous',
+                        'metric_outside_revision_window'
+                    )
+                ),
+                payload_json TEXT NOT NULL,
+                data_as_of TEXT NOT NULL,
+                payload_hash TEXT NOT NULL,
+                version INTEGER NOT NULL CHECK(version >= 1),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(tenant_id, connector_id, source_id),
+                UNIQUE(tenant_id, quarantine_id)
+            )
+            """
+        )
+
+        missing_revision = conn.execute(
+            """
+            SELECT b.id
+            FROM traffic_metric_buckets AS b
+            LEFT JOIN listing_revisions AS r
+              ON r.tenant_id=b.tenant_id AND r.id=b.listing_revision_id
+            WHERE r.id IS NULL OR r.connector_id IS NULL OR r.connector_id=''
+            LIMIT 1
+            """
+        ).fetchone()
+        if missing_revision is not None:
+            raise ValueError("metric_revision_identity_missing")
+        conn.execute(
+            """
+            INSERT INTO traffic_metric_buckets_v32(
+                id, tenant_id, connector_id, listing_revision_id,
+                metric_start, metric_end, bucket_granularity, traffic_source,
+                impressions, clicks, visitors, favorites, cart_adds, orders,
+                sales_amount, ad_spend, search_impressions, recommend_impressions,
+                data_as_of, source_id, payload_hash, quality_flags_json, version,
+                created_at, updated_at
+            )
+            SELECT
+                b.id, b.tenant_id, r.connector_id, b.listing_revision_id,
+                b.metric_start, b.metric_end, b.bucket_granularity, b.traffic_source,
+                b.impressions, b.clicks, b.visitors, b.favorites, b.cart_adds, b.orders,
+                b.sales_amount, b.ad_spend, b.search_impressions,
+                b.recommend_impressions, b.data_as_of, b.source_id, b.payload_hash,
+                b.quality_flags_json, b.version, b.created_at, b.updated_at
+            FROM traffic_metric_buckets AS b
+            JOIN listing_revisions AS r
+              ON r.tenant_id=b.tenant_id AND r.id=b.listing_revision_id
+            """
+        )
+
+        quarantine_rows = conn.execute(
+            "SELECT * FROM traffic_metric_quarantine ORDER BY quarantine_id"
+        ).fetchall()
+        for sqlite_row in quarantine_rows:
+            row = dict(sqlite_row)
+            try:
+                payload = json.loads(str(row["payload_json"]))
+            except (TypeError, json.JSONDecodeError) as exc:
+                raise ValueError("metric_quarantine_payload_invalid") from exc
+            if not isinstance(payload, dict):
+                raise ValueError("metric_quarantine_payload_invalid")
+            frozen_connector = payload.get("connector_id")
+            if frozen_connector in (None, ""):
+                connector_id = LEGACY_UNSCOPED_CONNECTOR_ID
+            elif isinstance(frozen_connector, str):
+                connector_id = frozen_connector
+            else:
+                raise ValueError("metric_quarantine_connector_invalid")
+            conn.execute(
+                """
+                INSERT INTO traffic_metric_quarantine_v32(
+                    quarantine_id, tenant_id, connector_id, source_id,
+                    reason_code, payload_json, data_as_of, payload_hash,
+                    version, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    row["quarantine_id"],
+                    row["tenant_id"],
+                    connector_id,
+                    row["source_id"],
+                    row["reason_code"],
+                    row["payload_json"],
+                    row["data_as_of"],
+                    row["payload_hash"],
+                    row["version"],
+                    row["created_at"],
+                    row["updated_at"],
+                ),
+            )
+
+        for old_table, new_table in (
+            ("traffic_metric_buckets", "traffic_metric_buckets_v32"),
+            ("traffic_metric_quarantine", "traffic_metric_quarantine_v32"),
+        ):
+            old_count = conn.execute(
+                f"SELECT COUNT(*) FROM {old_table}"
+            ).fetchone()[0]
+            new_count = conn.execute(
+                f"SELECT COUNT(*) FROM {new_table}"
+            ).fetchone()[0]
+            if old_count != new_count:
+                raise ValueError("metric_identity_migration_count_mismatch")
+            evidence_mismatch = conn.execute(
+                f"""
+                SELECT 1
+                FROM {old_table} AS old
+                LEFT JOIN {new_table} AS new
+                  ON new.tenant_id=old.tenant_id
+                 AND new.{('id' if old_table == 'traffic_metric_buckets' else 'quarantine_id')}=
+                     old.{('id' if old_table == 'traffic_metric_buckets' else 'quarantine_id')}
+                WHERE new.payload_hash IS NULL
+                   OR new.payload_hash<>old.payload_hash
+                   OR new.version<>old.version
+                LIMIT 1
+                """
+            ).fetchone()
+            if evidence_mismatch is not None:
+                raise ValueError("metric_identity_migration_evidence_mismatch")
+
+        if conn.execute(
+            "PRAGMA foreign_key_check(traffic_metric_buckets_v32)"
+        ).fetchone() is not None:
+            raise ValueError("metric_identity_migration_foreign_key_mismatch")
+        state_conflict = conn.execute(
+            """
+            SELECT 1
+            FROM traffic_metric_buckets_v32 AS accepted
+            JOIN traffic_metric_quarantine_v32 AS quarantined
+              ON quarantined.tenant_id=accepted.tenant_id
+             AND quarantined.connector_id=accepted.connector_id
+             AND quarantined.source_id=accepted.source_id
+            LIMIT 1
+            """
+        ).fetchone()
+        if state_conflict is not None:
+            raise ValueError("metric_identity_state_conflict")
+
+        try:
+            conn.execute("DROP TABLE traffic_metric_buckets")
+            conn.execute(
+                "ALTER TABLE traffic_metric_buckets_v32 RENAME TO traffic_metric_buckets"
+            )
+            conn.execute("DROP TABLE traffic_metric_quarantine")
+            conn.execute(
+                """
+                ALTER TABLE traffic_metric_quarantine_v32
+                RENAME TO traffic_metric_quarantine
+                """
+            )
+        except sqlite3.OperationalError as exc:
+            raise RuntimeError("database schema validation failed") from exc
+        conn.execute(
+            """
+            CREATE INDEX idx_traffic_metric_buckets_revision_time
+            ON traffic_metric_buckets(
+                tenant_id, listing_revision_id, metric_start, traffic_source
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX idx_traffic_metric_quarantine_tenant_time
+            ON traffic_metric_quarantine(
+                tenant_id, data_as_of DESC, created_at DESC
+            )
+            """
+        )
+
+    @staticmethod
     def _ensure_column(conn: sqlite3.Connection, table: str, column: str, declaration: str) -> None:
         columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
         if column not in columns:
@@ -2467,8 +3047,14 @@ class Database:
                 "attributes_json", "active_from", "active_to", "source_updated_at",
                 "payload_hash", "created_at", "updated_at",
             },
+            "store_business_calendars": {
+                "calendar_id", "tenant_id", "store_id", "timezone",
+                "record_version", "effective_from", "changed_by",
+                "policy_version", "payload_hash", "created_at",
+            },
             "traffic_metric_buckets": {
-                "id", "tenant_id", "listing_revision_id", "metric_start", "metric_end",
+                "id", "tenant_id", "connector_id", "listing_revision_id",
+                "metric_start", "metric_end",
                 "bucket_granularity", "traffic_source", "impressions", "clicks",
                 "visitors", "favorites", "cart_adds", "orders", "sales_amount",
                 "ad_spend", "search_impressions", "recommend_impressions", "data_as_of",
@@ -2476,7 +3062,7 @@ class Database:
                 "created_at", "updated_at",
             },
             "traffic_metric_quarantine": {
-                "quarantine_id", "tenant_id", "source_id", "reason_code",
+                "quarantine_id", "tenant_id", "connector_id", "source_id", "reason_code",
                 "payload_json", "data_as_of", "payload_hash", "version",
                 "created_at", "updated_at",
             },
@@ -2485,7 +3071,9 @@ class Database:
                 "primary_metric", "status", "started_at", "ended_at",
                 "control_revision_id", "treatment_revision_id", "minimum_exposure",
                 "washout_window", "analysis_policy_version", "payload_hash",
-                "record_version", "created_at", "updated_at",
+                "record_version", "business_calendar_id",
+                "business_calendar_version", "business_timezone",
+                "business_calendar_policy_version", "created_at", "updated_at",
             },
             "traffic_experiment_windows": {
                 "window_id", "tenant_id", "experiment_id", "listing_revision_id",
@@ -2498,6 +3086,63 @@ class Database:
                 "confidence_interval_json", "evidence_json", "counter_evidence_json",
                 "hypotheses_json", "model_provider", "model_name", "prompt_version",
                 "analysis_code_version", "payload_hash", "created_at", "updated_at",
+            },
+            "demand_daily_facts": {
+                "id", "tenant_id", "store_id", "sku_id", "business_date",
+                "gross_units", "eligible_units", "order_count", "sales_amount",
+                "available_stock", "stockout_flag", "stockout_evidence_json",
+                "price", "promotion_flag",
+                "source_watermark", "fact_version", "demand_policy_version",
+                "quality_flags_json", "lineage_json", "payload_hash", "created_at",
+            },
+            "forecast_policies": {
+                "policy_id", "tenant_id", "store_id", "sku_id", "horizons_json",
+                "minimum_history_days", "candidate_models_json", "backtest_windows",
+                "interval_levels_json", "demand_policy_version", "policy_version",
+                "active_from", "created_at",
+            },
+            "forecast_runs": {
+                "run_id", "tenant_id", "store_id", "sku_id", "training_start",
+                "training_end", "data_hash", "demand_policy_version",
+                "forecast_policy_version", "candidate_models_json", "champion_model",
+                "champion_reason", "model_version", "wape", "bias", "smape", "rmse",
+                "forecast_horizon", "status", "created_at",
+            },
+            "forecast_backtests": {
+                "backtest_id", "tenant_id", "run_id", "model_name", "origin_date",
+                "training_start", "training_end", "forecast_start", "forecast_end",
+                "actual_json", "forecast_json", "metrics_json", "failure_reason",
+                "created_at",
+            },
+            "forecast_points": {
+                "point_id", "tenant_id", "run_id", "forecast_date", "p50", "p80",
+                "p95", "created_at",
+            },
+            "forecast_anomalies": {
+                "anomaly_id", "tenant_id", "store_id", "sku_id", "run_id",
+                "anomaly_type", "severity", "evidence_json", "resolution_status",
+                "created_at", "resolved_at",
+            },
+            "inventory_planning_policies": {
+                "policy_id", "tenant_id", "store_id", "sku_id", "warehouse_id",
+                "supplier_lead_days", "review_period_days", "service_level",
+                "minimum_order_qty", "order_multiple", "minimum_safety_stock",
+                "maximum_stock_days", "policy_version", "active_from", "created_at",
+            },
+            "inventory_plans": {
+                "plan_id", "tenant_id", "store_id", "sku_id", "warehouse_id",
+                "forecast_run_id", "planning_policy_id", "planning_policy_version",
+                "inventory_snapshot_json", "inventory_snapshot_hash",
+                "inventory_as_of", "forecast_evidence_json", "selected_quantile",
+                "on_hand", "reserved", "inbound", "available",
+                "reservation_shortfall", "future_supply",
+                "lead_time_demand", "lead_review_demand", "reorder_point",
+                "target_stock", "maximum_stock", "recommended_order_qty",
+                "quantity_status", "quantity_reason", "stockout_dates_json",
+                "risk_level", "risk_evidence_json", "overstock_risk",
+                "plan_quality", "quality_issues_json", "assumptions_json",
+                "allocation_boundary_json", "calculation_steps_json", "action_mode",
+                "input_hash", "created_at",
             },
             "staged_rollouts": {
                 "tenant_id", "subject_type", "subject_key", "candidate_id",

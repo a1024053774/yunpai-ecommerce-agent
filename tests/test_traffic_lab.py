@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from ecommerce_agent.business_calendar import StoreBusinessCalendarUpsert
 from ecommerce_agent.database import Database
 from ecommerce_agent.traffic_lab import (
     CreativeAssetCreate,
@@ -57,6 +58,7 @@ def revision(asset_id: str, **changes) -> ListingRevisionCreate:
 def metric_bucket(revision_id: str | None, **changes) -> TrafficMetricBucketUpsert:
     payload = {
         "listing_revision_id": revision_id,
+        "connector_id": "virtual_taobao",
         "metric_start": BASE_TIME + timedelta(hours=1),
         "metric_end": BASE_TIME + timedelta(hours=2),
         "bucket_granularity": "hour",
@@ -94,6 +96,23 @@ def experiment(control_id: str, treatment_id: str) -> TrafficExperimentCreate:
     )
 
 
+def seed_calendar(
+    service: TrafficLabService,
+    tenant_id: str,
+    *,
+    store_id: str = "store-001",
+) -> None:
+    service.business_calendars.upsert_calendar(
+        tenant_id,
+        StoreBusinessCalendarUpsert(
+            store_id=store_id,
+            timezone="UTC",
+            effective_from=BASE_TIME - timedelta(days=1),
+            changed_by="traffic-test-fixture",
+        ),
+    )
+
+
 def test_v27_database_upgrades_to_v28_without_rebuilding_existing_data(tmp_path) -> None:
     db = Database(tmp_path / "v27-traffic-lab.sqlite3")
     with db.connect() as conn:
@@ -123,7 +142,7 @@ def test_v27_database_upgrades_to_v28_without_rebuilding_existing_data(tmp_path)
             "SELECT COUNT(*) FROM schema_migrations WHERE version=28"
         ).fetchone()[0]
         probe = conn.execute("SELECT value FROM legacy_probe WHERE id='probe-1'").fetchone()[0]
-    assert Database.SCHEMA_VERSION == 28
+    assert Database.SCHEMA_VERSION >= 28
     assert {
         "creative_assets",
         "listing_revisions",
@@ -416,6 +435,8 @@ def test_experiment_windows_analysis_and_all_id_queries_are_tenant_scoped(tmp_pa
     db = Database(tmp_path / "traffic-experiments.sqlite3")
     db.initialize()
     service = TrafficLabService(db)
+    seed_calendar(service, "tenant-a")
+    seed_calendar(service, "tenant-b")
     created_asset = service.register_asset("tenant-a", asset())
     control = service.create_revision(
         "tenant-a",

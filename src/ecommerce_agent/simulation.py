@@ -4,11 +4,13 @@ import hashlib
 import json
 import uuid
 from collections import Counter
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .business_calendar import StoreBusinessCalendarUpsert
 from .business import (
     CatalogItemUpsert,
     ContentDraftUpsert,
@@ -40,6 +42,12 @@ from .evaluation import (
     EvaluationThresholds,
     EvaluationTurn,
 )
+from .forecasting import (
+    DemandFactRebuild,
+    ForecastRunError,
+    InventoryPlanningError,
+    InventoryPlanningPolicy,
+)
 from .knowledge_management import KnowledgeCreateRequest, KnowledgeTransitionRequest
 from .quality import QualityRunRequest
 from .releases import ReleasePolicyCreateRequest, ReleaseReplayRequest
@@ -47,9 +55,11 @@ from .schemas import HandoffOperatorQueueAssignment, HandoffOperatorUpsert
 from .taobao import ReplyDraftCreateRequest
 from .tools import ToolExecutionContext
 from .traffic_lab import (
+    ListingRevisionCreate,
     TrafficExperimentCreate,
     TrafficExperimentTransition,
     TrafficExperimentWindowCreate,
+    TrafficMetricBucketUpsert,
 )
 
 if TYPE_CHECKING:
@@ -203,7 +213,16 @@ class VirtualStoreSimulation:
         self._scenario(
             scenarios,
             demands["D19"],
-            lambda: self._verify_traffic_lab(tenant_id, actor),
+            lambda: self._verify_traffic_lab(
+                tenant_id,
+                actor,
+                store_id=str(fixture["store"]["store_id"]),
+            ),
+        )
+        self._scenario(
+            scenarios,
+            demands["D20"],
+            lambda: self._verify_forecasting(tenant_id, actor),
         )
         if include_customer_service:
             self._scenario(
@@ -385,6 +404,19 @@ class VirtualStoreSimulation:
         source_time = fixture["source_updated_at"]
         status_counts: Counter[str] = Counter()
 
+        business_calendar = self.service.operations.business_calendars.upsert_calendar(
+            tenant_id,
+            StoreBusinessCalendarUpsert(
+                store_id=store_id,
+                timezone=str(fixture["store"]["timezone"]),
+                effective_from=source_time,
+                changed_by=actor,
+            ),
+        )
+        status_counts[
+            f"business_calendar_{business_calendar['write_status']}"
+        ] += 1
+
         for index, item in enumerate(fixture["catalog"], start=1):
             result = self.service.operations.catalog.upsert(
                 tenant_id,
@@ -496,6 +528,7 @@ class VirtualStoreSimulation:
             "marketing": len(fixture["marketing"]),
             "expenses": len(fixture["expenses"]),
             "settlement_statements": len(fixture["settlement_statements"]),
+            "business_calendar": business_calendar,
             "competitive": competitive,
             "knowledge": knowledge,
             "showcase": showcase,
@@ -1823,7 +1856,13 @@ class VirtualStoreSimulation:
             "query_results": probes,
         }
 
-    def _verify_traffic_lab(self, tenant_id: str, actor: str) -> dict[str, Any]:
+    def _verify_traffic_lab(
+        self,
+        tenant_id: str,
+        actor: str,
+        *,
+        store_id: str,
+    ) -> dict[str, Any]:
         operations = self.service.operations
         syncs = {
             resource: operations.sync(
@@ -1842,68 +1881,250 @@ class VirtualStoreSimulation:
             sku_id="YP-SKU-TRAFFIC-001",
         )
         by_number = {item["revision_no"]: item for item in revisions}
-        control, treatment = by_number[1], by_number[2]
-        experiments = domain.list_experiments(
-            tenant_id, store_id="virtual-shop-001", sku_id="YP-SKU-TRAFFIC-001"
-        )
-        experiment = next(
-            (
-                item
-                for item in experiments
-                if item["control_revision_id"] == control["id"]
-                and item["treatment_revision_id"] == treatment["id"]
-                and item["analysis_policy_version"] == "traffic-analysis-v2"
-                and item["status"] != "invalid"
+        source_revision = by_number[1]
+        control_attributes = {
+            "category": "air-circulator",
+            "stock_status": "in_stock",
+            "campaign": None,
+            "ad_plan": "fixed-baseline",
+            "holiday_calendar_version": "cn-2026-v1",
+            "store_traffic_baseline_version": f"{store_id}-hourly-v1",
+            "historical_ctr": 0.05,
+            "historical_cvr": 0.02,
+        }
+        revision_common = {
+            "connector_id": "virtual_taobao",
+            "store_id": store_id,
+            "item_id": "YP-SPU-TRAFFIC-001",
+            "sku_id": "YP-SKU-TRAFFIC-001",
+            "main_image_asset_id": source_revision["main_image_asset_id"],
+            "sale_price": "109.00",
+            "attributes": control_attributes,
+            "active_from": "2026-08-08T00:00:00Z",
+            "active_to": "2026-08-12T00:00:00Z",
+        }
+        control = domain.create_revision(
+            tenant_id,
+            ListingRevisionCreate(
+                **revision_common,
+                revision_no=101,
+                title="云湃空气循环扇 D19 基准标题",
+                source_updated_at="2026-08-08T00:00:00Z",
             ),
-            None,
         )
-        if experiment is None:
-            experiment = domain.create_experiment(
+        treatment = domain.create_revision(
+            tenant_id,
+            ListingRevisionCreate(
+                **revision_common,
+                revision_no=102,
+                title="云湃空气循环扇 D19 强劲静音标题",
+                source_updated_at="2026-08-08T00:01:00Z",
+            ),
+        )
+
+        def metric(
+            revision_id: str,
+            start: datetime,
+            *,
+            click_rate: float,
+            source_id: str,
+            recommend_impressions: int,
+        ) -> TrafficMetricBucketUpsert:
+            impressions = 1_000
+            clicks = round(impressions * click_rate)
+            orders = 2
+            return TrafficMetricBucketUpsert(
+                listing_revision_id=revision_id,
+                metric_start=start,
+                metric_end=start + timedelta(hours=1),
+                bucket_granularity="hour",
+                traffic_source="recommend",
+                impressions=impressions,
+                clicks=clicks,
+                visitors=clicks,
+                favorites=4,
+                cart_adds=3,
+                orders=orders,
+                sales_amount=str(orders * 109),
+                ad_spend="0",
+                search_impressions=impressions - recommend_impressions,
+                recommend_impressions=recommend_impressions,
+                data_as_of=start + timedelta(hours=1, minutes=5),
+                source_id=source_id,
+            )
+
+        def experiment_for(
+            experiment_type: str,
+            start: datetime,
+            end: datetime,
+            control_revision_id: str,
+            treatment_revision_id: str,
+            *,
+            washout_window: int,
+        ) -> dict[str, Any]:
+            existing = next(
+                (
+                    item
+                    for item in domain.list_experiments(
+                        tenant_id,
+                        store_id=store_id,
+                        sku_id="YP-SKU-TRAFFIC-001",
+                    )
+                    if item["experiment_type"] == experiment_type
+                    and item["started_at"] == start.isoformat()
+                    and item["control_revision_id"] == control_revision_id
+                    and item["treatment_revision_id"] == treatment_revision_id
+                    and item["analysis_policy_version"] == "traffic-analysis-v2"
+                    and item["status"] != "invalid"
+                ),
+                None,
+            )
+            if existing is not None:
+                return existing
+            return domain.create_experiment(
                 tenant_id,
                 TrafficExperimentCreate(
-                    store_id="virtual-shop-001",
+                    store_id=store_id,
                     sku_id="YP-SKU-TRAFFIC-001",
-                    experiment_type="switchback",
+                    experiment_type=experiment_type,
                     primary_metric="ctr",
-                    started_at="2026-08-01T00:00:00Z",
-                    ended_at="2026-08-03T00:00:00Z",
-                    control_revision_id=control["id"],
-                    treatment_revision_id=treatment["id"],
-                    minimum_exposure=100,
-                    washout_window=0,
+                    started_at=start,
+                    ended_at=end,
+                    control_revision_id=control_revision_id,
+                    treatment_revision_id=treatment_revision_id,
+                    minimum_exposure=2_000,
+                    washout_window=washout_window,
                     analysis_policy_version="traffic-analysis-v2",
                 ),
             )
+
+        def complete(value: dict[str, Any]) -> dict[str, Any]:
+            while value["status"] != "completed":
+                target = {
+                    "draft": "ready",
+                    "ready": "running",
+                    "running": "completed",
+                    "paused": "completed",
+                }[value["status"]]
+                value = domain.transition_experiment(
+                    tenant_id,
+                    str(value["experiment_id"]),
+                    TrafficExperimentTransition(
+                        status=target,
+                        expected_version=value["record_version"],
+                    ),
+                )
+            return value
+
+        aa_start = datetime(2026, 8, 9, 0, 0, tzinfo=UTC)
+        aa_end = aa_start + timedelta(hours=8)
+        aa = experiment_for(
+            "aa",
+            aa_start,
+            aa_end,
+            str(control["id"]),
+            str(control["id"]),
+            washout_window=0,
+        )
+        aa_id = str(aa["experiment_id"])
+        for index in range(8):
+            start = aa_start + timedelta(hours=index)
+            assignment = "control" if index % 2 == 0 else "treatment"
+            domain.add_experiment_window(
+                tenant_id,
+                aa_id,
+                TrafficExperimentWindowCreate(
+                    listing_revision_id=str(control["id"]),
+                    window_start=start,
+                    window_end=start + timedelta(hours=1),
+                    assignment=assignment,
+                    source_receipt_id=f"virtual-D19-aa-window-{index + 1:02d}",
+                ),
+            )
+            domain.upsert_metric_bucket(
+                tenant_id,
+                metric(
+                    str(control["id"]),
+                    start,
+                    click_rate=0.05,
+                    source_id=f"virtual-D19-aa-metric-{index + 1:02d}",
+                    recommend_impressions=700 + index * 10,
+                ),
+            )
+        aa = complete(aa)
+        aa_runs = domain.list_analysis_runs(tenant_id, aa_id)
+        aa_run = aa_runs[0] if aa_runs else operations.traffic_analysis.analyze_experiment(
+            tenant_id, aa_id
+        )
+        assert aa_run["evidence"]["quality_gate"]["status"] == "passed"
+        assert aa_run["evidence"]["statistical_conclusion"] == "no_detectable_effect"
+
+        switch_start = datetime(2026, 8, 10, 0, 0, tzinfo=UTC)
+        schedule = [
+            (switch_start + timedelta(hours=0), "control"),
+            (switch_start + timedelta(hours=2), "treatment"),
+            (switch_start + timedelta(hours=4), "control"),
+            (switch_start + timedelta(hours=6), "treatment"),
+            (switch_start + timedelta(days=1, hours=0), "treatment"),
+            (switch_start + timedelta(days=1, hours=2), "control"),
+            (switch_start + timedelta(days=1, hours=4), "treatment"),
+            (switch_start + timedelta(days=1, hours=6), "control"),
+        ]
+        switch_end = schedule[-1][0] + timedelta(hours=1)
+        experiment = experiment_for(
+            "switchback",
+            switch_start,
+            switch_end,
+            str(control["id"]),
+            str(treatment["id"]),
+            washout_window=60,
+        )
         experiment_id = str(experiment["experiment_id"])
-        for revision, assignment, start, end in (
-            (control, "control", "2026-08-01T00:00:00Z", "2026-08-02T00:00:00Z"),
-            (treatment, "treatment", "2026-08-02T00:00:00Z", "2026-08-03T00:00:00Z"),
-        ):
+        for index, (start, assignment) in enumerate(schedule, start=1):
+            revision = control if assignment == "control" else treatment
             domain.add_experiment_window(
                 tenant_id,
                 experiment_id,
                 TrafficExperimentWindowCreate(
-                    listing_revision_id=revision["id"],
+                    listing_revision_id=str(revision["id"]),
                     window_start=start,
-                    window_end=end,
+                    window_end=start + timedelta(hours=1),
                     assignment=assignment,
-                    source_receipt_id=f"virtual-D19-{assignment}",
+                    source_receipt_id=f"virtual-D19-switch-active-{index:02d}",
                 ),
             )
-        while experiment["status"] != "completed":
-            target = {
-                "draft": "ready",
-                "ready": "running",
-                "running": "completed",
-                "paused": "completed",
-            }[experiment["status"]]
-            experiment = domain.transition_experiment(
+            domain.upsert_metric_bucket(
                 tenant_id,
-                experiment_id,
-                TrafficExperimentTransition(
-                    status=target, expected_version=experiment["record_version"]
+                metric(
+                    str(revision["id"]),
+                    start,
+                    click_rate=0.05 if assignment == "control" else 0.08,
+                    source_id=f"virtual-D19-switch-metric-{index:02d}",
+                    recommend_impressions=650 + index * 25,
                 ),
             )
+            if index < len(schedule):
+                next_start, next_assignment = schedule[index]
+                active_end = start + timedelta(hours=1)
+                if active_end < next_start:
+                    next_revision = (
+                        control if next_assignment == "control" else treatment
+                    )
+                    domain.add_experiment_window(
+                        tenant_id,
+                        experiment_id,
+                        TrafficExperimentWindowCreate(
+                            listing_revision_id=str(next_revision["id"]),
+                            window_start=active_end,
+                            window_end=next_start,
+                            assignment=next_assignment,
+                            washout=True,
+                            source_receipt_id=(
+                                f"virtual-D19-switch-washout-{index:02d}"
+                            ),
+                        ),
+                    )
+        experiment = complete(experiment)
         runs = domain.list_analysis_runs(tenant_id, experiment_id)
         run = runs[0] if runs else operations.traffic_analysis.analyze_experiment(
             tenant_id, experiment_id
@@ -1914,12 +2135,12 @@ class VirtualStoreSimulation:
             client_id="simulation",
             session_id="simulation-traffic-lab",
             trace_id="simulation-traffic-lab",
-            trusted_context={"store_id": "virtual-shop-001"},
+            trusted_context={"store_id": store_id},
         )
         spec, arguments = self.service.tools.validate_selection(
             name="get_listing_traffic_insights",
             arguments={
-                "store_id": "virtual-shop-001",
+                "store_id": store_id,
                 "sku_id": "YP-SKU-TRAFFIC-001",
             },
             requested_mode="observe",
@@ -1937,14 +2158,153 @@ class VirtualStoreSimulation:
         ]
         assert result.output["statistics_recomputed"] is False
         assert result.output["platform_weight_claim"] is False
+        assert result.output["source_type"] == "virtual"
+        assert result.output["virtual"] is True
+        assert any(
+            item["connector_id"] == "virtual_taobao"
+            and item["virtual"] is True
+            for item in result.output["references"]["source_provenance"][
+                "connectors"
+            ]
+        )
+        analysis = result.output["insights"][0]["analysis"]
+        quality_gate = analysis["evidence"]["quality_gate"]
+        statistical_conclusion = analysis["evidence"]["statistical_conclusion"]
+        assert quality_gate["status"] == "passed"
+        assert quality_gate["issues"] == []
+        assert statistical_conclusion == "positive_effect"
+        assert analysis["evidence"]["aa_gate"]["status"] == "passed"
         return {
             "virtual": True,
             "syncs": syncs,
             "experiment": experiment,
             "analysis_run_id": run["analysis_run_id"],
             "analysis_unchanged": before == after,
+            "quality_gate": quality_gate,
+            "statistical_conclusion": statistical_conclusion,
             "tool_kind": spec.kind,
             "tool_output": result.output,
+            "automatic_actions": [],
+        }
+
+    def _verify_forecasting(self, tenant_id: str, actor: str) -> dict[str, Any]:
+        operations = self.service.operations
+        store_id, sku_id = "virtual-shop-001", "YP-SKU-001"
+        syncs = {
+            resource: operations.sync(
+                tenant_id=tenant_id,
+                connector_id="virtual_taobao",
+                resource=resource,
+                actor=actor,
+            )
+            for resource in ("orders", "inventory")
+        }
+        rebuild = operations.forecasting.rebuild(
+            tenant_id,
+            DemandFactRebuild(
+                store_id=store_id,
+                sku_id=sku_id,
+                mode="full",
+                start_date="2026-06-01",
+                end_date="2026-07-21",
+                coverage_complete=True,
+            ),
+        )
+        try:
+            forecast = operations.forecast_runs.latest_run(
+                tenant_id, store_id=store_id, sku_id=sku_id
+            )
+            forecast_write_status = "reused"
+        except ForecastRunError as exc:
+            if str(exc) != "forecast_run_not_found":
+                raise
+            forecast_policy = operations.forecast_runs.resolve_policy(
+                tenant_id, store_id=store_id, sku_id=sku_id
+            )
+            forecast = operations.forecast_runs.run(
+                tenant_id,
+                store_id=store_id,
+                sku_id=sku_id,
+                policy=forecast_policy,
+            )
+            forecast_write_status = "created"
+        try:
+            plan = operations.inventory_plans.latest_plan(
+                tenant_id, store_id=store_id, sku_id=sku_id
+            )
+            if plan["forecast_run_id"] != forecast["run_id"]:
+                raise InventoryPlanningError("inventory_plan_forecast_superseded")
+            plan_write_status = "reused"
+        except InventoryPlanningError as exc:
+            if str(exc) not in {
+                "inventory_plan_not_found",
+                "inventory_plan_forecast_superseded",
+            }:
+                raise
+            planning_policy = operations.inventory_plans.resolve_policy(
+                tenant_id, store_id=store_id, sku_id=sku_id
+            ) or InventoryPlanningPolicy()
+            plan = operations.inventory_plans.create_plan(
+                tenant_id, forecast["run_id"], planning_policy
+            )
+            plan_write_status = "created"
+        before = {"forecast": forecast, "plan": plan}
+        context = ToolExecutionContext(
+            tenant_id=tenant_id,
+            client_id="simulation",
+            session_id="simulation-forecasting",
+            trace_id="simulation-forecasting",
+            trusted_context={"store_id": store_id},
+        )
+        tool_outputs: dict[str, Any] = {}
+        tool_kinds: dict[str, str] = {}
+        for name in ("get_demand_forecast", "get_inventory_plan"):
+            spec, arguments = self.service.tools.validate_selection(
+                name=name,
+                arguments={"store_id": store_id, "sku_id": sku_id},
+                requested_mode="observe",
+                context=context,
+            )
+            result = self.service.tools.execute(
+                spec=spec, arguments=arguments, context=context
+            )
+            assert result.postcondition_met is True
+            tool_kinds[name] = spec.kind
+            tool_outputs[name] = result.output
+        after = {
+            "forecast": operations.forecast_runs.get_run(
+                tenant_id, forecast["run_id"]
+            ),
+            "plan": operations.inventory_plans.get_plan(tenant_id, plan["plan_id"]),
+        }
+        assert all(item["virtual"] is True for item in syncs.values())
+        assert all(kind == "read" for kind in tool_kinds.values())
+        assert before == after
+        assert tool_outputs["get_demand_forecast"]["computed_now"] is False
+        assert tool_outputs["get_inventory_plan"]["computed_now"] is False
+        assert tool_outputs["get_inventory_plan"]["action_allowed"] is False
+        for output in tool_outputs.values():
+            assert output["source_type"] == "virtual"
+            assert output["virtual"] is True
+            assert any(
+                item["connector_id"] == "virtual_taobao"
+                and item["virtual"] is True
+                for item in output["references"]["source_provenance"][
+                    "connectors"
+                ]
+            )
+        assert plan["action_mode"] == "advisory_only"
+        return {
+            "virtual": True,
+            "syncs": syncs,
+            "demand_rebuild": rebuild,
+            "forecast": forecast,
+            "forecast_write_status": forecast_write_status,
+            "inventory_plan": plan,
+            "inventory_plan_write_status": plan_write_status,
+            "evidence_unchanged": before == after,
+            "tool_kinds": tool_kinds,
+            "tool_outputs": tool_outputs,
             "automatic_actions": [],
         }
 
