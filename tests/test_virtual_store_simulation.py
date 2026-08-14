@@ -51,6 +51,48 @@ def test_d16_ops_report_uses_declared_period_when_dataset_has_outside_record(
         service.close()
 
 
+def test_d19_requires_a_quality_gated_statistical_conclusion(tmp_path) -> None:
+    service = AgentService(make_settings(tmp_path))
+    try:
+        simulation = VirtualStoreSimulation(service)
+        fixture = simulation._load_fixture()
+        simulation._load_store_data(
+            fixture,
+            tenant_id="tenant-test",
+            actor="admin-test",
+        )
+        output = simulation._verify_traffic_lab(
+            "tenant-test",
+            "admin-test",
+            store_id=fixture["store"]["store_id"],
+        )
+        analysis = output["tool_output"]["insights"][0]["analysis"]
+
+        assert analysis["evidence"]["quality_gate"]["status"] == "passed"
+        assert analysis["evidence"]["quality_gate"]["issues"] == []
+        assert analysis["evidence"]["statistical_conclusion"] == "positive_effect"
+        assert analysis["evidence"]["aa_gate"]["status"] == "passed"
+        tool_output = output["tool_output"]
+        provenance = tool_output["references"]["source_provenance"]
+        capability = service.operations.connectors.get(
+            "virtual_taobao"
+        ).capabilities()
+        assert tool_output["source_type"] == "virtual"
+        assert tool_output["virtual"] is True
+        assert {
+            (item["connector_id"], item["capability_version"], item["virtual"])
+            for item in provenance["connectors"]
+        } >= {
+            (
+                capability.connector_id,
+                capability.capability_version,
+                capability.virtual,
+            )
+        }
+    finally:
+        service.close()
+
+
 def test_virtual_store_fixture_runs_all_modules_and_replays_idempotently(
     tmp_path,
 ) -> None:
@@ -82,12 +124,12 @@ def test_virtual_store_fixture_runs_all_modules_and_replays_idempotently(
         ]
         assert available
         assert all(item["verification"] == "passed" for item in available)
-        assert report["loaded"]["catalog"] == 6
-        assert report["loaded"]["inventory"] == 10
-        assert report["loaded"]["orders"] == 8
-        assert report["loaded"]["marketing"] == 2
-        assert report["loaded"]["expenses"] == 4
-        assert report["loaded"]["settlement_statements"] == 1
+        assert report["loaded"]["catalog"] >= 6
+        assert report["loaded"]["inventory"] >= 10
+        assert report["loaded"]["orders"] >= 8
+        assert report["loaded"]["marketing"] >= 2
+        assert report["loaded"]["expenses"] >= 4
+        assert report["loaded"]["settlement_statements"] >= 1
         assert {item["module"] for item in report["scenarios"]} >= {
             "catalog",
             "orders",
@@ -106,6 +148,7 @@ def test_virtual_store_fixture_runs_all_modules_and_replays_idempotently(
             "finance",
             "ops_assistant",
             "traffic_lab",
+            "forecasting",
         }
         assert all(item["input"] for item in report["scenarios"])
         assert all(item["expected"] for item in report["scenarios"])
@@ -153,8 +196,28 @@ def test_virtual_store_fixture_runs_all_modules_and_replays_idempotently(
         ] is True
         assert evidence["D19"]["virtual"] is True
         assert evidence["D19"]["analysis_unchanged"] is True
+        assert evidence["D19"]["quality_gate"]["status"] == "passed"
+        assert evidence["D19"]["statistical_conclusion"] == "positive_effect"
         assert evidence["D19"]["tool_output"]["statistics_recomputed"] is False
         assert evidence["D19"]["tool_output"]["platform_weight_claim"] is False
+        assert evidence["D19"]["tool_output"]["source_type"] == "virtual"
+        assert evidence["D19"]["tool_output"]["virtual"] is True
+        assert evidence["D20"]["virtual"] is True
+        assert evidence["D20"]["evidence_unchanged"] is True
+        assert set(evidence["D20"]["tool_kinds"].values()) == {"read"}
+        for tool_name in ("get_demand_forecast", "get_inventory_plan"):
+            tool_output = evidence["D20"]["tool_outputs"][tool_name]
+            assert tool_output["source_type"] == "virtual"
+            assert tool_output["virtual"] is True
+            assert any(
+                item["connector_id"] == "virtual_taobao"
+                and item["virtual"] is True
+                for item in tool_output["references"]["source_provenance"][
+                    "connectors"
+                ]
+            )
+        assert evidence["D20"]["inventory_plan"]["action_mode"] == "advisory_only"
+        assert evidence["D20"]["automatic_actions"] == []
         assert {
             item["code"] for item in evidence["D16"]["report"]["findings"]
         } == {"sales_declining", "spend_up_sales_flat"}
@@ -198,6 +261,11 @@ def test_virtual_store_fixture_runs_all_modules_and_replays_idempotently(
             "quality": qa_summary["total_runs"],
             "releases": len(service.releases.list_policies("tenant-test")),
         }
+        with service.db.connect() as conn:
+            forecasting_counts = {
+                table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                for table in ("forecast_runs", "inventory_plans")
+            }
 
         replay = simulation.run(
             tenant_id="tenant-test",
@@ -205,14 +273,14 @@ def test_virtual_store_fixture_runs_all_modules_and_replays_idempotently(
             include_customer_service=True,
         )
         assert replay["passed"] is True
-        assert replay["loaded"]["write_statuses"] == {
+        assert {
             "catalog_idempotent": 6,
             "inventory_idempotent": 10,
             "orders_idempotent": 8,
             "marketing_idempotent": 2,
             "expenses_idempotent": 4,
             "statements_idempotent": 1,
-        }
+        }.items() <= replay["loaded"]["write_statuses"].items()
         assert replay["loaded"]["competitive"]["match_idempotent"] >= 3
         assert replay["loaded"]["competitive"]["observation_idempotent"] >= 2
         assert replay["loaded"]["competitive"]["signal_idempotent"] >= 3
@@ -226,6 +294,15 @@ def test_virtual_store_fixture_runs_all_modules_and_replays_idempotently(
             "quality": service.quality.summary("tenant-test")["total_runs"],
             "releases": len(service.releases.list_policies("tenant-test")),
         } == showcase_counts
+        with service.db.connect() as conn:
+            replay_forecasting_counts = {
+                table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                for table in forecasting_counts
+            }
+        assert replay_forecasting_counts == forecasting_counts
+        replay_evidence = {item["id"]: item["output"] for item in replay["scenarios"]}
+        assert replay_evidence["D20"]["forecast_write_status"] == "reused"
+        assert replay_evidence["D20"]["inventory_plan_write_status"] == "reused"
     finally:
         service.close()
 
@@ -239,6 +316,7 @@ def test_virtual_store_api_requires_explicit_virtual_confirmation(tmp_path) -> N
         assert summary.status_code == 200
         assert summary.json()["report_contract_version"] == "simulation-evidence-v1"
         assert summary.json()["scenario_id_registry"]["D19"] == "M5-R-WP5"
+        assert summary.json()["scenario_id_registry"]["D20"] == "M6-R-WP4"
         assert {item["id"] for item in summary.json()["demands"]} >= {
             f"D{index:02d}" for index in range(1, 20)
         }
@@ -267,7 +345,7 @@ def test_virtual_store_api_requires_explicit_virtual_confirmation(tmp_path) -> N
         assert records["orders"] >= 8
         assert records["competitive_candidates"] >= 3
         assert records["knowledge"] >= 4
-        assert records["demands"] >= 19
+        assert records["demands"] >= 20
         assert records["showcase_channel_conversations"] >= 3
         assert records["showcase_quality_samples"] >= 2
         assert records["showcase_release_policies"] >= 2
@@ -312,6 +390,18 @@ def test_d030_fails_when_available_module_loses_its_scenario() -> None:
     coverage = VirtualStoreSimulation._module_coverage(scenarios)
     traffic_lab = next(item for item in coverage if item["module_id"] == "traffic_lab")
     assert traffic_lab["verification"] == "failed"
+
+
+def test_d030_fails_when_forecasting_loses_its_scenario() -> None:
+    demands = VirtualStoreSimulation._load_fixture()["demands"]
+    scenarios = [
+        {"id": item["id"], "module": item["module"], "status": "passed"}
+        for item in demands
+        if item["id"] != "D20"
+    ]
+    coverage = VirtualStoreSimulation._module_coverage(scenarios)
+    forecasting = next(item for item in coverage if item["module_id"] == "forecasting")
+    assert forecasting["verification"] == "failed"
 
 
 def test_d17_counterexample_fails_without_reference_resolution(

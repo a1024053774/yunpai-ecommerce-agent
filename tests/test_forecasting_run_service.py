@@ -48,7 +48,7 @@ class _RecordingEngine(ForecastEngine):
         return super().evaluate(self.received_series)
 
 
-def _facts(values: list[int]) -> list[dict]:
+def _facts(values: list[int | None]) -> list[dict]:
     start = date(2026, 1, 1)
     return [
         {
@@ -165,12 +165,125 @@ def test_failed_candidate_is_persisted_without_blocking_the_run(tmp_path) -> Non
     assert len(result["points"]) == 30
 
 
+def test_final_forecast_fallback_selection_and_failure_are_persisted(tmp_path) -> None:
+    values: list[int | None] = [1, 2, 3, 4, 5, 6, 7] * 9
+    values[-1] = None
+    _db, service = _service(tmp_path, _facts(values))
+
+    result = service.run(TENANT, store_id=STORE, sku_id=SKU)
+
+    assert result["champion_model"] == "rolling_mean"
+    assert result["champion_reason"]["initial_champion_model"] == (
+        "seasonal_naive_7"
+    )
+    assert result["champion_reason"]["fallback_applied"] is True
+    failures = result["champion_reason"]["final_forecast_attempts"]
+    assert failures[0]["model_name"] == "seasonal_naive_7"
+    assert failures[0]["failure_reason"] == (
+        "ValueError:complete_seven_day_season_required"
+    )
+    persisted_ranking = result["candidate_models"]["ranking"]
+    seasonal = next(
+        item for item in persisted_ranking
+        if item["model_name"] == "seasonal_naive_7"
+    )
+    assert seasonal["eligible_for_final_forecast"] is False
+    model_failure = next(
+        item for item in result["anomalies"]
+        if item["anomaly_type"] == "model_failure"
+    )
+    assert {
+        "model_name": "seasonal_naive_7",
+        "phase": "final_forecast",
+        "failure_reason": "ValueError:complete_seven_day_season_required",
+    }.items() <= model_failure["evidence"]["failures"][0].items()
+
+
 def test_get_run_is_tenant_isolated(tmp_path) -> None:
     _db, service = _service(tmp_path, _facts([4] * 56))
     run = service.run(TENANT, store_id=STORE, sku_id=SKU)
 
     with pytest.raises(ForecastRunError, match="forecast_run_not_found"):
         service.get_run("other-tenant", run["run_id"])
+
+
+def test_policy_resolution_prefers_sku_override_then_store_default(tmp_path) -> None:
+    db, service = _service(tmp_path, _facts([4] * 56))
+    store_default = ForecastPolicy(
+        policy_version="forecast-store-default-v1",
+        minimum_history_days=21,
+    )
+    sku_override = ForecastPolicy(
+        policy_version="forecast-sku-override-v1",
+        minimum_history_days=28,
+    )
+    with db.connect() as conn:
+        service._ensure_policy(
+            conn,
+            TENANT,
+            STORE,
+            None,
+            service._policy_evidence(store_default),
+            "2026-08-12T00:00:00+00:00",
+        )
+
+    resolved_default = service.resolve_policy(
+        TENANT, store_id=STORE, sku_id="sku-without-override"
+    )
+    assert resolved_default is not None
+    assert resolved_default.policy_version == "forecast-store-default-v1"
+    assert resolved_default.minimum_history_days == 21
+
+    with db.connect() as conn:
+        service._ensure_policy(
+            conn,
+            TENANT,
+            STORE,
+            SKU,
+            service._policy_evidence(sku_override),
+            "2026-08-12T01:00:00+00:00",
+        )
+
+    resolved_override = service.resolve_policy(TENANT, store_id=STORE, sku_id=SKU)
+    assert resolved_override is not None
+    assert resolved_override.policy_version == "forecast-sku-override-v1"
+    assert resolved_override.minimum_history_days == 28
+
+
+def test_policy_resolution_breaks_equal_timestamps_by_newest_rowid(tmp_path) -> None:
+    db, service = _service(tmp_path, _facts([4] * 56))
+    created_at = "2026-08-12T00:00:00+00:00"
+    older = ForecastPolicy(
+        policy_version="forecast-same-time-zzz",
+        minimum_history_days=21,
+    )
+    newer = ForecastPolicy(
+        policy_version="forecast-same-time-aaa",
+        minimum_history_days=28,
+    )
+    with db.connect() as conn:
+        for policy in (older, newer):
+            service._ensure_policy(
+                conn,
+                TENANT,
+                STORE,
+                SKU,
+                service._policy_evidence(policy),
+                created_at,
+            )
+        conn.execute(
+            """CREATE INDEX test_forecast_policy_scan_order
+            ON forecast_policies(
+                tenant_id, store_id, sku_id, policy_version DESC
+            )"""
+        )
+        conn.execute("ANALYZE")
+
+    resolved = service.resolve_policy(TENANT, store_id=STORE, sku_id=SKU)
+
+    assert resolved is not None
+    assert resolved.policy_version == "forecast-same-time-aaa"
+    assert resolved.minimum_history_days == 28
 
 
 def test_all_failed_candidates_return_an_explicit_engine_failure(tmp_path) -> None:
@@ -182,5 +295,8 @@ def test_all_failed_candidates_return_an_explicit_engine_failure(tmp_path) -> No
     )
     _db, service = _service(tmp_path, _facts([5] * 56), engine=engine)
 
-    with pytest.raises(ForecastRunError, match="forecast_engine_failed:forecast_baseline_failed"):
+    with pytest.raises(
+        ForecastRunError,
+        match="forecast_engine_failed:forecast_final_candidates_failed",
+    ):
         service.run(TENANT, store_id=STORE, sku_id=SKU)

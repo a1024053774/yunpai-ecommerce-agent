@@ -31,7 +31,8 @@ def test_workspace_replaces_default_admin_page_and_preserves_advanced_console(tm
         workspace = client.get("/admin")
         assert workspace.status_code == 200
         assert 'data-app="yunpai-agent-workspace"' in workspace.text
-        assert "/v1/admin/workspace/chat/stream" in workspace.text
+        assert "/v1/admin/workspace/conversations" in workspace.text
+        assert "/chat/stream" in workspace.text
         assert "今天想把什么交给我" in workspace.text
         assert "今日态势" in workspace.text
         assert "需要你关注" in workspace.text
