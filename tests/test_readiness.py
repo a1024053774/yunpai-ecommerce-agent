@@ -6,6 +6,7 @@ from ecommerce_agent.database import Database
 from ecommerce_agent.forecasting.readiness import (
     ReadinessCategory,
     SignalReadinessService,
+    TimeGranularity,
 )
 from ecommerce_agent.readonly_data import (
     EvidenceState,
@@ -29,7 +30,13 @@ def _make_db(path) -> Database:
     return db
 
 
-def _insert_demand_fact(conn, *, sku_id: str = "sku-1") -> None:
+def _insert_demand_fact(
+    conn,
+    *,
+    sku_id: str = "sku-1",
+    fact_id: str | None = None,
+    business_date: str = "2026-08-16",
+) -> None:
     conn.execute(
         """INSERT INTO demand_daily_facts (
             id, tenant_id, store_id, sku_id, business_date,
@@ -38,11 +45,11 @@ def _insert_demand_fact(conn, *, sku_id: str = "sku-1") -> None:
             quality_flags_json, lineage_json, payload_hash, created_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
-            f"fact-{sku_id}",
+            fact_id or f"fact-{sku_id}",
             TENANT,
             STORE,
             sku_id,
-            "2026-08-16",
+            business_date,
             "false",
             "{}",
             "unknown",
@@ -53,6 +60,40 @@ def _insert_demand_fact(conn, *, sku_id: str = "sku-1") -> None:
             "{}",
             "a" * 64,
             "2026-08-16T00:00:00+00:00",
+        ),
+    )
+
+
+def _insert_marketing(conn) -> None:
+    conn.execute(
+        """INSERT INTO marketing_campaign_metrics (
+            id, tenant_id, connector_id, store_id, campaign_id, metric_date,
+            campaign_name, channel, objective, status, spend, attributed_revenue,
+            attributed_orders, impressions, clicks, source_type, source_updated_at,
+            payload_hash, version, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            "campaign-1",
+            TENANT,
+            "connector-1",
+            STORE,
+            "camp-1",
+            "2026-08-16",
+            "campaign",
+            "search",
+            "sales",
+            "active",
+            "10.00",
+            "50.00",
+            2,
+            100,
+            10,
+            "virtual",
+            "2026-08-17T00:00:00+00:00",
+            "g" * 64,
+            1,
+            "2026-08-17T00:00:00+00:00",
+            "2026-08-17T00:00:00+00:00",
         ),
     )
 
@@ -317,6 +358,33 @@ def test_traffic_marks_actual_with_sku_coverage_via_revision(tmp_path) -> None:
     traffic = next(item for item in items if item.input_key == "traffic_metric_buckets")
     assert traffic.evidence_state is EvidenceState.ACTUAL
     assert traffic.sku_coverage == 1
+    assert traffic.granularity is None
+
+
+def test_sku_coverage_counts_distinct_skus_not_rows(tmp_path) -> None:
+    db = _make_db(tmp_path / "sku-distinct.sqlite3")
+    with db.connect() as conn:
+        _insert_demand_fact(conn, sku_id="sku-1", fact_id="f1", business_date="2026-08-15")
+        _insert_demand_fact(conn, sku_id="sku-1", fact_id="f2", business_date="2026-08-16")
+        _insert_demand_fact(conn, sku_id="sku-2", fact_id="f3", business_date="2026-08-16")
+    items = SignalReadinessService(db).project(tenant_id=TENANT, store_id=STORE)
+    demand = next(item for item in items if item.input_key == "demand_daily_facts")
+    assert demand.evidence_state is EvidenceState.ACTUAL
+    assert demand.sku_coverage == 2
+    assert demand.granularity is TimeGranularity.DAILY
+
+
+def test_campaign_level_signal_has_no_sku_coverage(tmp_path) -> None:
+    db = _make_db(tmp_path / "campaign.sqlite3")
+    with db.connect() as conn:
+        _insert_marketing(conn)
+    items = SignalReadinessService(db).project(tenant_id=TENANT, store_id=STORE)
+    marketing = next(
+        item for item in items if item.input_key == "marketing_campaign_metrics"
+    )
+    assert marketing.evidence_state is EvidenceState.ACTUAL
+    assert marketing.sku_coverage is None
+    assert marketing.granularity is TimeGranularity.DAILY
 
 
 def test_after_sale_cases_mark_actual(tmp_path) -> None:

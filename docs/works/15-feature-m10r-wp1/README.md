@@ -16,7 +16,8 @@ Commit：`31e5da4`（feature/m10r-wp1-signal-readiness）
 - `scripts/m10r_wp1_readiness_report.py`
   - 输出 JSON 与 Markdown 两份准备度报告，候选信号统一标注“未使用（WP2 接线）”。
 - `tests/test_readiness.py`
-  - 8 个用例覆盖空店、需求、流量、退款、竞品 approved-only、field evidence 覆盖。
+  - 10 个用例覆盖空店、需求、流量、退款、竞品 approved-only、field evidence 覆盖，
+    以及“店铺总量不复制成 SKU / 日·月粒度不混”的显式反证。
 
 ## 测试与门禁
 
@@ -29,7 +30,7 @@ $env:HTTPS_PROXY='http://127.0.0.1:9'
 git diff --check
 ```
 
-- `pytest tests/test_readiness.py`：`8 passed`。
+- `pytest tests/test_readiness.py`：`10 passed`。
 - `compileall`：退出 0；`git diff --check`：无输出。
 
 ## 报告复跑
@@ -50,6 +51,9 @@ git diff --check
   `test_competitor_signal_requires_approved_match` 如期失败（未批准观测被计入信号）；还原后通过。
 - 临时跳过 field evidence 读取后，
   `test_missing_field_evidence_overrides_row_presence` 如期失败（按行存在错误标为 actual）；还原后通过。
+- 若把 SKU 覆盖改为按行计数或让 campaign 级信号伪造 SKU，
+  `test_sku_coverage_counts_distinct_skus_not_rows` /
+  `test_campaign_level_signal_has_no_sku_coverage` 会失败；还原后通过。
 
 ## 范围
 
