@@ -19,6 +19,7 @@ from .forecasting import (
     PRODUCT_FORECAST_HORIZONS,
     SUPPORTED_FORECAST_MODELS,
 )
+from .forecasting.product import ForecastProductService
 from .service import AgentService
 
 
@@ -55,6 +56,13 @@ class ForecastPolicyUpdate(BaseModel):
     )
 
 
+class ProductBatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    store_id: str = Field(min_length=1, max_length=128)
+    sku_ids: list[str] = Field(min_length=1, max_length=200)
+
+
 def build_forecasting_router(
     service: AgentService,
     require_admin: Callable[..., AdminPrincipal],
@@ -63,6 +71,9 @@ def build_forecasting_router(
     facts = service.operations.forecasting
     runs = service.operations.forecast_runs
     plans = service.operations.inventory_plans
+    product = ForecastProductService(
+        service.db, facts=facts, runs=runs, plans=plans
+    )
 
     def call(method, *args, **kwargs):
         try:
@@ -315,5 +326,57 @@ def build_forecasting_router(
             risk_level=risk_level,
             limit=limit,
         )
+
+
+    @router.post("/batch/runs")
+    def batch_runs(
+        payload: ProductBatchRequest,
+        admin: AdminPrincipal = Depends(require_admin),
+    ) -> dict[str, Any]:
+        results = product.run_batch(
+            admin.tenant_id, store_id=payload.store_id, sku_ids=payload.sku_ids
+        )
+        service.db.audit(
+            "forecasting.batch.runs",
+            admin.admin_id,
+            payload.store_id,
+            {
+                "sku_count": len(payload.sku_ids),
+                "succeeded": sum(1 for item in results if item["status"] == "completed"),
+            },
+            admin.tenant_id,
+        )
+        return {"results": results}
+
+
+    @router.post("/skus/{sku_id}/rerun")
+    def rerun_product(
+        sku_id: str,
+        store_id: str = Query(min_length=1, max_length=128),
+        admin: AdminPrincipal = Depends(require_admin),
+    ) -> dict[str, Any]:
+        result = product.rerun(
+            admin.tenant_id, store_id=store_id, sku_id=sku_id
+        )
+        service.db.audit(
+            "forecasting.product.rerun",
+            admin.admin_id,
+            sku_id,
+            {"store_id": store_id, "status": result["status"]},
+            admin.tenant_id,
+        )
+        return result
+
+
+    @router.get("/skus/{sku_id}/review")
+    def review_product(
+        sku_id: str,
+        store_id: str = Query(min_length=1, max_length=128),
+        admin: AdminPrincipal = Depends(require_admin),
+    ) -> dict[str, Any]:
+        return product.review(
+            tenant_id=admin.tenant_id, store_id=store_id, sku_id=sku_id
+        )
+
 
     return router
