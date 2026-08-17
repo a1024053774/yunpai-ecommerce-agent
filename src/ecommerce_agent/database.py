@@ -3941,7 +3941,7 @@ class Database:
                 """SELECT id, conversation_id, role, content, status, trace_id,
                 processing_json, created_at, updated_at FROM workspace_messages
                 WHERE conversation_id=? AND tenant_id=? AND admin_id=?
-                ORDER BY created_at, id LIMIT ?""",
+                ORDER BY created_at, rowid LIMIT ?""",
                 (conversation_id, tenant_id, admin_id, max(1, min(limit, 500))),
             ).fetchall()
         result = []
