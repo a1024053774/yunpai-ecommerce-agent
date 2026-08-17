@@ -1,5 +1,7 @@
 # M10-R WP1 预测/补货信号适配与数据准备度 — 交付证据
 
+Commit：`31e5da4`（feature/m10r-wp1-signal-readiness）
+
 ## 交付内容
 
 - `src/ecommerce_agent/forecasting/readiness.py`
