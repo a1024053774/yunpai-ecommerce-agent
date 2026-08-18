@@ -3590,10 +3590,11 @@ class Database:
                 "id", "tenant_id", "admin_id", "title", "status", "message_count",
                 "created_at", "updated_at",
             },
-            "workspace_messages": {
-                "id", "conversation_id", "tenant_id", "admin_id", "role", "content",
-                "status", "trace_id", "processing_json", "created_at", "updated_at",
-            },
+"workspace_messages": {
+"id", "conversation_id", "tenant_id", "admin_id", "role", "content",
+"status", "trace_id", "tool_name", "tool_label", "tool_summary",
+"requires_confirmation", "action_summary", "processing_json", "created_at", "updated_at",
+},
             "qa_results": {"tenant_id", "issues_json", "review_status", "record_version"},
             "channel_reply_drafts": {"outbox_id", "record_version", "status"},
             "channel_outbox": {

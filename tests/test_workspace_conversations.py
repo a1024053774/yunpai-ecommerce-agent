@@ -283,6 +283,25 @@ def test_schema_31_workspace_tables_are_idempotent(tmp_path) -> None:
     assert {"workspace_conversations", "workspace_messages"} <= tables
 
 
+def test_schema_validation_catches_missing_workspace_message_column(
+    tmp_path,
+) -> None:
+    from ecommerce_agent.database import Database
+
+    path = tmp_path / "schema-check.db"
+    db = Database(path)
+    db.initialize()
+    with db.connect() as conn:
+        conn.execute("ALTER TABLE workspace_messages DROP COLUMN tool_name")
+
+    failed = False
+    try:
+        Database(path).initialize()
+    except Exception:
+        failed = True
+    assert failed
+
+
 def test_workspace_stream_persists_user_answer_and_processing(tmp_path, monkeypatch) -> None:
     app = create_app(make_settings(tmp_path))
     decisions = iter(
