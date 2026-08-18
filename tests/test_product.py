@@ -87,6 +87,16 @@ def test_review_on_empty_store_returns_readonly_view(tmp_path) -> None:
     assert review["plan"] is None
     assert review["risks"] == []
     assert len(review["readiness"]) == 11
+    assert all(
+        item["signal_usage"] == "not_used"
+        for item in review["readiness"]
+        if item["category"] == "candidate_signal"
+    )
+    assert all(
+        item["signal_usage"] is None
+        for item in review["readiness"]
+        if item["category"] != "candidate_signal"
+    )
 
 
 def test_run_batch_isolates_failures(tmp_path) -> None:

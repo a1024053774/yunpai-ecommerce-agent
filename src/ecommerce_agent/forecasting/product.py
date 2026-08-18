@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from .planning import InventoryPlanningError, InventoryPlanningPolicy
-from .readiness import SignalReadinessService
+from .readiness import ReadinessCategory, SignalReadinessService
 from .run_service import ForecastRunError
 
 
@@ -132,6 +132,11 @@ class ForecastProductService:
                     "data_as_of": item.data_as_of,
                     "sku_coverage": item.sku_coverage,
                     "missing_reason": item.missing_reason,
+                    "signal_usage": (
+                        "not_used"
+                        if item.category is ReadinessCategory.CANDIDATE_SIGNAL
+                        else None
+                    ),
                 }
                 for item in readiness
             ],
