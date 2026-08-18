@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from fastapi.responses import StreamingResponse
 
 from .auth import AdminPrincipal
+from .text_utils import redact_sensitive
 from .workspace_agent import (
     WorkspaceAgent,
     WorkspaceChatRequest,
@@ -31,6 +32,13 @@ class WorkspaceConversationChatRequest(BaseModel):
     context: WorkspaceContext = Field(default_factory=WorkspaceContext)
 
 
+class WorkspaceConversationUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str | None = Field(default=None, min_length=1, max_length=120)
+    status: str | None = Field(default=None, pattern=r"^(active|archived)$")
+
+
 def build_workspace_router(
     agent: WorkspaceAgent,
     require_admin: Callable[..., AdminPrincipal],
@@ -48,7 +56,35 @@ def build_workspace_router(
             admin_id=admin.admin_id,
             title=derive_workspace_title(title),
         )
-        return {key: conversation[key] for key in ("id", "title", "status", "message_count", "created_at", "updated_at")}
+        return {
+            key: conversation[key]
+            for key in ("id", "title", "status", "message_count", "created_at", "updated_at")
+        }
+
+
+    @router.patch("/conversations/{conversation_id}")
+    def update_conversation(
+        conversation_id: str,
+        payload: WorkspaceConversationUpdateRequest,
+        admin: AdminPrincipal = Depends(require_admin),
+    ) -> dict:
+        try:
+            conversation = agent.service.db.update_workspace_conversation(
+                tenant_id=admin.tenant_id,
+                admin_id=admin.admin_id,
+                conversation_id=conversation_id,
+                title=payload.title,
+                status=payload.status,
+            )
+        except KeyError:
+            raise HTTPException(
+                status_code=404, detail="workspace conversation not found"
+            )
+        return {
+            key: conversation[key]
+            for key in ("id", "title", "status", "message_count", "created_at", "updated_at")
+        }
+
 
     @router.get("/conversations")
     def list_conversations(
@@ -104,6 +140,12 @@ def build_workspace_router(
         )
         if conversation is None:
             raise HTTPException(status_code=404, detail="workspace conversation not found")
+        db.recover_stale_generating(
+            tenant_id=admin.tenant_id,
+            admin_id=admin.admin_id,
+            conversation_id=conversation_id,
+        )
+        safe_message, _ = redact_sensitive(payload.message)
         persisted = db.list_workspace_messages(
             tenant_id=admin.tenant_id,
             admin_id=admin.admin_id,
@@ -120,37 +162,50 @@ def build_workspace_router(
                 tenant_id=admin.tenant_id,
                 admin_id=admin.admin_id,
                 conversation_id=conversation_id,
-                title=derive_workspace_title(payload.message),
+                title=derive_workspace_title(safe_message),
             )
         db.append_workspace_message(
             tenant_id=admin.tenant_id,
             admin_id=admin.admin_id,
             conversation_id=conversation_id,
             role="user",
-            content=payload.message,
+            content=safe_message,
         )
         request = WorkspaceChatRequest(
             session_id=conversation_id,
-            message=payload.message,
+            message=safe_message,
             history=history,
             context=payload.context,
         )
 
         def events():
             latest_tool: dict = {}
+            placeholder = db.append_workspace_message(
+                tenant_id=admin.tenant_id,
+                admin_id=admin.admin_id,
+                conversation_id=conversation_id,
+                role="assistant",
+                content="",
+                status="generating",
+                processing={"stage": "generating"},
+            )
+            message_id = placeholder["id"]
             try:
                 for event in agent.stream(request, admin):
                     if event.get("event") == "tool":
                         latest_tool = event
                     if event.get("event") == "done":
                         result = event.get("response") or {}
-                        db.append_workspace_message(
+                        safe_answer, _ = redact_sensitive(
+                            str(result.get("answer") or "")
+                        )
+                        db.update_workspace_message(
                             tenant_id=admin.tenant_id,
                             admin_id=admin.admin_id,
                             conversation_id=conversation_id,
-                            role="assistant",
-                            content=str(result.get("answer") or ""),
-                            trace_id=result.get("trace_id"),
+                            message_id=message_id,
+                            status="completed",
+                            content=safe_answer,
                             processing={
                                 "stage": "completed",
                                 "trace_id": result.get("trace_id"),
@@ -166,17 +221,33 @@ def build_workspace_router(
             except Exception as exc:
                 trace_id = f"workspace-error-{uuid.uuid4().hex}"
                 message = "本轮回答未完成，请稍后重试。"
-                db.append_workspace_message(
+                db.update_workspace_message(
                     tenant_id=admin.tenant_id,
                     admin_id=admin.admin_id,
                     conversation_id=conversation_id,
-                    role="assistant",
-                    content=message,
+                    message_id=message_id,
                     status="incomplete",
-                    trace_id=trace_id,
+                    content=message,
                     processing={"stage": "error", "error_type": type(exc).__name__},
                 )
                 yield f"data: {json.dumps({'event': 'error', 'code': 'workspace_stream_failed', 'message': message, 'trace_id': trace_id}, ensure_ascii=False)}\n\n"
+            finally:
+                current = db.get_workspace_message(
+                    tenant_id=admin.tenant_id,
+                    admin_id=admin.admin_id,
+                    conversation_id=conversation_id,
+                    message_id=message_id,
+                )
+                if current is not None and current["status"] == "generating":
+                    db.update_workspace_message(
+                        tenant_id=admin.tenant_id,
+                        admin_id=admin.admin_id,
+                        conversation_id=conversation_id,
+                        message_id=message_id,
+                        status="incomplete",
+                        content="本轮回答未完成，请稍后重试。",
+                        processing={"stage": "error", "error_type": "generator_exit"},
+                    )
 
         return StreamingResponse(
             events(),

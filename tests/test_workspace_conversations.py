@@ -160,6 +160,91 @@ def test_list_workspace_messages_returns_newest_within_limit(tmp_path) -> None:
     ]
 
 
+def test_workspace_persists_redacted_user_message(tmp_path, monkeypatch) -> None:
+    app = create_app(make_settings(tmp_path))
+    monkeypatch.setattr(
+        app.state.agent.model,
+        "generate_json",
+        lambda messages, **kwargs: {
+            "mode": "answer",
+            "response": "已核对",
+            "reason": "测试",
+        },
+    )
+    monkeypatch.setattr(
+        app.state.agent.model,
+        "stream_generate",
+        lambda messages: iter(["已核对"]),
+    )
+    with TestClient(app) as client:
+        conversation = client.post(
+            "/v1/admin/workspace/conversations", headers=ADMIN_HEADERS
+        ).json()
+        client.post(
+            f"/v1/admin/workspace/conversations/{conversation['id']}/chat/stream",
+            headers=ADMIN_HEADERS,
+            json={"message": "我的手机 13800138000，地址上海测试路 1 号", "context": {}},
+        )
+        messages = client.get(
+            f"/v1/admin/workspace/conversations/{conversation['id']}/messages",
+            headers=ADMIN_HEADERS,
+        ).json()
+    assert "13800138000" not in messages[0]["content"]
+    assert "138****8000" in messages[0]["content"]
+
+
+def test_workspace_conversation_can_be_renamed_and_archived(tmp_path) -> None:
+    app = create_app(make_settings(tmp_path))
+    with TestClient(app) as client:
+        conversation = client.post(
+            "/v1/admin/workspace/conversations", headers=ADMIN_HEADERS
+        ).json()
+        renamed = client.patch(
+            f"/v1/admin/workspace/conversations/{conversation['id']}",
+            headers=ADMIN_HEADERS,
+            json={"title": "改名后的会话"},
+        )
+        assert renamed.status_code == 200
+        assert renamed.json()["title"] == "改名后的会话"
+        archived = client.patch(
+            f"/v1/admin/workspace/conversations/{conversation['id']}",
+            headers=ADMIN_HEADERS,
+            json={"status": "archived"},
+        )
+        assert archived.status_code == 200
+        assert archived.json()["status"] == "archived"
+
+
+def test_recover_stale_generating_marks_generating_incomplete(tmp_path) -> None:
+    app = create_app(make_settings(tmp_path))
+    db = app.state.agent.db
+    created = db.create_workspace_conversation(
+        tenant_id="tenant-test", admin_id="admin-test", title="恢复"
+    )
+    message = db.append_workspace_message(
+        tenant_id="tenant-test",
+        admin_id="admin-test",
+        conversation_id=created["id"],
+        role="assistant",
+        content="",
+        status="generating",
+        processing={"stage": "generating"},
+    )
+    recovered = db.recover_stale_generating(
+        tenant_id="tenant-test",
+        admin_id="admin-test",
+        conversation_id=created["id"],
+    )
+    assert recovered == 1
+    current = db.get_workspace_message(
+        tenant_id="tenant-test",
+        admin_id="admin-test",
+        conversation_id=created["id"],
+        message_id=message["id"],
+    )
+    assert current["status"] == "incomplete"
+
+
 def test_workspace_conversation_scope_is_not_disclosed(tmp_path) -> None:
     app = create_app(make_settings(tmp_path))
 

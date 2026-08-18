@@ -3893,6 +3893,45 @@ class Database:
                 (title, utc_now(), conversation_id, tenant_id, admin_id),
             )
 
+    def update_workspace_conversation(
+        self,
+        *,
+        tenant_id: str,
+        admin_id: str,
+        conversation_id: str,
+        title: str | None = None,
+        status: str | None = None,
+    ) -> dict[str, Any]:
+        if status is not None and status not in {"active", "archived"}:
+            raise ValueError("workspace_conversation_status_invalid")
+        with self._write_lock, self.connect() as conn:
+            row = conn.execute(
+                """SELECT * FROM workspace_conversations
+                   WHERE id=? AND tenant_id=? AND admin_id=?""",
+                (conversation_id, tenant_id, admin_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError("workspace_conversation_not_found")
+            updated_at = utc_now()
+            if title is not None:
+                conn.execute(
+                    """UPDATE workspace_conversations SET title=?, updated_at=?
+                       WHERE id=? AND tenant_id=? AND admin_id=?""",
+                    (title, updated_at, conversation_id, tenant_id, admin_id),
+                )
+            if status is not None:
+                conn.execute(
+                    """UPDATE workspace_conversations SET status=?, updated_at=?
+                       WHERE id=? AND tenant_id=? AND admin_id=?""",
+                    (status, updated_at, conversation_id, tenant_id, admin_id),
+                )
+            updated = conn.execute(
+                """SELECT * FROM workspace_conversations
+                   WHERE id=? AND tenant_id=? AND admin_id=?""",
+                (conversation_id, tenant_id, admin_id),
+            ).fetchone()
+        return dict(updated)
+
     def append_workspace_message(
         self, *, tenant_id: str, admin_id: str, conversation_id: str,
         role: str, content: str, status: str = "completed", trace_id: str | None = None,
@@ -3932,6 +3971,92 @@ class Database:
         message.pop("processing_json")
         message["updated_at"] = message["created_at"]
         return message
+
+    def get_workspace_message(
+        self,
+        *,
+        tenant_id: str,
+        admin_id: str,
+        conversation_id: str,
+        message_id: str,
+    ) -> dict[str, Any] | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                """SELECT * FROM workspace_messages
+                   WHERE id=? AND tenant_id=? AND admin_id=? AND conversation_id=?""",
+                (message_id, tenant_id, admin_id, conversation_id),
+            ).fetchone()
+        if row is None:
+            return None
+        result = dict(row)
+        result["processing"] = json.loads(result.pop("processing_json") or "{}")
+        return result
+
+    def update_workspace_message(
+        self,
+        *,
+        tenant_id: str,
+        admin_id: str,
+        conversation_id: str,
+        message_id: str,
+        status: str,
+        content: str | None = None,
+        processing: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if status not in {"completed", "generating", "incomplete"}:
+            raise ValueError("workspace_message_status_invalid")
+        with self._write_lock, self.connect() as conn:
+            row = conn.execute(
+                """SELECT 1 FROM workspace_messages
+                   WHERE id=? AND tenant_id=? AND admin_id=? AND conversation_id=?""",
+                (message_id, tenant_id, admin_id, conversation_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError("workspace_message_not_found")
+            updated_at = utc_now()
+            if content is not None:
+                conn.execute(
+                    """UPDATE workspace_messages SET status=?, content=?, updated_at=?
+                       WHERE id=? AND tenant_id=? AND admin_id=? AND conversation_id=?""",
+                    (status, content, updated_at, message_id, tenant_id, admin_id, conversation_id),
+                )
+            else:
+                conn.execute(
+                    """UPDATE workspace_messages SET status=?, updated_at=?
+                       WHERE id=? AND tenant_id=? AND admin_id=? AND conversation_id=?""",
+                    (status, updated_at, message_id, tenant_id, admin_id, conversation_id),
+                )
+            if processing is not None:
+                conn.execute(
+                    """UPDATE workspace_messages SET processing_json=?, updated_at=?
+                       WHERE id=? AND tenant_id=? AND admin_id=? AND conversation_id=?""",
+                    (
+                        json.dumps(processing, ensure_ascii=False),
+                        updated_at,
+                        message_id,
+                        tenant_id,
+                        admin_id,
+                        conversation_id,
+                    ),
+                )
+        return self.get_workspace_message(
+            tenant_id=tenant_id,
+            admin_id=admin_id,
+            conversation_id=conversation_id,
+            message_id=message_id,
+        )
+
+    def recover_stale_generating(
+        self, *, tenant_id: str, admin_id: str, conversation_id: str
+    ) -> int:
+        with self._write_lock, self.connect() as conn:
+            cursor = conn.execute(
+                """UPDATE workspace_messages SET status='incomplete', updated_at=?
+                   WHERE tenant_id=? AND admin_id=? AND conversation_id=?
+                   AND status='generating'""",
+                (utc_now(), tenant_id, admin_id, conversation_id),
+            )
+            return cursor.rowcount
 
     def list_workspace_messages(
         self, *, tenant_id: str, admin_id: str, conversation_id: str, limit: int = 100
