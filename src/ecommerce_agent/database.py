@@ -3939,9 +3939,14 @@ class Database:
         with self.connect() as conn:
             rows = conn.execute(
                 """SELECT id, conversation_id, role, content, status, trace_id,
-                processing_json, created_at, updated_at FROM workspace_messages
-                WHERE conversation_id=? AND tenant_id=? AND admin_id=?
-                ORDER BY created_at, rowid LIMIT ?""",
+                          processing_json, created_at, updated_at
+                FROM (
+                    SELECT id, conversation_id, role, content, status, trace_id,
+                           processing_json, created_at, updated_at, rowid
+                    FROM workspace_messages
+                    WHERE conversation_id=? AND tenant_id=? AND admin_id=?
+                    ORDER BY created_at DESC, rowid DESC LIMIT ?
+                ) ORDER BY created_at ASC, rowid ASC""",
                 (conversation_id, tenant_id, admin_id, max(1, min(limit, 500))),
             ).fetchall()
         result = []

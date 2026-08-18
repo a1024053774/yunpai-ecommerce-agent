@@ -134,6 +134,32 @@ def test_workspace_conversations_are_listed_and_messages_are_restored(tmp_path) 
     assert messages.json()[1]["processing"]["tool_summary"] == "共核对 6 个商品"
 
 
+def test_list_workspace_messages_returns_newest_within_limit(tmp_path) -> None:
+    app = create_app(make_settings(tmp_path))
+    db = app.state.agent.db
+    created = db.create_workspace_conversation(
+        tenant_id="tenant-test", admin_id="admin-test", title="历史顺序"
+    )
+    conversation_id = created["id"]
+    for index in range(15):
+        db.append_workspace_message(
+            tenant_id="tenant-test",
+            admin_id="admin-test",
+            conversation_id=conversation_id,
+            role="user" if index % 2 == 0 else "assistant",
+            content=f"m{index:02d}",
+        )
+    messages = db.list_workspace_messages(
+        tenant_id="tenant-test",
+        admin_id="admin-test",
+        conversation_id=conversation_id,
+        limit=12,
+    )
+    assert [message["content"] for message in messages] == [
+        f"m{index:02d}" for index in range(3, 15)
+    ]
+
+
 def test_workspace_conversation_scope_is_not_disclosed(tmp_path) -> None:
     app = create_app(make_settings(tmp_path))
 
