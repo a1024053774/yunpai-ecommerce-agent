@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 import json
+from time import monotonic
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -39,7 +40,9 @@ class WorkspaceTaskResult(BaseModel):
     data_as_of: str | None = None
 
 
-ReadTaskRunner = Callable[[WorkspaceReadTask], WorkspaceTaskResult]
+ReadTaskRunner = Callable[
+    [WorkspaceReadTask, dict[str, "WorkspaceTaskResult"]], WorkspaceTaskResult
+]
 
 
 def validate_read_plan(
@@ -119,20 +122,44 @@ def execute_read_plan(
     *,
     runner: ReadTaskRunner,
     maximum_parallel: int = 3,
+    task_timeout_seconds: float | None = None,
+    plan_timeout_seconds: float | None = None,
 ) -> list[WorkspaceTaskResult]:
     if maximum_parallel < 1:
         raise ValueError("read_parallelism_invalid")
+    if task_timeout_seconds is not None and task_timeout_seconds <= 0:
+        raise ValueError("read_task_timeout_invalid")
+    if plan_timeout_seconds is not None and plan_timeout_seconds <= 0:
+        raise ValueError("read_plan_timeout_invalid")
 
     tasks_by_id = {task.task_id: task for task in plan.tasks}
     results_by_id: dict[str, WorkspaceTaskResult] = {}
     results_by_signature: dict[str, WorkspaceTaskResult] = {}
+    deadline = (
+        monotonic() + plan_timeout_seconds
+        if plan_timeout_seconds is not None
+        else None
+    )
+
+    def failed_result(task: WorkspaceReadTask, error_summary: str) -> WorkspaceTaskResult:
+        return WorkspaceTaskResult(
+            task_id=task.task_id,
+            objective=task.objective,
+            tool_name=task.tool_name,
+            tool_label="Business information",
+            status="failed",
+            error_summary=error_summary,
+        )
+
     for batch in ready_task_batches(plan, batch_size=maximum_parallel):
         runnable: list[WorkspaceReadTask] = []
         aliases: dict[str, str] = {}
         pending_signatures: dict[str, str] = {}
         for task_id in batch:
             task = tasks_by_id[task_id]
-            dependency_results = [results_by_id[item] for item in task.depends_on]
+            dependency_results = [
+                results_by_id[item] for item in task.depends_on
+            ]
             if any(item.status != "success" for item in dependency_results):
                 results_by_id[task_id] = WorkspaceTaskResult(
                     task_id=task.task_id,
@@ -164,22 +191,38 @@ def execute_read_plan(
         if not runnable:
             continue
         with ThreadPoolExecutor(max_workers=min(maximum_parallel, len(runnable))) as pool:
-            futures = {pool.submit(runner, task): task for task in runnable}
-            for future in as_completed(futures):
-                task = futures[future]
+            futures = [
+                (task, pool.submit(
+                    runner,
+                    task,
+                    {dep: results_by_id[dep] for dep in task.depends_on},
+                ))
+                for task in runnable
+            ]
+            for task, future in futures:
                 try:
-                    result = future.result()
-                    results_by_id[task.task_id] = result
+                    if deadline is not None and monotonic() >= deadline:
+                        for _, pending in futures:
+                            pending.cancel()
+                        raise TimeoutError
+                    timeout = None
+                    if task_timeout_seconds is not None:
+                        timeout = task_timeout_seconds
+                    if deadline is not None:
+                        remaining = deadline - monotonic()
+                        if remaining <= 0:
+                            for _, pending in futures:
+                                pending.cancel()
+                            raise TimeoutError
+                        timeout = remaining if timeout is None else min(timeout, remaining)
+                    result = future.result(timeout=timeout)
+                except TimeoutError:
+                    for _, pending in futures:
+                        pending.cancel()
+                    result = failed_result(task, "read_timeout")
                 except Exception as exc:  # Each read failure is isolated to its task.
-                    result = WorkspaceTaskResult(
-                        task_id=task.task_id,
-                        objective=task.objective,
-                        tool_name=task.tool_name,
-                        tool_label="Business information",
-                        status="failed",
-                        error_summary=str(exc),
-                    )
-                    results_by_id[task.task_id] = result
+                    result = failed_result(task, str(exc))
+                results_by_id[task.task_id] = result
                 signature = json.dumps(
                     {"tool_name": task.tool_name, "arguments": task.arguments},
                     ensure_ascii=False,

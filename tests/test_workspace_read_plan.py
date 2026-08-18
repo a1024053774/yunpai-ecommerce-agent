@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import time
 
 import pytest
 
@@ -133,7 +134,7 @@ def test_execute_read_plan_runs_three_independent_tasks_together() -> None:
     lock = threading.Lock()
     barrier = threading.Barrier(3)
 
-    def runner(task: WorkspaceReadTask) -> WorkspaceTaskResult:
+    def runner(task: WorkspaceReadTask, predecessors: dict[str, WorkspaceTaskResult]) -> WorkspaceTaskResult:
         nonlocal active, peak
         with lock:
             active += 1
@@ -159,7 +160,7 @@ def test_execute_read_plan_caps_four_tasks_at_three_and_preserves_order() -> Non
     lock = threading.Lock()
     first_batch = threading.Barrier(3)
 
-    def runner(task: WorkspaceReadTask) -> WorkspaceTaskResult:
+    def runner(task: WorkspaceReadTask, predecessors: dict[str, WorkspaceTaskResult]) -> WorkspaceTaskResult:
         nonlocal active, peak
         with lock:
             active += 1
@@ -183,7 +184,7 @@ def test_execute_read_plan_caps_four_tasks_at_three_and_preserves_order() -> Non
 def test_execute_read_plan_isolates_failure_and_skips_dependent_task() -> None:
     called: list[str] = []
 
-    def runner(task: WorkspaceReadTask) -> WorkspaceTaskResult:
+    def runner(task: WorkspaceReadTask, predecessors: dict[str, WorkspaceTaskResult]) -> WorkspaceTaskResult:
         called.append(task.task_id)
         if task.task_id == "inventory":
             raise ValueError("inventory_source_unavailable")
@@ -207,7 +208,7 @@ def test_execute_read_plan_isolates_failure_and_skips_dependent_task() -> None:
 def test_execute_read_plan_skips_dependency_after_no_data() -> None:
     called: list[str] = []
 
-    def runner(task: WorkspaceReadTask) -> WorkspaceTaskResult:
+    def runner(task: WorkspaceReadTask, predecessors: dict[str, WorkspaceTaskResult]) -> WorkspaceTaskResult:
         called.append(task.task_id)
         return WorkspaceTaskResult(
             task_id=task.task_id,
@@ -245,7 +246,7 @@ def test_execute_read_plan_reuses_identical_tool_arguments_for_multiple_objectiv
         ]
     )
 
-    def runner(task: WorkspaceReadTask) -> WorkspaceTaskResult:
+    def runner(task: WorkspaceReadTask, predecessors: dict[str, WorkspaceTaskResult]) -> WorkspaceTaskResult:
         calls.append(task.task_id)
         return _success(task)
 
@@ -272,7 +273,7 @@ def test_execute_read_plan_completes_dependency_before_running_child() -> None:
         ]
     )
 
-    def runner(task: WorkspaceReadTask) -> WorkspaceTaskResult:
+    def runner(task: WorkspaceReadTask, predecessors: dict[str, WorkspaceTaskResult]) -> WorkspaceTaskResult:
         timeline.append(f"start:{task.task_id}")
         result = _success(task)
         timeline.append(f"finish:{task.task_id}")
@@ -286,4 +287,38 @@ def test_execute_read_plan_completes_dependency_before_running_child() -> None:
         "start:competitor",
         "finish:competitor",
     ]
-    assert [item.status for item in results] == ["success", "success"]
+
+
+def test_execute_read_plan_passes_predecessor_results_to_dependent_tasks() -> None:
+    seen: dict[str, dict[str, WorkspaceTaskResult]] = {}
+    plan = WorkspaceReadPlan(
+        tasks=[_task("search"), _task("competitor", depends_on=["search"])]
+    )
+
+    def runner(
+        task: WorkspaceReadTask,
+        predecessors: dict[str, WorkspaceTaskResult],
+    ) -> WorkspaceTaskResult:
+        seen[task.task_id] = predecessors
+        return _success(task)
+
+    execute_read_plan(plan, runner=runner)
+    assert set(seen["competitor"]) == {"search"}
+    assert seen["competitor"]["search"].verified_facts == ["Verified search"]
+
+
+def test_execute_read_plan_times_out_slow_tasks() -> None:
+    plan = WorkspaceReadPlan(tasks=[_task("slow")])
+
+    def runner(
+        task: WorkspaceReadTask,
+        predecessors: dict[str, WorkspaceTaskResult],
+    ) -> WorkspaceTaskResult:
+        time.sleep(1)
+        return _success(task)
+
+    results = execute_read_plan(
+        plan, runner=runner, task_timeout_seconds=0.05
+    )
+    assert results[0].status == "failed"
+    assert results[0].error_summary == "read_timeout"

@@ -574,7 +574,7 @@ def test_workspace_never_executes_write_requests_without_confirmation(
     assert done["advanced_view"] == "orders"
 
 
-def test_workspace_write_gate_overrides_clarification_that_promises_missing_capability(
+def test_workspace_clarify_is_not_overridden_by_write_keyword(
     tmp_path, monkeypatch
 ) -> None:
     app = create_app(make_settings(tmp_path))
@@ -605,10 +605,8 @@ def test_workspace_write_gate_overrides_clarification_that_promises_missing_capa
 
     events = _events(response)
     done = events[-1]["response"]
-    assert done["mode"] == "propose_action"
-    assert done["requires_confirmation"] is True
-    assert "我会生成订货单" not in done["answer"]
-    assert "不会直接生成、提交或执行" in done["answer"]
+    assert done["mode"] == "clarify"
+    assert done["requires_confirmation"] is False
 
 
 def test_workspace_can_generate_a_review_only_copy_draft(tmp_path, monkeypatch) -> None:

@@ -670,9 +670,7 @@ class WorkspaceAgent:
             }
             return validate_read_plan(read_plan, readable_tools=readable_tools)
         plan = WorkspacePlan.model_validate(raw)
-        if plan.mode == "propose_action" and not self._requires_confirmation_request(
-            request.message
-        ):
+        if plan.mode == "propose_action":
             review_payload = {
                 "management_request": safe_message,
                 "operator_context": request.context.model_dump(exclude_none=True),
@@ -702,16 +700,6 @@ class WorkspaceAgent:
         allowed = {item["name"] for item in self.tool_catalog()}
         if plan.tool_name and plan.tool_name not in allowed:
             raise ValueError("tool_not_registered")
-        if plan.mode in {"answer", "clarify"} and self._requires_confirmation_request(
-            request.message
-        ):
-            return WorkspacePlan(
-                mode="propose_action",
-                response=None,
-                reason="该请求会改变业务状态，需要先核对能力、范围和执行条件",
-                action_summary="该操作需要在对应管理模块核对后再执行",
-                advanced_view=plan.advanced_view,
-            )
         return plan
 
     def _stream_read_plan(
@@ -767,8 +755,8 @@ class WorkspaceAgent:
         }
         results = execute_read_plan(
             plan,
-            runner=lambda task: self._run_read_task(
-                task, request, admin, trace_id
+            runner=lambda task, predecessors: self._run_read_task(
+                task, predecessors, request, admin, trace_id
             ),
             maximum_parallel=3,
         )
@@ -807,6 +795,45 @@ class WorkspaceAgent:
                 }
             )
 
+        if results and all(result.status == "failed" for result in results):
+            yield {
+                "event": "error",
+                "code": "read_plan_all_failed",
+                "message": "所有核实任务均失败，请稍后重试。",
+            }
+            yield {
+                "event": "done",
+                "response": {
+                    "answer": "",
+                    "trace_id": trace_id,
+                    "mode": "answer",
+                    "tool_name": None,
+                    "tool_label": tool_label(None),
+                    "reason": "复合只读任务全部失败",
+                    "action_summary": None,
+                    "advanced_view": None,
+                    "requires_confirmation": False,
+                    "tools_used": [],
+                    "task_results": [
+                        {
+                            "task_id": result.task_id,
+                            "objective": result.objective,
+                            "status": result.status,
+                            "tool_label": result.tool_label,
+                            "error_summary": result.error_summary,
+                        }
+                        for result in results
+                    ],
+                    "completion_status": "failed",
+                    "decision_steps": 1,
+                    "limit_reached": False,
+                    "degraded": True,
+                    "degraded_reasons": ["read_plan_all_failed"],
+                    "prompt_version": WORKSPACE_PROMPT_VERSION,
+                },
+            }
+            return
+
         yield {"event": "status", "stage": "composing", "message": "正在整理结论与下一步"}
         answer_plan = WorkspacePlan(
             mode="answer",
@@ -831,7 +858,7 @@ class WorkspaceAgent:
         if answer:
             yield {"event": "delta", "text": answer}
 
-        completed = all(result.status in {"success", "no_data"} for result in results)
+        completed = all(result.status == "success" for result in results)
         last_tool = results[-1].tool_name if results else None
         yield {
             "event": "done",
@@ -871,15 +898,24 @@ class WorkspaceAgent:
     def _run_read_task(
         self,
         task: WorkspaceReadTask,
+        predecessor_results: dict[str, Any],
         request: WorkspaceChatRequest,
         admin: AdminPrincipal,
         trace_id: str,
     ) -> WorkspaceTaskResult:
+        arguments = dict(task.arguments)
+        predecessor_evidence = [
+            item
+            for dependency in task.depends_on
+            for item in (predecessor_results.get(dependency).verified_facts or [])
+        ]
+        if predecessor_evidence:
+            arguments["_predecessor_evidence"] = predecessor_evidence
         observation = self._execute(
             WorkspacePlan(
                 mode="observe",
                 tool_name=task.tool_name,
-                arguments=task.arguments,
+                arguments=arguments,
                 reason=task.objective,
             ),
             request,
