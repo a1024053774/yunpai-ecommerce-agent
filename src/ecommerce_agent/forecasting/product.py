@@ -11,10 +11,22 @@ from typing import Any
 from .planning import InventoryPlanningError, InventoryPlanningPolicy
 from .readiness import ReadinessCategory, SignalReadinessService
 from .run_service import ForecastRunError
+from .signal_gate import SignalAdmission, SignalGateResult
 
 
 class ForecastProductError(ValueError):
     """产品化编排错误。"""
+
+
+def _not_used_signal_gate() -> SignalGateResult:
+    return SignalGateResult(
+        admission=SignalAdmission.INSUFFICIENT_EVIDENCE,
+        reason="signal_missing_for_operational",
+        operational_champion=False,
+        signal_usage="not_used",
+        comparisons=(),
+        data_as_of=None,
+    )
 
 
 class ForecastProductService:
@@ -33,8 +45,10 @@ class ForecastProductService:
         sku_ids: list[str],
         forecast_policy: Any | None = None,
         planning_policy: InventoryPlanningPolicy | None = None,
+        signal_gate_result: SignalGateResult | None = None,
     ) -> list[dict[str, Any]]:
         """逐 SKU 运行 forecast + plan，单 SKU 失败不影响其余。"""
+        gate = signal_gate_result or _not_used_signal_gate()
         results: list[dict[str, Any]] = []
         for sku_id in sku_ids:
             try:
@@ -43,6 +57,7 @@ class ForecastProductService:
                     store_id=store_id,
                     sku_id=sku_id,
                     policy=forecast_policy,
+                    signal_gate_result=gate,
                 )
                 plan_policy = planning_policy or self._plans.resolve_policy(
                     tenant_id, store_id=store_id, sku_id=sku_id
@@ -78,6 +93,7 @@ class ForecastProductService:
         sku_id: str,
         forecast_policy: Any | None = None,
         planning_policy: InventoryPlanningPolicy | None = None,
+        signal_gate_result: SignalGateResult | None = None,
     ) -> dict[str, Any]:
         """对单个 SKU 显式重跑 forecast + plan（生成新 run）。"""
         results = self.run_batch(
@@ -86,6 +102,7 @@ class ForecastProductService:
             sku_ids=[sku_id],
             forecast_policy=forecast_policy,
             planning_policy=planning_policy,
+            signal_gate_result=signal_gate_result,
         )
         return results[0]
 
@@ -117,12 +134,20 @@ class ForecastProductService:
         readiness = self._readiness.project(
             tenant_id=tenant_id, store_id=store_id
         )
+        signal_usage = "not_used"
+        if isinstance(forecast, dict) and isinstance(
+            forecast.get("candidate_models"), dict
+        ):
+            reason = forecast["candidate_models"].get("signal_champion_reason")
+            if isinstance(reason, dict) and reason.get("signal_usage"):
+                signal_usage = reason["signal_usage"]
         return {
             "sku_id": sku_id,
             "forecast": forecast,
             "backtest": backtest,
             "plan": plan,
             "risks": risks,
+            "signal_usage": signal_usage,
             "readiness": [
                 {
                     "input_key": item.input_key,

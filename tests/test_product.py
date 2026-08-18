@@ -191,6 +191,13 @@ def test_batch_endpoint_runs_forecast_and_plan_for_seeded_sku(tmp_path) -> None:
         assert len(review["forecast"]["points"]) == 30
         assert review["forecast"]["champion_model"]
         assert review["plan"]["action_mode"] == "advisory_only"
+        assert review["signal_usage"] == "not_used"
+        assert (
+            review["forecast"]["candidate_models"]["signal_champion_reason"][
+                "signal_usage"
+            ]
+            == "not_used"
+        )
         first_recommended = review["plan"]["recommended_order_qty"]
 
         second_response = client.post(
