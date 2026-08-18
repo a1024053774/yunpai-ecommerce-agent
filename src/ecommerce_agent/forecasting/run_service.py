@@ -16,6 +16,7 @@ from ..database import Database, utc_now
 from ..evidence_freshness import evidence_freshness
 from .engine import ForecastEngine, ForecastPolicy
 from .models import DEMAND_V1
+from .signal_gate import SignalGateResult
 
 
 def _json(value: Any) -> str:
@@ -107,10 +108,11 @@ class ForecastRunService:
         self,
         tenant_id: str,
         *,
-        store_id: str,
-        sku_id: str,
-        policy: ForecastPolicy | None = None,
-    ) -> dict[str, Any]:
+    store_id: str,
+    sku_id: str,
+    policy: ForecastPolicy | None = None,
+    signal_gate_result: SignalGateResult | None = None,
+) -> dict[str, Any]:
         facts = sorted(
             self.facts.list_facts(tenant_id, store_id=store_id, sku_id=sku_id),
             key=lambda item: str(item["business_date"]),
@@ -156,6 +158,13 @@ class ForecastRunService:
             "horizon_totals": evaluation["horizon_totals"],
             "policy": policy_evidence,
         }
+        if signal_gate_result is not None:
+            signal_evidence = signal_gate_result.to_evidence()
+            candidate_evidence["signal_candidates"] = signal_evidence["comparisons"]
+            candidate_evidence["signal_champion_reason"] = {
+                key: signal_evidence[key]
+                for key in ("admission", "reason", "operational_champion", "signal_usage", "data_as_of")
+            }
         try:
             candidate_evidence["source_provenance"] = merge_source_provenance(
                 (

@@ -460,3 +460,51 @@ def test_actual_field_evidence_sets_state_and_reference(tmp_path) -> None:
     assert demand.evidence_state is EvidenceState.ACTUAL
     assert demand.source_kind is SourceKind.ACTUAL
     assert demand.source_reference is not None
+
+
+def test_missing_field_evidence_overrides_signal_rows(tmp_path) -> None:
+    db = _make_db(tmp_path / "evidence-signal-missing.sqlite3")
+    with db.connect() as conn:
+        _insert_approved_match(conn)
+    ReadonlyDataService(db).record_field_evidence(
+        TENANT,
+        FieldEvidenceInput(
+            store_id=STORE,
+            field_key="readiness:competitor_approved_signal",
+            scope="store",
+            evidence_state=EvidenceState.MISSING,
+            reason="competitor_signal_not_authorized",
+        ),
+    )
+    items = SignalReadinessService(db).project(tenant_id=TENANT, store_id=STORE)
+    competitor = next(
+        item for item in items if item.input_key == "competitor_approved_signal"
+    )
+    assert competitor.evidence_state is EvidenceState.MISSING
+    assert competitor.missing_reason == "competitor_signal_not_authorized"
+
+
+def test_actual_field_evidence_marks_signal_without_rows(tmp_path) -> None:
+    db = _make_db(tmp_path / "evidence-signal-actual.sqlite3")
+    readonly = ReadonlyDataService(db)
+    imported = readonly.record_import(TENANT, _manifest(STORE))
+    content = b"order_id,total_amount\nORDER-1,88.00\n"
+    reference = f"objects/readonly-imports/{content_digest(content)}.csv"
+    readonly.record_field_evidence(
+        TENANT,
+        FieldEvidenceInput(
+            store_id=STORE,
+            field_key="readiness:competitor_approved_signal",
+            scope="store",
+            evidence_state=EvidenceState.ACTUAL,
+            reason="competitor_signal_imported",
+            import_id=imported["import_id"],
+            source_reference=reference,
+        ),
+    )
+    items = SignalReadinessService(db).project(tenant_id=TENANT, store_id=STORE)
+    competitor = next(
+        item for item in items if item.input_key == "competitor_approved_signal"
+    )
+    assert competitor.evidence_state is EvidenceState.ACTUAL
+    assert competitor.source_kind is SourceKind.ACTUAL
