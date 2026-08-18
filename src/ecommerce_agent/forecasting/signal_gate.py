@@ -34,6 +34,16 @@ class SignalGateResult:
     comparisons: tuple[dict[str, Any], ...]
     data_as_of: str | None
 
+    def to_evidence(self) -> dict[str, Any]:
+        return {
+            "admission": self.admission.value,
+            "reason": self.reason,
+            "operational_champion": self.operational_champion,
+            "signal_usage": self.signal_usage,
+            "data_as_of": self.data_as_of,
+            "comparisons": list(self.comparisons),
+        }
+
 
 def _wape(actual: Sequence[float], forecast: Sequence[float]) -> float | None:
     denominator = sum(actual)

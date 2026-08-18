@@ -13,6 +13,10 @@ from ecommerce_agent.forecasting import (
     ForecastRunService,
     SUPPORTED_FORECAST_MODELS,
 )
+from ecommerce_agent.forecasting.signal_gate import (
+    SignalAdmission,
+    SignalGateResult,
+)
 
 
 TENANT = "tenant-forecast-run"
@@ -112,6 +116,26 @@ def test_run_persists_replayable_policy_backtests_and_quantiles(tmp_path) -> Non
     )
     with pytest.raises(ForecastRunError, match="forecast_policy_version_conflict"):
         conflict.run(TENANT, store_id=STORE, sku_id=SKU)
+
+
+def test_run_persists_signal_gate_evidence(tmp_path) -> None:
+    db, service = _service(tmp_path, _facts([10] * 56))
+    result = SignalGateResult(
+        admission=SignalAdmission.REJECTED_NOT_BETTER,
+        reason="signal_not_better_than_baseline",
+        operational_champion=False,
+        signal_usage="not_used",
+        comparisons=(),
+        data_as_of="2026-02-25",
+    )
+    run = service.run(
+        TENANT, store_id=STORE, sku_id=SKU, signal_gate_result=result
+    )
+    assert (
+        run["candidate_models"]["signal_champion_reason"]["signal_usage"]
+        == "not_used"
+    )
+    assert run["candidate_models"]["signal_candidates"] == []
 
 
 def test_run_marks_gaps_stockouts_and_unknown_inventory_as_degraded(tmp_path) -> None:
