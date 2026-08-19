@@ -1,6 +1,6 @@
 # M10-R WP2 预测与补货产品化 — 交付证据
 
-Commit：`699c56a`（feature/m10r-wp2-productized-forecast）
+Commit：`e1fe265`（feature/m10r-wp2-productized-forecast）
 
 ## 交付内容
 
@@ -12,6 +12,10 @@ Commit：`699c56a`（feature/m10r-wp2-productized-forecast）
   - `POST /v1/forecasting/batch/runs`：批量运行。
   - `POST /v1/forecasting/skus/{sku_id}/rerun`：显式重跑。
   - `GET /v1/forecasting/skus/{sku_id}/review`：只读审核。
+- WP1-03 信号门禁消费
+  - `ForecastRunService.run(..., signal_gate_result=...)` 写入
+    `signal_candidates` / `signal_champion_reason`；product review 中候选信号
+    显式 `signal_usage=not_used`（未使用，留待真实数据接入后送同一 Gate）。
 - `tests/test_product.py`
   - 6 个用例：空店只读审核、批量失败隔离、单 SKU 重跑、批量/重跑/审核路由，
     以及成功路径 + 确定性 + 新鲜度守卫。
@@ -23,11 +27,15 @@ $env:NO_PROXY='127.0.0.1,localhost'; $env:no_proxy='127.0.0.1,localhost';
 $env:ALL_PROXY='http://127.0.0.1:9'; $env:HTTP_PROXY='http://127.0.0.1:9';
 $env:HTTPS_PROXY='http://127.0.0.1:9'
 .\.venv\Scripts\python.exe -m pytest tests\test_product.py -q
+.\.venv\Scripts\python.exe -m pytest tests\test_signal_gate.py -q
+.\.venv\Scripts\python.exe -m pytest tests\test_forecasting_run_service.py -q
 .\.venv\Scripts\python.exe -m compileall -q src
 git diff --check
 ```
 
 - `pytest tests\test_product.py`：`6 passed`。
+- `pytest tests/test_signal_gate.py`：`5 passed`。
+- `pytest tests/test_forecasting_run_service.py`：`9 passed`（含 gate 证据持久化）。
 - `compileall`：退出 0；`git diff --check`：无输出。
 
 ## 验收要点
@@ -40,5 +48,5 @@ git diff --check
 ## 范围与未完成
 
 - 不新建预测算法，不绕过模型数值；复用 F-317～F-321 引擎与既有的冷启动/缺货降级语义。
-- 候选外生信号进入 champion 的无泄漏 rolling backtest 门禁仍待补（WP1 完成条件第 4 条，
-  计划中后置到 WP2 信号接入阶段）。
+- WP1-03 无泄漏 rolling backtest 准入门禁已实现并被本分支消费；真实外生信号数据
+  （M7-R 数据链路）接入后送同一 Gate，仍不在本分支范围。
