@@ -204,6 +204,8 @@ git switch --track origin/feature/workspace-agent-pr11-pr12
 
 python3 -m venv .venv
 .venv/bin/python -m pip install -e ".[dev]"
+# 可选；后续命令直接使用 .venv/bin/python 时可以不激活
+source .venv/bin/activate
 ```
 
 若本地分支已经存在，使用：

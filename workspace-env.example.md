@@ -2,6 +2,7 @@
 
 > 这是可提交、可转交的无密钥模板。将占位符替换为测试环境凭据后，在仓库根目录复制整个代码块执行。
 > 真实版本应保存为 `workspace-env.md`；该文件已被 `.gitignore` 排除，不得提交到 GitHub。
+> 如需先激活虚拟环境，运行 `source .venv/bin/activate`；下面的命令已直接使用 `.venv/bin/python`，不激活也可以启动。
 
 ```bash
 export ADMIN_API_KEY="<ADMIN_API_KEY>"
@@ -41,7 +42,7 @@ WORKSPACE_HOST="127.0.0.1"
 WORKSPACE_PORT="8091"
 
 if [ ! -x .venv/bin/python ]; then
-  echo "缺少 .venv：请先执行 python3 -m venv .venv && .venv/bin/python -m pip install -e '[dev]'"
+  echo "缺少 .venv：请先执行 python3 -m venv .venv && .venv/bin/python -m pip install -e '.[dev]'"
 else
   WORKSPACE_PROBE_OK="true"
   if [ "$MODEL_ENABLED" = "true" ] && [ "$MODEL_MOCK_MODE" != "true" ]; then
