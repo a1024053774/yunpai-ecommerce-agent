@@ -322,3 +322,39 @@ def test_execute_read_plan_times_out_slow_tasks() -> None:
     )
     assert results[0].status == "failed"
     assert results[0].error_summary == "read_timeout"
+
+
+def test_execute_read_plan_bounds_wall_clock_on_task_timeout() -> None:
+    plan = WorkspaceReadPlan(tasks=[_task("slow")])
+
+    def runner(
+        task: WorkspaceReadTask,
+        predecessors: dict[str, WorkspaceTaskResult],
+    ) -> WorkspaceTaskResult:
+        time.sleep(1)
+        return _success(task)
+
+    started = time.monotonic()
+    results = execute_read_plan(plan, runner=runner, task_timeout_seconds=0.05)
+    elapsed = time.monotonic() - started
+    assert results[0].status == "failed"
+    assert results[0].error_summary == "read_timeout"
+    assert elapsed < 0.5
+
+
+def test_execute_read_plan_plan_timeout_marks_plan_timeout_and_bounds_wall_clock() -> None:
+    plan = WorkspaceReadPlan(tasks=[_task("a"), _task("b")])
+
+    def runner(
+        task: WorkspaceReadTask,
+        predecessors: dict[str, WorkspaceTaskResult],
+    ) -> WorkspaceTaskResult:
+        time.sleep(0.6)
+        return _success(task)
+
+    started = time.monotonic()
+    results = execute_read_plan(plan, runner=runner, plan_timeout_seconds=0.1)
+    elapsed = time.monotonic() - started
+    assert all(item.status == "failed" for item in results)
+    assert {item.error_summary for item in results} == {"read_plan_timeout"}
+    assert elapsed < 0.5

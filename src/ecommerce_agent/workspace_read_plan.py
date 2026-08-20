@@ -190,7 +190,8 @@ def execute_read_plan(
 
         if not runnable:
             continue
-        with ThreadPoolExecutor(max_workers=min(maximum_parallel, len(runnable))) as pool:
+        pool = ThreadPoolExecutor(max_workers=min(maximum_parallel, len(runnable)))
+        try:
             futures = [
                 (task, pool.submit(
                     runner,
@@ -199,9 +200,11 @@ def execute_read_plan(
                 ))
                 for task in runnable
             ]
+            plan_timeout = False
             for task, future in futures:
                 try:
                     if deadline is not None and monotonic() >= deadline:
+                        plan_timeout = True
                         for _, pending in futures:
                             pending.cancel()
                         raise TimeoutError
@@ -211,6 +214,7 @@ def execute_read_plan(
                     if deadline is not None:
                         remaining = deadline - monotonic()
                         if remaining <= 0:
+                            plan_timeout = True
                             for _, pending in futures:
                                 pending.cancel()
                             raise TimeoutError
@@ -219,7 +223,15 @@ def execute_read_plan(
                 except TimeoutError:
                     for _, pending in futures:
                         pending.cancel()
-                    result = failed_result(task, "read_timeout")
+                    hit_deadline = (
+                        deadline is not None and monotonic() >= deadline
+                    )
+                    result = failed_result(
+                        task,
+                        "read_plan_timeout"
+                        if (plan_timeout or hit_deadline)
+                        else "read_timeout",
+                    )
                 except Exception as exc:  # Each read failure is isolated to its task.
                     result = failed_result(task, str(exc))
                 results_by_id[task.task_id] = result
@@ -230,6 +242,9 @@ def execute_read_plan(
                     separators=(",", ":"),
                 )
                 results_by_signature[signature] = result
+        finally:
+            # 不等待仍在跑的线程：超时后立即收口，保证墙钟时间受 task/plan 超时约束。
+            pool.shutdown(wait=False, cancel_futures=True)
 
         for alias_id, source_id in aliases.items():
             source = results_by_id[source_id]

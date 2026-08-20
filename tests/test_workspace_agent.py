@@ -1398,3 +1398,109 @@ def test_workspace_uses_verified_product_language_when_response_model_is_unavail
     assert "当前查询范围内暂无数据" in done["answer"]
     assert done["degraded"] is True
     assert done["degraded_reasons"] == ["response_model_unavailable"]
+
+
+def test_workspace_first_round_explicit_write_request_keeps_propose_action(
+    tmp_path, monkeypatch
+) -> None:
+    app = create_app(make_settings(tmp_path))
+    service = app.state.agent
+
+    def plan_once(_messages, **_kwargs):
+        return {
+            "mode": "propose_action",
+            "response": "确认要对这些订单执行退款？",
+            "action_summary": "执行退款",
+            "reason": "用户明确要求退款",
+        }
+
+    monkeypatch.setattr(service.model, "generate_json", plan_once)
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/admin/workspace/chat/stream",
+            headers=ADMIN_HEADERS,
+            json={
+                "session_id": "workspace:test-write-round1-001",
+                "message": "把这些订单全部退款",
+                "history": [],
+                "context": {},
+            },
+        )
+
+    assert response.status_code == 200
+    events = _events(response)
+    done = events[-1]["response"]
+    assert done["mode"] == "propose_action"
+    assert done["requires_confirmation"] is True
+    assert done["tools_used"] == []
+    assert done["answer"]
+
+
+def test_workspace_dependent_task_does_not_break_strict_tool_schema(
+    tmp_path, monkeypatch
+) -> None:
+    app = create_app(make_settings(tmp_path))
+    service = app.state.agent
+    service.operations.inventory.upsert(
+        "tenant-test",
+        InventoryBalanceUpsert(
+            connector_id="dependent-fixture",
+            store_id="qingchuan-flagship-001",
+            warehouse_id="warehouse-001",
+            sku_id="QC-DEPENDENT-01",
+            on_hand="8",
+            average_daily_sales="2",
+            source_updated_at=datetime.now(UTC) - timedelta(hours=1),
+            source_id="inventory-dependent-001",
+        ),
+    )
+
+    def plan_once(_messages, **_kwargs):
+        return {
+            "tasks": [
+                {
+                    "task_id": "inventory",
+                    "objective": "核对库存风险",
+                    "tool_name": "get_inventory_risk",
+                    "arguments": {"store_id": "qingchuan-flagship-001"},
+                    "depends_on": [],
+                },
+                {
+                    "task_id": "catalog",
+                    "objective": "按前置事实核对商品目录",
+                    "tool_name": "get_catalog_status",
+                    "arguments": {
+                        "store_id": "qingchuan-flagship-001",
+                        "status": "active",
+                    },
+                    "depends_on": ["inventory"],
+                },
+            ]
+        }
+
+    monkeypatch.setattr(service.model, "generate_json", plan_once)
+    monkeypatch.setattr(
+        service.model,
+        "stream_generate",
+        lambda _messages: iter(["已核对库存与商品目录。"]),
+    )
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/admin/workspace/chat/stream",
+            headers=ADMIN_HEADERS,
+            json={
+                "session_id": "workspace:test-dependent-strict-001",
+                "message": "查看库存风险并按库存核对商品目录。",
+                "history": [],
+                "context": {"store_id": "qingchuan-flagship-001"},
+            },
+        )
+
+    assert response.status_code == 200
+    events = _events(response)
+    assert all(event.get("event") != "error" for event in events)
+    done = events[-1]["response"]
+    assert done["completion_status"] in {"completed", "partial"}
+    statuses = [item["status"] for item in done["task_results"]]
+    assert statuses[0] in {"success", "no_data"}
+    assert statuses[1] in {"success", "no_data"}
