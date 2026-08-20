@@ -5,11 +5,19 @@
 
 ## 当前验收结论
 
+- 结论：2026-08-20 统筹 Agent 交测分支已补齐可分发的晴川演示数据启动路径，运行代码对象为
+  `9f245da`。维护者本机 `data-workspace-agent/`、SQLite、会话、审计和真实密钥均不进入 Git；
+  已跟踪 fixture 随分支分发，模板默认在每位测试者自己的本地库执行
+  `simulate-store --load-only`。该回归在改动前 `dd7fd14` 上因参数不识别而失败，当前相邻套件
+  `14 passed in 29.52s`；隔离库得到 6 商品、10 库存、8 订单，第二次装载全部幂等。交接材料
+  已集中到 `docs/handoff/workspace-agent/`，三个启动代码块通过 Bash 语法检查。当前仅批准交给
+  他人做功能与集成测试；真实密钥仍须安全渠道单独交付，真实模型/平台、长稳和生产 Gate 未
+  因此放行。见 E-20260820-006、G-WORKSPACE-HANDOVER-001。
 - 结论：2026-08-20 统筹 Agent 统一前端的专属本机启动包已补齐。私密
   `workspace-env.md` 从现有本机 `env.md` 复制 20 项原值，另将 `DATA_DIR` 隔离为
   `$PWD/data-workspace-agent`，使用端口 `8091`，并显式补齐当前代码已支持的模型与会话
   参数；真实模型模式执行 `model-probe`，离线 mock 模式跳过探针。私密文件与数据目录均被
-  Git 忽略，仓库只提交无密钥 `workspace-env.example.md`。变量逐项一致性、私密文件忽略、
+  Git 忽略，仓库只提交无密钥 `docs/handoff/workspace-agent/workspace-env.example.md`。变量逐项一致性、私密文件忽略、
   tracked diff 密钥泄露检查、两个启动块的 Bash 语法及 whitespace 均通过。本 worktree 当前
   没有 `.venv`，因此本轮没有运行真实模型探针或实际启动服务；交接人员仍须按文档在自己的
   环境执行运行态 smoke。见 E-20260820-005。
@@ -513,6 +521,19 @@
 
 ## 证据索引
 
+- E-20260820-006：统筹 Agent 干净交测库与交接目录收口。运行代码对象为
+  `9f245da`，fixture `src/ecommerce_agent/fixtures/virtual_store_v1.json` 已由 Git 跟踪；
+  `workspace-env.md`、`data-workspace-agent/` 与 SQLite 运行库保持 Git ignored。新增
+  `simulate-store --load-only` 复用公开领域服务装载同一 virtual fixture，只输出
+  `simulation-load-v1` 报告并记录审计，不执行完整场景验收。当前回归在 detached
+  `dd7fd14` 上精确失败为 `unrecognized arguments: --load-only`，在候选上与
+  `tests/test_virtual_store_simulation.py` 合计 `14 passed in 29.52s`；compileall 与代码差异
+  whitespace 检查退出 0。隔离临时目录执行 `init` 后连续装载两次，SQLite 精确得到
+  `catalog_items=6`、`inventory_balances=10`、`commerce_orders=8`，第二次装载的日历、商品、
+  库存、订单、营销、费用和结算记录全部为 idempotent。无密钥模板、交接 README 及被忽略
+  私密启动文件的启动代码块均通过 `bash -n`。本轮交接材料集中到
+  `docs/handoff/workspace-agent/`；每位测试者会创建自己的本地演示库，不接收维护者的会话、
+  审计或真实密钥。证据在 CLI、fixture、公开领域装载服务、启动模板或数据目录边界变化后失效。
 - E-20260820-005：统一工作台专属本机启动包。将主工作区被忽略的 `env.md` 作为
   私密来源，仅在内存中逐项比较，不向日志或 tracked 文件输出真实值；除有意隔离的
   `DATA_DIR` 外，源文件 20 项变量在 `workspace-env.md` 中逐项一致。新增当前配置层
@@ -541,7 +562,7 @@
   Draft。已知非阻断项为 `/favicon.ico` 404 和未接线的
   `_requires_confirmation_request`；未覆盖真实模型 benchmark、真实平台/生产数据、
   24/72 小时长稳、安全发布、灾备实操和生产 Gate。详细命令、边界和自测步骤见
-  `docs/AGENT_WORKSPACE_HANDOVER_20260820.md`。证据在代码对象、运行环境或依赖契约变化后
+  `docs/handoff/workspace-agent/README.md`。证据在代码对象、运行环境或依赖契约变化后
   失效，届时须重跑。
 - E-20260820-002：PR #11 已知问题独立修复候选，功能验证对象为原 PR head
   `082eabf56a67aec31d814310108eb75221d2015d` 之上的 `f44dcfa` 与 `b3b4cba`。未采用
@@ -735,7 +756,7 @@
 
 | Gate ID | 日期 | Gate | 对象 | 结果 | 证据 ID | 豁免与确认人 |
 |---|---|---|---|---|---|---|
-| G-WORKSPACE-HANDOVER-001 | 2026-08-20 | 统筹 Agent 统一前端功能与集成交测门 | PR #9 统一工作台基线、PR #11 会话持久化、PR #12 复合只读查询、独立已知问题修复、v35 迁移、HTTP/浏览器 smoke | 通过；以交测分支固定代码对象 `a0d09ab` 为准 | E-20260820-004、E-20260820-005 | 仅批准交给他人做功能与集成测试；不豁免 PR #9 冲突、正式合 main、真实模型/平台、长稳、安全/灾备或生产发布 Gate |
+| G-WORKSPACE-HANDOVER-001 | 2026-08-20 | 统筹 Agent 统一前端功能与集成交测门 | PR #9 统一工作台基线、PR #11 会话持久化、PR #12 复合只读查询、独立已知问题修复、v35 迁移、HTTP/浏览器 smoke、干净库晴川数据装载 | 通过；运行代码对象 `9f245da`，最终交测分支另含文档提交 | E-20260820-004、E-20260820-005、E-20260820-006 | 仅批准交给他人做功能与集成测试；不豁免 PR #9 冲突、正式合 main、真实模型/平台、长稳、安全/灾备或生产发布 Gate |
 | G-M7R-ALL-001 | 2026-08-20 | M7-R WP1～WP4 完整代码级本机门 | v34 统一导入/隐私/来源/证据、八类报表规范化、v35 商品身份与对账、readiness API/页面、显式隔离 Demo、WP5 独立报告与 merge-tip 回归 | 通过；PR #20 已合入并在 `f6bb47c` 复验 | E-20260820-001 | 仅关闭 F-323 代码级本机里程碑；不豁免真实平台字段/数据、真实经营结论、生产发布/权限/写能力或 M8-R～M10-R |
 | G-M7R-WP5-001 | 2026-08-20 | M7-R WP5 独立验收与合入后复验门 | 原独立报告与 6 项探针、补充验收矩阵、mutation 红→绿、桌面/390px、报告/截图哈希 double-check、精确 merge-tip 聚焦/全量/静态门禁 | 通过；独立签署原件保持不变，补充证据不代签 | E-20260820-001 | 只签署已验证代码对象和本机技术 Gate；真实平台接入、业务签署与生产 Gate 无豁免 |
 | G-FORECAST-PLANNING-CONTRACT-001 | 2026-08-13 | Forecast/Planning 联合配置与 current plan 门 | 7/14/30、lead+review/max-stock required days、legacy POST guard、no partial write、GET/tool no superseded plan | 通过 | E-20260813-013 | 仅限本机 API/虚拟策略证据；未运行全量，不豁免真实补货策略、长稳、自动动作或生产 Gate |
@@ -804,6 +825,11 @@
 
 ## 验收记录
 
+- 2026-08-20：补齐干净交测库的晴川演示数据。新增 `simulate-store --load-only`，旧版参数
+  拒绝反证转为当前相邻 `14 passed`；隔离库连续装载两次得到 6 商品、10 库存、8 订单且
+  重放幂等。测试者只获得仓库 fixture 并创建自己的 SQLite，不获得维护者数据库或真实密钥。
+  交接 README 与无密钥启动模板已集中到 `docs/handoff/workspace-agent/`。见
+  E-20260820-006、G-WORKSPACE-HANDOVER-001。
 - 2026-08-20：补齐统筹 Agent 统一前端专属启动包。本机私密 `workspace-env.md` 复制现有
   配置的真实值但不入 Git，使用独立数据目录和 8091；仓库提交无密钥模板并在交接文档说明
   真实模型探针、离线 mock 和两个页面入口。变量一致性、ignore、tracked diff secret 扫描、

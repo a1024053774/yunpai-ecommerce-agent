@@ -40,9 +40,12 @@ export SESSION_HISTORY_LIMIT="6"
 # 仅供下面启动命令使用，不是应用配置项。
 WORKSPACE_HOST="127.0.0.1"
 WORKSPACE_PORT="8091"
+WORKSPACE_LOAD_DEMO_DATA="true"
 
 if [ ! -x .venv/bin/python ]; then
   echo "缺少 .venv：请先执行 python3 -m venv .venv && .venv/bin/python -m pip install -e '.[dev]'"
+elif curl -fsS "http://$WORKSPACE_HOST:$WORKSPACE_PORT/health" >/dev/null 2>&1; then
+  echo "统一工作台已在 http://$WORKSPACE_HOST:$WORKSPACE_PORT/admin 运行，请勿重复启动"
 else
   WORKSPACE_PROBE_OK="true"
   if [ "$MODEL_ENABLED" = "true" ] && [ "$MODEL_MOCK_MODE" != "true" ]; then
@@ -52,8 +55,8 @@ else
     echo "真实模型探针失败，统一工作台未启动"
   elif ! PYTHONPATH=src .venv/bin/python -m ecommerce_agent.cli init; then
     echo "初始化失败，统一工作台未启动"
-  elif curl -fsS "http://$WORKSPACE_HOST:$WORKSPACE_PORT/health" >/dev/null 2>&1; then
-    echo "统一工作台已在 http://$WORKSPACE_HOST:$WORKSPACE_PORT/admin 运行，请勿重复启动"
+  elif [ "$WORKSPACE_LOAD_DEMO_DATA" = "true" ] && ! PYTHONPATH=src .venv/bin/python -m ecommerce_agent.cli simulate-store --load-only; then
+    echo "晴川演示数据装载失败，统一工作台未启动"
   else
     PYTHONPATH=src .venv/bin/python -m ecommerce_agent.cli serve --host "$WORKSPACE_HOST" --port "$WORKSPACE_PORT"
   fi
@@ -72,4 +75,7 @@ export MODEL_ENABLED="false"
 export MODEL_MOCK_MODE="true"
 ```
 
-`eval` 和 `simulate-store` 不是启动前置；后者会向当前 `DATA_DIR` 写入虚拟数据。
+交测模板默认设置 `WORKSPACE_LOAD_DEMO_DATA=true`，每次启动都会通过
+`simulate-store --load-only` 幂等装载仓库内置的“晴川生活电器旗舰店” fixture，但不会运行
+跨模块场景验收。若要专门测试空库，将该值改为 `false`。完整 `simulate-store` 与 `eval`
+仍是独立验收命令，不是服务启动前置。

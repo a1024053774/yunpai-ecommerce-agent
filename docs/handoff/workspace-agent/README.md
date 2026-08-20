@@ -7,6 +7,7 @@
 - 仓库：`a1024053774/yunpai-ecommerce-agent`
 - 交测分支：`feature/workspace-agent-pr11-pr12`
 - 功能合成提交：`921e676`
+- 晴川演示数据装载提交：`9f245da`
 - 当前 fork `main`：`454b35c`，本轮没有修改或推送 `main`
 - PR #9 基线提交：`adee44e`
 - PR #11 已核验 head：`6ec6a89`
@@ -194,6 +195,25 @@ GET  /v1/admin/workspace/capabilities                 200, automatic_writes=fals
 
 浏览器实际完成管理员登录、新建会话、发送消息、恢复 2 条历史消息、打开 `/admin/advanced`；两个页面的控制台 error/warning 均为 0。离线 mock 对经营问题明确返回 `planning_failed`，没有伪造计划或执行成功。非阻断项：浏览器会请求 `/favicon.ico`，当前服务返回 404，不影响页面和 API。
 
+### 5.5 干净交测库的晴川演示数据
+
+测试者不会拿到维护者本机的 SQLite。`data-workspace-agent/` 与 `*.sqlite3` 均不进入 Git；
+仓库分发的是已跟踪的 `src/ecommerce_agent/fixtures/virtual_store_v1.json`。启动模板会在测试者
+自己的 `DATA_DIR` 中执行 `simulate-store --load-only`，仅幂等装载 fixture，不运行完整场景验收。
+
+新增回归在改动前的 `dd7fd14` 上因 CLI 不识别 `--load-only` 而失败；在运行代码提交
+`9f245da` 上与相邻虚拟店铺测试合计 `14 passed in 29.52s`。隔离临时库连续装载两次后：
+
+```text
+商品 catalog_items       6
+库存 inventory_balances 10
+订单 commerce_orders     8
+第二次装载               对应记录全部 idempotent
+```
+
+因此交测者拉取分支后不会共享维护者的会话、审计或运行数据，但按本交接启动会得到一份自己的
+“晴川生活电器旗舰店”本地演示库。真实模型和管理员密钥仍须通过批准的安全渠道单独提供。
+
 ## 6. 第一次启动：离线交互 smoke
 
 需要 Python 3.11 以上。以下示例只使用占位符；真实密钥不得粘贴到本文、Issue、PR 评论或提交中。
@@ -217,17 +237,19 @@ git pull --ff-only
 
 本次交测另提供统一工作台专属启动文件：
 
-- 仓库内的 `workspace-env.example.md` 是无密钥模板，可随分支交接。
+- 仓库内的 `docs/handoff/workspace-agent/workspace-env.example.md` 是无密钥模板，可随分支交接。
 - 维护者本机的 `workspace-env.md` 已复制现有真实配置，并加入当前工作台需要显式设置的模型与会话参数；它被 `.gitignore` 排除，只能通过批准的安全渠道单独交付。
+- `data-workspace-agent/` 和其中的 SQLite 运行库同样被 Git 忽略，不会把维护者本机的会话、审计或运行数据交给测试者。
+- 仓库会分发 `src/ecommerce_agent/fixtures/virtual_store_v1.json`。专属模板默认执行 `simulate-store --load-only`，让每位测试者在自己的本地库中幂等装载“晴川生活电器旗舰店”演示数据，不运行整套场景验收。
 - 专属文件使用 `DATA_DIR=$PWD/data-workspace-agent` 和端口 `8091`，避免与主工作区的 `8080`、PR #9 工作区的 `8090` 相互污染或抢占端口。
-- 新前端和后端仍由同一个 `serve` 进程提供；当前代码没有额外的 `WORKSPACE_*` 应用配置项。模板中的 `WORKSPACE_HOST`、`WORKSPACE_PORT` 只用于拼装启动命令。
+- 新前端和后端仍由同一个 `serve` 进程提供；模板中的 `WORKSPACE_HOST`、`WORKSPACE_PORT` 和 `WORKSPACE_LOAD_DEMO_DATA` 只控制 shell 启动流程，不是应用配置项。
 
-收到私密文件时，优先从仓库根目录复制其中完整代码块执行。真实模型模式会先运行 `model-probe`，离线 mock 模式跳过探针；随后执行 `init` 并在 `8091` 启动服务。若未收到私密文件，可继续使用下面的占位符做离线交互 smoke。
+收到私密文件时，优先从仓库根目录复制其中完整代码块执行。真实模型模式会先运行 `model-probe`，离线 mock 模式跳过探针；随后执行 `init`、装载晴川 fixture 并在 `8091` 启动服务。若未收到私密文件，可继续使用下面的占位符做离线交互 smoke。
 
 设置本地测试环境。三个 secret 应使用不同的本地随机值：
 
 ```bash
-export DATA_DIR="$PWD/data"
+export DATA_DIR="$PWD/data-workspace-agent"
 export ADMIN_AUTH_REQUIRED="true"
 export BOOTSTRAP_ADMIN_ID="local-admin"
 export ADMIN_API_KEY="<LOCAL_ADMIN_SECRET>"
@@ -246,15 +268,16 @@ export MODEL_MOCK_MODE="true"
 
 ```bash
 PYTHONPATH=src .venv/bin/python -m ecommerce_agent.cli init
-PYTHONPATH=src .venv/bin/python -m ecommerce_agent.cli serve --host 127.0.0.1 --port 8080
+PYTHONPATH=src .venv/bin/python -m ecommerce_agent.cli simulate-store --load-only
+PYTHONPATH=src .venv/bin/python -m ecommerce_agent.cli serve --host 127.0.0.1 --port 8091
 ```
 
 打开：
 
-- `http://127.0.0.1:8080/admin`：统筹 Agent 统一工作台。
-- `http://127.0.0.1:8080/admin/advanced`：原高级管理控制台。
+- `http://127.0.0.1:8091/admin`：统筹 Agent 统一工作台。
+- `http://127.0.0.1:8091/admin/advanced`：原高级管理控制台。
 
-`eval` 和 `simulate-store` 都不是启动前置。需要额外验收时再单独运行；`simulate-store` 会向当前 `DATA_DIR` 写入显式虚拟数据，建议使用单独测试目录。
+`simulate-store --load-only` 只装载数据，不执行场景或模型评测，可重复运行。若要专门验证空库，跳过这条命令或在模板中设置 `WORKSPACE_LOAD_DEMO_DATA=false`。不带 `--load-only` 的完整 `simulate-store` 和 `eval` 仍是独立验收命令，不是服务启动前置。
 
 ## 7. 接入真实模型
 
@@ -273,22 +296,25 @@ export MODEL_API_KEY="<secret>"
 
 ```bash
 PYTHONPATH=src .venv/bin/python -m ecommerce_agent.cli model-probe
-PYTHONPATH=src .venv/bin/python -m ecommerce_agent.cli serve --host 127.0.0.1 --port 8080
+PYTHONPATH=src .venv/bin/python -m ecommerce_agent.cli init
+PYTHONPATH=src .venv/bin/python -m ecommerce_agent.cli simulate-store --load-only
+PYTHONPATH=src .venv/bin/python -m ecommerce_agent.cli serve --host 127.0.0.1 --port 8091
 ```
 
-变量的完整说明见 `.env.example`，本次交测的完整启动结构见 `workspace-env.example.md`。真实凭据只放在被忽略的本机 `workspace-env.md` 或密钥管理器中，不得进入仓库、Issue 或 PR 评论。
+变量的完整说明见 `.env.example`，本次交测的完整启动结构见 `docs/handoff/workspace-agent/workspace-env.example.md`。真实凭据只放在被忽略的本机 `workspace-env.md` 或密钥管理器中，不得进入仓库、Issue 或 PR 评论。
 
 ## 8. 交接人员自测清单
 
 1. 登录 `/admin`，确认有“历史会话”和“新建会话”。
-2. 新建会话，发送普通只读问题；刷新页面后确认用户和 Agent 消息仍在。
-3. 使用真实模型发送复合只读问题，例如“查看库存风险和最近收入，并告诉我先处理什么”，确认可以拆成多个只读任务并完整汇总。
-4. 发送假设或售前问句，例如“确认后退款会发生什么”，确认不会仅因包含“退款”二字被确定性代码强制改成写动作。
-5. 发送明确写请求，确认返回 `propose_action` / `requires_confirmation=true`，且没有实际退款、采购、发布或改价。
-6. 构造需要前置结果的查询，关注 `argument_refs` 缺失、路径越界和前置失败是否 fail closed。
-7. 刷新后检查工具摘要、确认状态和动作摘要没有丢失。
-8. 打开 `/admin/advanced`，确认原经营总览、数据准备度和其他高级模块仍能进入。
-9. 运行上面的 81 项影响范围回归；准备合并前再运行仓库全量。
+2. 询问“晴川生活电器旗舰店有哪些商品/库存/订单”，确认商品、库存、订单和经营数据不再全为 0。
+3. 新建会话，发送普通只读问题；刷新页面后确认用户和 Agent 消息仍在。
+4. 使用真实模型发送复合只读问题，例如“查看库存风险和最近收入，并告诉我先处理什么”，确认可以拆成多个只读任务并完整汇总。
+5. 发送假设或售前问句，例如“确认后退款会发生什么”，确认不会仅因包含“退款”二字被确定性代码强制改成写动作。
+6. 发送明确写请求，确认返回 `propose_action` / `requires_confirmation=true`，且没有实际退款、采购、发布或改价。
+7. 构造需要前置结果的查询，关注 `argument_refs` 缺失、路径越界和前置失败是否 fail closed。
+8. 刷新后检查工具摘要、确认状态和动作摘要没有丢失。
+9. 打开 `/admin/advanced`，确认原经营总览、数据准备度和其他高级模块仍能进入。
+10. 运行上面的影响范围回归；准备合并前再运行仓库全量。
 
 ## 9. 已知限制和未覆盖 Gate
 
