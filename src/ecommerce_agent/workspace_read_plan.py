@@ -9,6 +9,13 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class WorkspaceArgumentReference(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    path: list[str | int] = Field(min_length=1, max_length=8)
+
+
 class WorkspaceReadTask(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -16,6 +23,7 @@ class WorkspaceReadTask(BaseModel):
     objective: str = Field(min_length=1, max_length=500)
     tool_name: str = Field(min_length=1, max_length=128)
     arguments: dict[str, Any] = Field(default_factory=dict)
+    argument_refs: dict[str, WorkspaceArgumentReference] = Field(default_factory=dict)
     depends_on: list[str] = Field(default_factory=list)
 
 
@@ -38,11 +46,24 @@ class WorkspaceTaskResult(BaseModel):
     critical_values: list[str] = Field(default_factory=list)
     error_summary: str | None = None
     data_as_of: str | None = None
+    structured_data: dict[str, Any] = Field(default_factory=dict, exclude=True)
 
 
 ReadTaskRunner = Callable[
     [WorkspaceReadTask, dict[str, "WorkspaceTaskResult"]], WorkspaceTaskResult
 ]
+
+
+def _read_task_signature(task: WorkspaceReadTask) -> str:
+    return json.dumps(
+        task.model_dump(
+            mode="json",
+            include={"tool_name", "arguments", "argument_refs"},
+        ),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
 
 def validate_read_plan(
@@ -71,6 +92,12 @@ def validate_read_plan(
                 raise ValueError("read_dependency_self")
             if dependency not in known_ids:
                 raise ValueError("read_dependency_unknown")
+        declared_dependencies = set(task.depends_on)
+        if any(
+            reference.task_id not in declared_dependencies
+            for reference in task.argument_refs.values()
+        ):
+            raise ValueError("read_dependency_reference_not_declared")
 
     dependencies = {task.task_id: task.depends_on for task in plan.tasks}
     visiting: set[str] = set()
@@ -170,12 +197,7 @@ def execute_read_plan(
                     error_summary="Prerequisite information was not verified.",
                 )
                 continue
-            signature = json.dumps(
-                {"tool_name": task.tool_name, "arguments": task.arguments},
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            )
+            signature = _read_task_signature(task)
             existing = results_by_signature.get(signature)
             if existing is not None:
                 results_by_id[task_id] = existing.model_copy(
@@ -227,12 +249,7 @@ def execute_read_plan(
                     except Exception as exc:  # Each read failure is isolated to its task.
                         result = failed_result(task, str(exc))
                 results_by_id[task.task_id] = result
-                signature = json.dumps(
-                    {"tool_name": task.tool_name, "arguments": task.arguments},
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                )
+                signature = _read_task_signature(task)
                 results_by_signature[signature] = result
         finally:
             # 不等待仍在跑的线程：超时后立即收口，保证墙钟时间受 task/plan 超时约束。

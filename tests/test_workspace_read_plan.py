@@ -15,7 +15,11 @@ from ecommerce_agent.workspace_read_plan import (
 )
 
 
-READ_TOOLS = {"get_inventory_risk", "get_business_metric"}
+READ_TOOLS = {
+    "get_inventory_risk",
+    "get_business_metric",
+    "get_catalog_status",
+}
 
 
 def _task(
@@ -66,6 +70,32 @@ def test_read_plan_rejects_invalid_dependency(
     )
 
     with pytest.raises(ValueError, match=error_code):
+        validate_read_plan(plan, readable_tools=READ_TOOLS)
+
+
+def test_read_plan_rejects_argument_reference_outside_declared_dependencies() -> None:
+    plan = WorkspaceReadPlan(
+        tasks=[
+            _task("catalog", tool_name="get_catalog_status"),
+            WorkspaceReadTask(
+                task_id="inventory",
+                objective="Verify selected inventory",
+                tool_name="get_inventory_risk",
+                arguments={"store_id": "store-001"},
+                argument_refs={
+                    "sku_id": {
+                        "task_id": "catalog",
+                        "path": ["items", 0, "sku_id"],
+                    }
+                },
+                depends_on=[],
+            ),
+        ]
+    )
+
+    with pytest.raises(
+        ValueError, match="read_dependency_reference_not_declared"
+    ):
         validate_read_plan(plan, readable_tools=READ_TOOLS)
 
 
@@ -126,6 +156,19 @@ def _success(task: WorkspaceReadTask) -> WorkspaceTaskResult:
         status="success",
         verified_facts=[f"Verified {task.task_id}"],
     )
+
+
+def test_workspace_task_result_keeps_structured_data_internal() -> None:
+    result = WorkspaceTaskResult(
+        task_id="catalog",
+        objective="Verify catalog",
+        tool_name="get_catalog_status",
+        tool_label="Business information",
+        status="success",
+        structured_data={"items": [{"sku_id": "SKU-001"}]},
+    )
+
+    assert "structured_data" not in result.model_dump()
 
 
 def test_execute_read_plan_runs_three_independent_tasks_together() -> None:
@@ -262,6 +305,54 @@ def test_execute_read_plan_reuses_identical_tool_arguments_for_multiple_objectiv
         "List inventory alerts",
     ]
     assert all(item.status == "success" for item in results)
+
+
+def test_execute_read_plan_does_not_deduplicate_distinct_argument_references() -> None:
+    calls: list[str] = []
+    plan = WorkspaceReadPlan(
+        tasks=[
+            _task("catalog_a", tool_name="get_catalog_status"),
+            _task("catalog_b", tool_name="get_business_metric"),
+            WorkspaceReadTask(
+                task_id="inventory_a",
+                objective="Verify first selected item",
+                tool_name="get_inventory_risk",
+                arguments={"store_id": "store-001"},
+                argument_refs={
+                    "sku_id": {
+                        "task_id": "catalog_a",
+                        "path": ["items", 0, "sku_id"],
+                    }
+                },
+                depends_on=["catalog_a"],
+            ),
+            WorkspaceReadTask(
+                task_id="inventory_b",
+                objective="Verify second selected item",
+                tool_name="get_inventory_risk",
+                arguments={"store_id": "store-001"},
+                argument_refs={
+                    "sku_id": {
+                        "task_id": "catalog_b",
+                        "path": ["items", 0, "sku_id"],
+                    }
+                },
+                depends_on=["catalog_b"],
+            ),
+        ]
+    )
+
+    def runner(
+        task: WorkspaceReadTask,
+        predecessors: dict[str, WorkspaceTaskResult],
+    ) -> WorkspaceTaskResult:
+        calls.append(task.task_id)
+        return _success(task)
+
+    execute_read_plan(plan, runner=runner)
+
+    assert "inventory_a" in calls
+    assert "inventory_b" in calls
 
 
 def test_execute_read_plan_completes_dependency_before_running_child() -> None:

@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from fastapi.testclient import TestClient
 
 from ecommerce_agent.api import create_app
-from ecommerce_agent.business import OrderUpsert
+from ecommerce_agent.business import CatalogItemUpsert, OrderUpsert
 from ecommerce_agent.business.inventory import InventoryBalanceUpsert
 from ecommerce_agent.business.orders import OrderLineInput
 from ecommerce_agent.llm import ModelError, ModelUnavailableError
@@ -1441,11 +1441,26 @@ def test_workspace_first_round_explicit_write_request_keeps_propose_action(
     assert done["answer"]
 
 
-def test_workspace_dependent_task_does_not_break_strict_tool_schema(
+def test_workspace_dependency_argument_reference_reaches_strict_tool_schema(
     tmp_path, monkeypatch
 ) -> None:
     app = create_app(make_settings(tmp_path))
     service = app.state.agent
+    source_time = datetime.now(UTC) - timedelta(hours=1)
+    service.operations.catalog.upsert(
+        "tenant-test",
+        CatalogItemUpsert(
+            connector_id="dependent-fixture",
+            store_id="qingchuan-flagship-001",
+            item_id="dependent-item-001",
+            sku_id="QC-DEPENDENT-01",
+            title="依赖参数测试商品",
+            status="active",
+            sale_price="99.00",
+            source_updated_at=source_time,
+            source_id="catalog-dependent-001",
+        ),
+    )
     service.operations.inventory.upsert(
         "tenant-test",
         InventoryBalanceUpsert(
@@ -1455,30 +1470,47 @@ def test_workspace_dependent_task_does_not_break_strict_tool_schema(
             sku_id="QC-DEPENDENT-01",
             on_hand="8",
             average_daily_sales="2",
-            source_updated_at=datetime.now(UTC) - timedelta(hours=1),
+            source_updated_at=source_time,
             source_id="inventory-dependent-001",
         ),
+    )
+    seen_inventory_arguments: list[dict] = []
+    original_validate_selection = service.tools.validate_selection
+
+    def capture_inventory_arguments(**kwargs):
+        if kwargs["name"] == "get_inventory_risk":
+            seen_inventory_arguments.append(dict(kwargs["arguments"]))
+        return original_validate_selection(**kwargs)
+
+    monkeypatch.setattr(
+        service.tools, "validate_selection", capture_inventory_arguments
     )
 
     def plan_once(_messages, **_kwargs):
         return {
             "tasks": [
                 {
-                    "task_id": "inventory",
-                    "objective": "核对库存风险",
-                    "tool_name": "get_inventory_risk",
-                    "arguments": {"store_id": "qingchuan-flagship-001"},
-                    "depends_on": [],
-                },
-                {
                     "task_id": "catalog",
-                    "objective": "按前置事实核对商品目录",
+                    "objective": "查找目标商品",
                     "tool_name": "get_catalog_status",
                     "arguments": {
                         "store_id": "qingchuan-flagship-001",
                         "status": "active",
                     },
-                    "depends_on": ["inventory"],
+                    "depends_on": [],
+                },
+                {
+                    "task_id": "inventory",
+                    "objective": "按商品编号核对库存风险",
+                    "tool_name": "get_inventory_risk",
+                    "arguments": {"store_id": "qingchuan-flagship-001"},
+                    "argument_refs": {
+                        "sku_id": {
+                            "task_id": "catalog",
+                            "path": ["items", 0, "sku_id"],
+                        }
+                    },
+                    "depends_on": ["catalog"],
                 },
             ]
         }
@@ -1505,7 +1537,73 @@ def test_workspace_dependent_task_does_not_break_strict_tool_schema(
     events = _events(response)
     assert all(event.get("event") != "error" for event in events)
     done = events[-1]["response"]
-    assert done["completion_status"] in {"completed", "partial"}
-    statuses = [item["status"] for item in done["task_results"]]
-    assert statuses[0] in {"success", "no_data"}
-    assert statuses[1] in {"success", "no_data"}
+    assert done["completion_status"] == "completed"
+    assert [item["status"] for item in done["task_results"]] == [
+        "success",
+        "success",
+    ]
+    assert seen_inventory_arguments == [
+        {
+            "store_id": "qingchuan-flagship-001",
+            "sku_id": "QC-DEPENDENT-01",
+        }
+    ]
+
+
+def test_workspace_missing_dependency_argument_path_is_typed_failure(
+    tmp_path, monkeypatch
+) -> None:
+    app = create_app(make_settings(tmp_path))
+    service = app.state.agent
+
+    def plan_once(_messages, **_kwargs):
+        return {
+            "tasks": [
+                {
+                    "task_id": "catalog",
+                    "objective": "查找目标商品",
+                    "tool_name": "get_catalog_status",
+                    "arguments": {"store_id": "empty-store-001"},
+                    "depends_on": [],
+                },
+                {
+                    "task_id": "inventory",
+                    "objective": "按商品编号核对库存风险",
+                    "tool_name": "get_inventory_risk",
+                    "arguments": {"store_id": "empty-store-001"},
+                    "argument_refs": {
+                        "sku_id": {
+                            "task_id": "catalog",
+                            "path": ["items", 0, "sku_id"],
+                        }
+                    },
+                    "depends_on": ["catalog"],
+                },
+            ]
+        }
+
+    monkeypatch.setattr(service.model, "generate_json", plan_once)
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/admin/workspace/chat/stream",
+            headers=ADMIN_HEADERS,
+            json={
+                "session_id": "workspace:test-dependent-missing-001",
+                "message": "查找商品后核对该商品的库存。",
+                "history": [],
+                "context": {"store_id": "empty-store-001"},
+            },
+        )
+
+    assert response.status_code == 200
+    events = _events(response)
+    assert all(event.get("event") != "error" for event in events)
+    done = events[-1]["response"]
+    assert [item["status"] for item in done["task_results"]] == [
+        "success",
+        "failed",
+    ]
+    assert (
+        done["task_results"][1]["error_summary"]
+        == "read_dependency_value_missing"
+    )

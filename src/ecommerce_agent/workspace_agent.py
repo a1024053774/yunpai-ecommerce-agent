@@ -4,6 +4,7 @@ import json
 import re
 import uuid
 from collections.abc import Iterator
+from copy import deepcopy
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
@@ -98,7 +99,7 @@ class WorkspacePlan(BaseModel):
         return {} if value is None else value
 
 
-WORKSPACE_PROMPT_VERSION = "workspace-router-v4.1"
+WORKSPACE_PROMPT_VERSION = "workspace-router-v4.2"
 WORKSPACE_READ_TASK_TIMEOUT_SECONDS = 20.0
 WORKSPACE_READ_PLAN_TIMEOUT_SECONDS = 90.0
 WORKSPACE_MISSING_INFORMATION_LABELS = {
@@ -117,7 +118,7 @@ WORKSPACE_READ_SYSTEM_PROMPT = """你是云湃电商一体机的统筹 Agent。�
 
 直接回答时返回：{"response": "简短中文回答", "tasks": []}。
 需要核实实时业务事实时，一次列出完成当前问题所需的全部只读任务：
-{"response": null, "tasks": [{"task_id": "稳定短标识", "objective": "要核实的子目标", "tool_name": "目录中的只读工具", "arguments": {}, "depends_on": []}]}。
+{"response": null, "tasks": [{"task_id": "稳定短标识", "objective": "要核实的子目标", "tool_name": "目录中的只读工具", "arguments": {}, "argument_refs": {}, "depends_on": []}]}。
 确实缺少真正必填信息时，不列任务，返回：
 {"mode": "clarify", "response": "简短中文追问", "missing_information": ["store_id"], "reason": "为何需要补充"}。
 用户明确要求改变业务状态（退款、改价、下单、采购、付款、发布、审批、启停、删除等）时，
@@ -126,7 +127,9 @@ WORKSPACE_READ_SYSTEM_PROMPT = """你是云湃电商一体机的统筹 Agent。�
 
 规则：
 1. 最多四个任务；独立子目标分别列出，不遗漏用户明确询问的部分。
-2. 只有后置查询确实需要前置结果时，才在 depends_on 中填写前置 task_id。
+2. 只有后置查询确实需要前置结果时，才在 depends_on 中填写前置 task_id。后置工具需要使用
+   前置结果中的标识符时，必须同时用 argument_refs 显式指定目标参数、前置 task_id 和 JSON 路径；
+   禁止从自然语言核实结论中猜测或提取参数。
 3. 只能选择工具目录中 kind=read 的工具，不得选择生成或写入能力。
 4. 不得虚构数据，不得将无数据表达为数值零。
 5. 涉及改变业务状态的请求不由此计划执行：明确写请求时第一轮就返回 mode=propose_action，
@@ -930,30 +933,35 @@ class WorkspaceAgent:
     def _run_read_task(
         self,
         task: WorkspaceReadTask,
-        predecessor_results: dict[str, Any],
+        predecessor_results: dict[str, WorkspaceTaskResult],
         request: WorkspaceChatRequest,
         admin: AdminPrincipal,
         trace_id: str,
     ) -> WorkspaceTaskResult:
-        arguments = dict(task.arguments)
-        predecessor_evidence = [
-            item
-            for dependency in task.depends_on
-            for item in (predecessor_results.get(dependency).verified_facts or [])
-        ]
-        observation = self._execute(
-            WorkspacePlan(
-                mode="observe",
-                tool_name=task.tool_name,
-                arguments=arguments,
-                reason=task.objective,
-            ),
-            request,
-            admin,
-            trace_id,
+        arguments = deepcopy(task.arguments)
+        for argument_name, reference in task.argument_refs.items():
+            predecessor = predecessor_results.get(reference.task_id)
+            if predecessor is None:
+                raise ValueError("read_dependency_value_missing")
+            arguments[argument_name] = deepcopy(
+                self._resolve_dependency_value(
+                    predecessor.structured_data,
+                    reference.path,
+                )
+            )
+        observation = _compact(
+            self._execute(
+                WorkspacePlan(
+                    mode="observe",
+                    tool_name=task.tool_name,
+                    arguments=arguments,
+                    reason=task.objective,
+                ),
+                request,
+                admin,
+                trace_id,
+            )
         )
-        if predecessor_evidence:
-            observation["_predecessor_evidence"] = predecessor_evidence
         product_view = present_observation(task.tool_name, observation)
         status = observation_data_status(task.tool_name, observation)
         return WorkspaceTaskResult(
@@ -968,7 +976,31 @@ class WorkspaceAgent:
             critical_values=(
                 critical_fact_values(product_view) if status == "success" else []
             ),
+            structured_data=observation,
         )
+
+    @staticmethod
+    def _resolve_dependency_value(
+        structured_data: dict[str, Any],
+        path: list[str | int],
+    ) -> Any:
+        value: Any = structured_data
+        for segment in path:
+            if isinstance(segment, int):
+                if (
+                    not isinstance(value, list)
+                    or segment < 0
+                    or segment >= len(value)
+                ):
+                    raise ValueError("read_dependency_value_missing")
+                value = value[segment]
+                continue
+            if not isinstance(value, dict) or segment not in value:
+                raise ValueError("read_dependency_value_missing")
+            value = value[segment]
+        if value is None:
+            raise ValueError("read_dependency_value_missing")
+        return value
 
     def _execute(
         self,
