@@ -117,6 +117,11 @@ def main() -> None:
         action="store_true",
         help="只验收经营数据模块，不创建客服会话和人工任务",
     )
+    simulation.add_argument(
+        "--load-only",
+        action="store_true",
+        help="只幂等装载内置虚拟店铺数据，不执行场景验收",
+    )
     subparsers.add_parser("model-probe", help="执行一次最小真实模型连通性测试")
     retention = subparsers.add_parser("retention", help="检查或执行数据留存清理")
     retention.add_argument("--apply", action="store_true", help="实际执行；默认只预览")
@@ -223,7 +228,15 @@ def main() -> None:
             _print_json(report)
             raise SystemExit(0 if report["passed"] else 1)
         elif args.command == "simulate-store":
-            report = VirtualStoreSimulation(service).run(
+            simulation = VirtualStoreSimulation(service)
+            if args.load_only:
+                report = simulation.load(
+                    tenant_id=service.settings.bootstrap_tenant_id,
+                    actor=service.settings.bootstrap_admin_id,
+                )
+                _print_json(report)
+                raise SystemExit(0)
+            report = simulation.run(
                 tenant_id=service.settings.bootstrap_tenant_id,
                 actor=service.settings.bootstrap_admin_id,
                 include_customer_service=not args.skip_customer_service,

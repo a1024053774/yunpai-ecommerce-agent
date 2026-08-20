@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-import os
 import json
-from pathlib import Path
+import os
+import sqlite3
 import subprocess
 import sys
+from pathlib import Path
 
 from ecommerce_agent.database import Database
 from ecommerce_agent.service import AgentService
@@ -39,6 +40,75 @@ def _run_cli(arguments: list[str], env: dict[str, str]) -> subprocess.CompletedP
         encoding="utf-8",
         check=False,
     )
+
+
+def test_simulate_store_load_only_populates_virtual_store(tmp_path) -> None:
+    data_dir = tmp_path / "workspace-demo"
+    env = os.environ.copy()
+    env.update(
+        {
+            "PYTHONPATH": "src",
+            "PYTHONUTF8": "1",
+            "DATA_DIR": str(data_dir),
+            "ADMIN_AUTH_REQUIRED": "true",
+            "ADMIN_API_KEY": "test-admin-key-123456",
+            "BOOTSTRAP_TENANT_ID": "tenant-test",
+            "BOOTSTRAP_ADMIN_ID": "admin-test",
+            "AUTH_REQUIRED": "true",
+            "BOOTSTRAP_CLIENT_ID": "client-test",
+            "BOOTSTRAP_CLIENT_KEY": "test-client-key-123456",
+            "SUBJECT_HASH_KEY": "test-subject-key-123456",
+            "MODEL_ENABLED": "false",
+            "MODEL_MOCK_MODE": "true",
+            "KG_IMPORT_ENABLED": "false",
+        }
+    )
+
+    loaded = _run_cli(["simulate-store", "--load-only"], env)
+
+    assert loaded.returncode == 0, loaded.stderr
+    report = json.loads(loaded.stdout)
+    assert report["report_contract_version"] == "simulation-load-v1"
+    assert report["fixture_id"] == "qingchuan-home-appliance-v1"
+    assert report["store"]["store_id"] == "qingchuan-flagship-001"
+    assert report["virtual"] is True
+    assert report["production_claim"] is False
+    assert "scenarios" not in report
+    assert report["loaded"]["catalog"] >= 6
+    assert report["loaded"]["inventory"] >= 10
+    assert report["loaded"]["orders"] >= 8
+
+    with sqlite3.connect(data_dir / "agent.sqlite3") as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM catalog_items"
+        ).fetchone()[0] >= 6
+        assert connection.execute(
+            "SELECT COUNT(*) FROM inventory_balances"
+        ).fetchone()[0] >= 10
+        assert connection.execute(
+            "SELECT COUNT(*) FROM commerce_orders"
+        ).fetchone()[0] >= 8
+
+    service = AgentService(make_settings(data_dir))
+    try:
+        store_id = "qingchuan-flagship-001"
+        assert len(
+            service.operations.catalog.list_items(
+                "tenant-test", store_id=store_id
+            )
+        ) >= 6
+        assert len(
+            service.operations.inventory.list_balances(
+                "tenant-test", store_id=store_id
+            )
+        ) >= 10
+        assert len(
+            service.operations.orders.list_orders(
+                "tenant-test", store_id=store_id
+            )
+        ) >= 8
+    finally:
+        service.close()
 
 
 def test_backup_cli_create_verify_rekey_and_restore(tmp_path) -> None:

@@ -152,6 +152,39 @@ class VirtualStoreSimulation:
             },
         }
 
+    def load(
+        self,
+        *,
+        tenant_id: str,
+        actor: str,
+    ) -> dict[str, Any]:
+        """Load the virtual store fixture without running acceptance scenarios."""
+        fixture = self._load_fixture()
+        load_id = f"simulation-load-{uuid.uuid4().hex}"
+        loaded = self._load_store_data(fixture, tenant_id=tenant_id, actor=actor)
+        report = {
+            "report_contract_version": "simulation-load-v1",
+            "load_id": load_id,
+            "fixture_id": fixture["fixture_id"],
+            "fixture_version": fixture["fixture_version"],
+            "virtual": True,
+            "tenant_id": tenant_id,
+            "store": fixture["store"],
+            "loaded": loaded,
+            "production_claim": False,
+        }
+        self.service.db.audit(
+            "simulation.virtual_store.loaded",
+            actor,
+            load_id,
+            {
+                "fixture_id": fixture["fixture_id"],
+                "store_id": fixture["store"]["store_id"],
+            },
+            tenant_id,
+        )
+        return report
+
     def run(
         self,
         *,
