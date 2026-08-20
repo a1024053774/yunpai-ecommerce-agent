@@ -213,6 +213,15 @@ git switch feature/workspace-agent-pr11-pr12
 git pull --ff-only
 ```
 
+本次交测另提供统一工作台专属启动文件：
+
+- 仓库内的 `workspace-env.example.md` 是无密钥模板，可随分支交接。
+- 维护者本机的 `workspace-env.md` 已复制现有真实配置，并加入当前工作台需要显式设置的模型与会话参数；它被 `.gitignore` 排除，只能通过批准的安全渠道单独交付。
+- 专属文件使用 `DATA_DIR=$PWD/data-workspace-agent` 和端口 `8091`，避免与主工作区的 `8080`、PR #9 工作区的 `8090` 相互污染或抢占端口。
+- 新前端和后端仍由同一个 `serve` 进程提供；当前代码没有额外的 `WORKSPACE_*` 应用配置项。模板中的 `WORKSPACE_HOST`、`WORKSPACE_PORT` 只用于拼装启动命令。
+
+收到私密文件时，优先从仓库根目录复制其中完整代码块执行。真实模型模式会先运行 `model-probe`，离线 mock 模式跳过探针；随后执行 `init` 并在 `8091` 启动服务。若未收到私密文件，可继续使用下面的占位符做离线交互 smoke。
+
 设置本地测试环境。三个 secret 应使用不同的本地随机值：
 
 ```bash
@@ -265,7 +274,7 @@ PYTHONPATH=src .venv/bin/python -m ecommerce_agent.cli model-probe
 PYTHONPATH=src .venv/bin/python -m ecommerce_agent.cli serve --host 127.0.0.1 --port 8080
 ```
 
-变量的完整说明见 `.env.example`。不要复制其他人的真实 `env.md` 内容进入仓库。
+变量的完整说明见 `.env.example`，本次交测的完整启动结构见 `workspace-env.example.md`。真实凭据只放在被忽略的本机 `workspace-env.md` 或密钥管理器中，不得进入仓库、Issue 或 PR 评论。
 
 ## 8. 交接人员自测清单
 

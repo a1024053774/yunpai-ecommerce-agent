@@ -5,6 +5,14 @@
 
 ## 当前验收结论
 
+- 结论：2026-08-20 统筹 Agent 统一前端的专属本机启动包已补齐。私密
+  `workspace-env.md` 从现有本机 `env.md` 复制 20 项原值，另将 `DATA_DIR` 隔离为
+  `$PWD/data-workspace-agent`，使用端口 `8091`，并显式补齐当前代码已支持的模型与会话
+  参数；真实模型模式执行 `model-probe`，离线 mock 模式跳过探针。私密文件与数据目录均被
+  Git 忽略，仓库只提交无密钥 `workspace-env.example.md`。变量逐项一致性、私密文件忽略、
+  tracked diff 密钥泄露检查、两个启动块的 Bash 语法及 whitespace 均通过。本 worktree 当前
+  没有 `.venv`，因此本轮没有运行真实模型探针或实际启动服务；交接人员仍须按文档在自己的
+  环境执行运行态 smoke。见 E-20260820-005。
 - 结论：2026-08-20 统筹 Agent 统一前端已形成可交功能与集成测试的固定候选，代码核验对象为
   `a0d09ab`，其中 `921e676` 合成 PR #9 基线、PR #11 会话持久化与 PR #12 复合只读
   查询；PR #9 已恢复为 Open + Draft，PR #11/#12 保持 Draft，fork `main` 仍为
@@ -505,6 +513,18 @@
 
 ## 证据索引
 
+- E-20260820-005：统一工作台专属本机启动包。将主工作区被忽略的 `env.md` 作为
+  私密来源，仅在内存中逐项比较，不向日志或 tracked 文件输出真实值；除有意隔离的
+  `DATA_DIR` 外，源文件 20 项变量在 `workspace-env.md` 中逐项一致。新增当前配置层
+  已支持的 `MODEL_MOCK_MODE`、`MODEL_TIMEOUT_SECONDS`、`MODEL_TEMPERATURE`、
+  `MODEL_THINKING_ENABLED`、`MODEL_STREAMING`、`MODEL_RETRY_ATTEMPTS` 和
+  `SESSION_HISTORY_LIMIT`；未虚构新的 `WORKSPACE_*` 应用开关，host/port 变量只服务于
+  shell 启动命令。`git check-ignore` 确认私密文件和独立数据目录被排除；四项真实 secret
+  与 tracked diff 逐值比对无命中；私密文件及无密钥模板首个 Bash 块均通过 `bash -n`，
+  `git diff --check` 退出 0。模板和交接文档记录 8091 的两个页面入口、真实/离线探针
+  分支及 `eval`/`simulate-store` 非启动前置边界。本 worktree 缺少 `.venv`，未执行
+  `model-probe`、`init`、`serve` 或 HTTP smoke；该证据在源配置、配置解析、CLI
+  启动契约或模板变化后失效。
 - E-20260820-004：统筹 Agent 统一前端最终独立交测核验。固定代码对象为
   `a0d09abddb40c9f9cc0e5d964a0b6abf4aeaccd5`，功能合成提交为 `921e676`；PR #9
   `adee44e`、PR #11 `6ec6a89`、PR #12 `68e3846` 均经
@@ -715,7 +735,7 @@
 
 | Gate ID | 日期 | Gate | 对象 | 结果 | 证据 ID | 豁免与确认人 |
 |---|---|---|---|---|---|---|
-| G-WORKSPACE-HANDOVER-001 | 2026-08-20 | 统筹 Agent 统一前端功能与集成交测门 | PR #9 统一工作台基线、PR #11 会话持久化、PR #12 复合只读查询、独立已知问题修复、v35 迁移、HTTP/浏览器 smoke | 通过；以交测分支固定代码对象 `a0d09ab` 为准 | E-20260820-004 | 仅批准交给他人做功能与集成测试；不豁免 PR #9 冲突、正式合 main、真实模型/平台、长稳、安全/灾备或生产发布 Gate |
+| G-WORKSPACE-HANDOVER-001 | 2026-08-20 | 统筹 Agent 统一前端功能与集成交测门 | PR #9 统一工作台基线、PR #11 会话持久化、PR #12 复合只读查询、独立已知问题修复、v35 迁移、HTTP/浏览器 smoke | 通过；以交测分支固定代码对象 `a0d09ab` 为准 | E-20260820-004、E-20260820-005 | 仅批准交给他人做功能与集成测试；不豁免 PR #9 冲突、正式合 main、真实模型/平台、长稳、安全/灾备或生产发布 Gate |
 | G-M7R-ALL-001 | 2026-08-20 | M7-R WP1～WP4 完整代码级本机门 | v34 统一导入/隐私/来源/证据、八类报表规范化、v35 商品身份与对账、readiness API/页面、显式隔离 Demo、WP5 独立报告与 merge-tip 回归 | 通过；PR #20 已合入并在 `f6bb47c` 复验 | E-20260820-001 | 仅关闭 F-323 代码级本机里程碑；不豁免真实平台字段/数据、真实经营结论、生产发布/权限/写能力或 M8-R～M10-R |
 | G-M7R-WP5-001 | 2026-08-20 | M7-R WP5 独立验收与合入后复验门 | 原独立报告与 6 项探针、补充验收矩阵、mutation 红→绿、桌面/390px、报告/截图哈希 double-check、精确 merge-tip 聚焦/全量/静态门禁 | 通过；独立签署原件保持不变，补充证据不代签 | E-20260820-001 | 只签署已验证代码对象和本机技术 Gate；真实平台接入、业务签署与生产 Gate 无豁免 |
 | G-FORECAST-PLANNING-CONTRACT-001 | 2026-08-13 | Forecast/Planning 联合配置与 current plan 门 | 7/14/30、lead+review/max-stock required days、legacy POST guard、no partial write、GET/tool no superseded plan | 通过 | E-20260813-013 | 仅限本机 API/虚拟策略证据；未运行全量，不豁免真实补货策略、长稳、自动动作或生产 Gate |
@@ -784,6 +804,11 @@
 
 ## 验收记录
 
+- 2026-08-20：补齐统筹 Agent 统一前端专属启动包。本机私密 `workspace-env.md` 复制现有
+  配置的真实值但不入 Git，使用独立数据目录和 8091；仓库提交无密钥模板并在交接文档说明
+  真实模型探针、离线 mock 和两个页面入口。变量一致性、ignore、tracked diff secret 扫描、
+  Bash 语法和 whitespace 通过；因本 worktree 无 `.venv`，实际模型及服务启动留给交接人员
+  按文档复跑。见 E-20260820-005。
 - 2026-08-20：完成统筹 Agent 统一前端的最终独立交测核验。恢复误关闭的老板 PR #9 并确认
   代码未丢失；以 `921e676` 合成 PR #9/#11/#12，以 `a0d09ab` 固定代码对象，fork
   `main` 未动且 PR #11/#12 保持 Draft。七组旧版失败反证在候选上转绿，影响范围
