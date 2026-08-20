@@ -217,6 +217,16 @@ class LedgerEntryInput(BaseModel):
             raise ValueError("demo_source_cannot_enter_formal_scope")
         if self.scope is ProfitScope.DEMO and self.source_kind != "demo":
             raise ValueError("formal_source_cannot_enter_demo_scope")
+        if (
+            self.scope is ProfitScope.FORMAL
+            and category
+            in {
+                ExpenseCategory.SIGNED_REVENUE,
+                ExpenseCategory.REFUND_OFFSET,
+            }
+            and self.source_kind != "actual"
+        ):
+            raise ValueError("formal_revenue_requires_actual_source")
         try:
             amount = Decimal(self.amount)
         except Exception as exc:

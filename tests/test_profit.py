@@ -259,6 +259,25 @@ def test_demo_source_cannot_enter_formal_scope(tmp_path) -> None:
     assert "demo_source_cannot_enter_formal_scope" in str(exc.value)
 
 
+def test_formal_revenue_requires_actual_source(tmp_path) -> None:
+    service = make_service(tmp_path)
+    with pytest.raises(ValueError) as exc:
+        service.record_entry(
+            TENANT,
+            LedgerEntryInput(
+                store_id=STORE,
+                period=PERIOD,
+                category=ExpenseCategory.SIGNED_REVENUE,
+                scope=ProfitScope.FORMAL,
+                amount="1000.00",
+                source_kind="manual",
+                order_id="O1",
+                entry_key="manual-revenue",
+            ),
+        )
+    assert "formal_revenue_requires_actual_source" in str(exc.value)
+
+
 def test_category_belongs_to_exactly_one_layer() -> None:
     seen: dict[ExpenseCategory, ProfitLayer] = {}
     for category, layer in CATEGORY_LAYER.items():

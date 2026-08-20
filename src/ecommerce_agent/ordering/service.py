@@ -289,7 +289,7 @@ class OrderingService:
             to_status = PurchaseOrderStatus.AWAITING_CONFIRMATION
             if not legal_transition(from_status, to_status):
                 raise OrderingError("ordering_status_transition_invalid")
-            conn.execute(
+            updated = conn.execute(
                 """
                 UPDATE purchase_order_drafts
                 SET status=?, updated_at=?
@@ -305,6 +305,8 @@ class OrderingService:
                     from_status.value,
                 ),
             )
+            if updated.rowcount != 1:
+                raise OrderingError("ordering_status_conflict")
             self._record_event(
                 conn,
                 tenant_id,
@@ -393,7 +395,7 @@ class OrderingService:
             to_status = PurchaseOrderStatus.CANCELLED
             if not legal_transition(from_status, to_status):
                 raise OrderingError("ordering_status_transition_invalid")
-            conn.execute(
+            updated = conn.execute(
                 """
                 UPDATE purchase_order_drafts
                 SET status=?, updated_at=?
@@ -409,6 +411,8 @@ class OrderingService:
                     from_status.value,
                 ),
             )
+            if updated.rowcount != 1:
+                raise OrderingError("ordering_status_conflict")
             self._record_event(
                 conn,
                 tenant_id,

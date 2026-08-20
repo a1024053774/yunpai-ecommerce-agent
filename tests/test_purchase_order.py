@@ -391,6 +391,23 @@ def test_cancel_from_draft(tmp_path) -> None:
     assert "ordering_status_transition_invalid" in str(exc.value)
 
 
+def test_double_submit_conflict(tmp_path) -> None:
+    db = make_db(tmp_path)
+    seed_gate_ready(db)
+    service = service_for(db)
+    draft = service.create_draft(TENANT, STORE, ACTOR, make_payload())
+    service.submit_for_confirmation(TENANT, STORE, draft.order_draft_id, ACTOR)
+    with pytest.raises(OrderingError) as exc:
+        service.submit_for_confirmation(TENANT, STORE, draft.order_draft_id, ACTOR)
+    assert (
+        "ordering_status_conflict" in str(exc.value)
+        or "ordering_status_transition_invalid" in str(exc.value)
+    )
+    view = service.get(TENANT, STORE, draft.order_draft_id)
+    assert view.status is PurchaseOrderStatus.AWAITING_CONFIRMATION
+    assert len(view.events) == 2  # 创建 + 一次提交，无重复事件
+
+
 def test_status_updates_never_touch_other_tables(tmp_path) -> None:
     db = make_db(tmp_path)
     seed_gate_ready(db)
