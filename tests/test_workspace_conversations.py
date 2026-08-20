@@ -343,6 +343,100 @@ def test_workspace_stream_persists_user_answer_and_processing(tmp_path, monkeypa
     assert messages[1]["processing"]["trace_id"] == events[-1]["response"]["trace_id"]
 
 
+def test_workspace_stream_persists_structured_metadata_columns(
+    tmp_path, monkeypatch
+) -> None:
+    app = create_app(make_settings(tmp_path))
+    decisions = iter(
+        [
+            {
+                "mode": "propose_action",
+                "response": "确认要执行退款？",
+                "action_summary": "执行退款",
+                "reason": "用户明确要求退款",
+            }
+            for _ in range(2)
+        ]
+    )
+    monkeypatch.setattr(
+        app.state.agent.model,
+        "generate_json",
+        lambda messages, **kwargs: next(decisions),
+    )
+
+    with TestClient(app) as client:
+        conversation = client.post(
+            "/v1/admin/workspace/conversations", headers=ADMIN_HEADERS
+        ).json()
+        response = client.post(
+            f"/v1/admin/workspace/conversations/{conversation['id']}/chat/stream",
+            headers=ADMIN_HEADERS,
+            json={"message": "把这些订单全部退款", "context": {}},
+        )
+
+    assert response.status_code == 200
+    with app.state.agent.db.connect() as conn:
+        row = conn.execute(
+            """SELECT trace_id, tool_name, tool_label, tool_summary,
+                      requires_confirmation, action_summary, processing_json
+               FROM workspace_messages
+               WHERE role='assistant'"""
+        ).fetchone()
+    assert row is not None
+    assert row["trace_id"] is not None
+    assert row["requires_confirmation"] == 1
+    assert "核对后再执行" in row["action_summary"]
+    assert "completed" in row["processing_json"]
+
+
+def test_workspace_model_answer_not_overridden_by_write_keywords(
+    tmp_path, monkeypatch
+) -> None:
+    app = create_app(make_settings(tmp_path))
+    decisions = iter(
+        [
+            {
+                "mode": "answer",
+                "response": "退款流程是这样的：售后入口提交申请即可。",
+                "reason": "只询问流程",
+            }
+        ]
+    )
+    monkeypatch.setattr(
+        app.state.agent.model,
+        "generate_json",
+        lambda messages, **kwargs: next(decisions),
+    )
+    monkeypatch.setattr(
+        app.state.agent.model,
+        "stream_generate",
+        lambda messages: iter(["退款流程是这样的：售后入口提交申请即可。"]),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/admin/workspace/chat/stream",
+            headers=ADMIN_HEADERS,
+            json={
+                "session_id": "workspace:test-no-override-001",
+                "message": "不要现在退款，只想了解退款流程",
+                "history": [],
+                "context": {},
+            },
+        )
+
+    assert response.status_code == 200
+    events = [
+        json.loads(line.removeprefix("data: "))
+        for line in response.text.splitlines()
+        if line.startswith("data: ")
+    ]
+    done = events[-1]["response"]
+    assert done["mode"] == "answer"
+    assert done["requires_confirmation"] is False
+    assert "退款流程" in done["answer"]
+
+
 def test_workspace_stream_persists_incomplete_answer_on_agent_error(tmp_path, monkeypatch) -> None:
     app = create_app(make_settings(tmp_path))
     monkeypatch.setattr(

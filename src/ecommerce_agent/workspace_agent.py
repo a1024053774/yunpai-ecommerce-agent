@@ -623,9 +623,7 @@ class WorkspaceAgent:
             thinking_enabled=self.service.settings.model_decision_thinking_enabled,
         )
         plan = WorkspacePlan.model_validate(raw)
-        if plan.mode == "propose_action" and not self._requires_confirmation_request(
-            request.message
-        ):
+        if plan.mode == "propose_action":
             review_payload = {
                 "management_request": safe_message,
                 "operator_context": request.context.model_dump(exclude_none=True),
@@ -655,16 +653,6 @@ class WorkspaceAgent:
         allowed = {item["name"] for item in self.tool_catalog()}
         if plan.tool_name and plan.tool_name not in allowed:
             raise ValueError("tool_not_registered")
-        if plan.mode in {"answer", "clarify"} and self._requires_confirmation_request(
-            request.message
-        ):
-            return WorkspacePlan(
-                mode="propose_action",
-                response=None,
-                reason="该请求会改变业务状态，需要先核对能力、范围和执行条件",
-                action_summary="该操作需要在对应管理模块核对后再执行",
-                advanced_view=plan.advanced_view,
-            )
         return plan
 
     def _execute(

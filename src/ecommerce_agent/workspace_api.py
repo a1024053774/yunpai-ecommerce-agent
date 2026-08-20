@@ -206,6 +206,16 @@ def build_workspace_router(
                             message_id=message_id,
                             status="completed",
                             content=safe_answer,
+                            metadata={
+                                "trace_id": result.get("trace_id"),
+                                "tool_name": result.get("tool_name"),
+                                "tool_label": result.get("tool_label"),
+                                "tool_summary": latest_tool.get("summary"),
+                                "requires_confirmation": bool(
+                                    result.get("requires_confirmation")
+                                ),
+                                "action_summary": result.get("action_summary"),
+                            },
                             processing={
                                 "stage": "completed",
                                 "trace_id": result.get("trace_id"),

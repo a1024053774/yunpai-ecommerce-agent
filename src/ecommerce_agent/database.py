@@ -4163,7 +4163,9 @@ class Database:
         self, *, tenant_id: str, admin_id: str, conversation_id: str,
         role: str, content: str, status: str = "completed", trace_id: str | None = None,
         processing: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        meta = metadata or {}
         message = {
             "id": f"workspace-message:{uuid.uuid4().hex}",
             "conversation_id": conversation_id,
@@ -4173,6 +4175,11 @@ class Database:
             "content": content,
             "status": status,
             "trace_id": trace_id,
+            "tool_name": meta.get("tool_name"),
+            "tool_label": meta.get("tool_label"),
+            "tool_summary": meta.get("tool_summary"),
+            "requires_confirmation": 1 if meta.get("requires_confirmation") else 0,
+            "action_summary": meta.get("action_summary"),
             "processing_json": json.dumps(processing or {}, ensure_ascii=False),
             "created_at": utc_now(),
         }
@@ -4185,8 +4192,11 @@ class Database:
                 raise KeyError("workspace_conversation_not_found")
             conn.execute(
                 """INSERT INTO workspace_messages
-                (id, conversation_id, tenant_id, admin_id, role, content, status, trace_id, processing_json, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (id, conversation_id, tenant_id, admin_id, role, content, status,
+                 trace_id, tool_name, tool_label, tool_summary,
+                 requires_confirmation, action_summary,
+                 processing_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (*message.values(), message["created_at"]),
             )
             conn.execute(
@@ -4229,6 +4239,7 @@ class Database:
         status: str,
         content: str | None = None,
         processing: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if status not in {"completed", "generating", "incomplete"}:
             raise ValueError("workspace_message_status_invalid")
@@ -4259,6 +4270,31 @@ class Database:
                        WHERE id=? AND tenant_id=? AND admin_id=? AND conversation_id=?""",
                     (
                         json.dumps(processing, ensure_ascii=False),
+                        updated_at,
+                        message_id,
+                        tenant_id,
+                        admin_id,
+                        conversation_id,
+                    ),
+                )
+            if metadata is not None:
+                conn.execute(
+                    """UPDATE workspace_messages SET
+                       trace_id=COALESCE(?, trace_id),
+                       tool_name=COALESCE(?, tool_name),
+                       tool_label=COALESCE(?, tool_label),
+                       tool_summary=COALESCE(?, tool_summary),
+                       requires_confirmation=?,
+                       action_summary=COALESCE(?, action_summary),
+                       updated_at=?
+                       WHERE id=? AND tenant_id=? AND admin_id=? AND conversation_id=?""",
+                    (
+                        metadata.get("trace_id"),
+                        metadata.get("tool_name"),
+                        metadata.get("tool_label"),
+                        metadata.get("tool_summary"),
+                        1 if metadata.get("requires_confirmation") else 0,
+                        metadata.get("action_summary"),
                         updated_at,
                         message_id,
                         tenant_id,
