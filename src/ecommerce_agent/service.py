@@ -46,6 +46,7 @@ from .rag import KnowledgeBase
 from .quality import QualityService
 from .releases import ReleaseReplayRequest, ReleaseService
 from .readonly_data import ReadonlyDataService, ReadonlyReportIngestionService
+from .ordering import OrderingService
 from .readonly_readiness import ReadonlyDemoService, ReadonlyReadinessService
 from .product_identity import ProductIdentityService
 from .schemas import ChatResponse, SourceItem
@@ -135,6 +136,7 @@ class AgentService:
             self.product_identity = ProductIdentityService(self.db)
             self.readonly_readiness = ReadonlyReadinessService(self.db)
             self.readonly_demo = ReadonlyDemoService(self.db)
+            self.ordering = OrderingService(self.db)
             if self.settings.model_enabled:
                 # 文案与报告解读可走真实模型；模型异常时服务内部自动降级到模板。
                 self.operations.ops_assistant.attach_model(self.model)
