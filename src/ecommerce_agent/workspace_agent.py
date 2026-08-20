@@ -76,6 +76,7 @@ class WorkspacePlan(BaseModel):
     reason: str = Field(default="", max_length=500)
     action_summary: str | None = Field(default=None, max_length=500)
     advanced_view: str | None = Field(default=None, max_length=64)
+    missing_information: list[str] = Field(default_factory=list, max_length=5)
 
     @field_validator("arguments", mode="before")
     @classmethod
@@ -83,7 +84,17 @@ class WorkspacePlan(BaseModel):
         return {} if value is None else value
 
 
-WORKSPACE_PROMPT_VERSION = "workspace-router-v3"
+WORKSPACE_PROMPT_VERSION = "workspace-router-v3.1"
+WORKSPACE_MISSING_INFORMATION_LABELS = {
+    "store_id": "店铺编号",
+    "sku_id": "商品编号",
+    "order_id": "订单编号",
+    "product_name": "商品名称",
+    "date_range": "时间范围",
+    "scope": "处理范围",
+    "quantity": "数量",
+    "channel": "渠道",
+}
 
 WORKSPACE_WRITE_TARGETS = (
     r"退款|退钱|赔付|赔偿|改价|调价|预算|投放|采购|下单|订货单|"
@@ -97,7 +108,7 @@ WORKSPACE_WRITE_REQUEST_PATTERNS = (
 )
 
 
-WORKSPACE_SYSTEM_PROMPT = """你是云湃电商一体机的统筹 Agent，服务对象是店主和运营负责人。
+WORKSPACE_SYSTEM_PROMPT = f"""你是云湃电商一体机的统筹 Agent，服务对象是店主和运营负责人。
 
 你的职责是理解管理目标，自主判断下一步是直接回答、追问必要信息、按需查询业务事实，还是提出需要确认的动作建议。
 工具不是固定流程，也不是每次必调。每次只决定“当前下一步”；查询结果会在下一轮提供给你，你要重新判断事实是否足够，必要时可以继续选择另一个工具。
@@ -111,12 +122,13 @@ WORKSPACE_SYSTEM_PROMPT = """你是云湃电商一体机的统筹 Agent，服务
 - reason: 简短说明当前步骤，不披露思维链
 - action_summary: propose_action 时说明建议执行什么
 - advanced_view: 可选的高级页面标识
+- missing_information: clarify 时只列出最多 5 个缺失信息键；其他模式为空数组。只允许：{", ".join(WORKSPACE_MISSING_INFORMATION_LABELS)}
 
 规则：
 1. 工具目录只是能力清单。能根据稳定常识或对话上下文可靠回答时直接 answer；问题涉及当前库存、订单、经营数据、系统状态等实时业务事实时，选择与问题直接对应的工具取得证据。
 2. 每次 observe 只选择一个工具。拿到已核实结果后重新判断：证据足够就 answer；证据不足且另一工具能补齐才继续 observe；不得机械地把所有工具都调用一遍。
 3. 不得把某个模块“没有记录”推断成另一个模块“没有问题”，也不得用整机概览代替库存、订单、利润等专门事实。整机概览只适用于真正询问整体运行情况、综合待办或系统健康的问题。
-4. 工具参数中的筛选条件如果是可选项，不要向用户索要；应在授权范围内查询最宽范围并使用目录给出的默认值。只有缺少真正必填且无法从上下文推断的信息时才 mode=clarify，并只问最少信息。
+4. 工具参数中的筛选条件如果是可选项，不要向用户索要；应在授权范围内查询最宽范围并使用目录给出的默认值。只有缺少真正必填且无法从上下文推断的信息时才 mode=clarify，并把缺失项写入 missing_information；不要在 response 中承诺后续生成、提交或执行。
 5. 涉及退款、赔付、改价、预算、投放发布、采购、调拨、付款、启停发布、审批、回滚、删除、修改权限等写操作，一律 mode=propose_action；当前统筹接口不会直接执行。可执行动作能力目录为空时，不得承诺“确认后我会生成、提交或执行”。如果请求同时需要先核实实时事实，可以先 observe，取得足够事实后再 propose_action。
 6. 不得虚构数据；不能从工具取得的事实要明确说明边界。不要把计划、建议或模型猜测描述为已经发生的业务事实。
 7. reason 只用面向店主的中文描述“正在查看哪类业务/为何需要确认”，不输出隐藏推理。
@@ -653,6 +665,15 @@ class WorkspaceAgent:
         allowed = {item["name"] for item in self.tool_catalog()}
         if plan.tool_name and plan.tool_name not in allowed:
             raise ValueError("tool_not_registered")
+        if plan.mode == "clarify":
+            plan = plan.model_copy(
+                update={
+                    "response": self._safe_clarification_response(
+                        plan.missing_information
+                    ),
+                    "action_summary": None,
+                }
+            )
         return plan
 
     def _execute(
@@ -862,6 +883,20 @@ class WorkspaceAgent:
             "这属于需要确认的业务操作。当前统筹入口只负责分析和提出建议，"
             "不会直接生成、提交或执行；请进入对应高级管理页面核对能力、范围和条件。"
         )
+
+    @staticmethod
+    def _safe_clarification_response(missing_information: list[str]) -> str:
+        labels: list[str] = []
+        for item in missing_information:
+            label = WORKSPACE_MISSING_INFORMATION_LABELS.get(str(item).strip())
+            if label and label not in labels:
+                labels.append(label)
+        request = (
+            f"请补充：{'、'.join(labels)}。"
+            if labels
+            else "请补充完成任务所需的最少信息。"
+        )
+        return request + "当前入口不会据此直接生成、提交或执行业务操作。"
 
     @staticmethod
     def _deterministic_answer(
