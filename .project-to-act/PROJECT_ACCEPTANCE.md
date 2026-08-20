@@ -506,6 +506,19 @@
   `b3b4cba` 的独立影响范围回归为 `40 passed in 37.06s`，compileall、whitespace 与
   project-to-act validate 均通过。该证据仅证明本机代码与固定/mock 反例；未运行真实模型
   benchmark、真实平台/数据、长稳或生产 Gate，PR 应保持 Draft 并交由其他成员测试。
+- E-20260820-003：PR #12 已知问题独立修复候选，功能验证对象为原 PR head
+  `14e3131ca78c77f367fad104440715cd8ff49439` 之上的 `3d68f2e`、`ed188fd` 与
+  `ba8275c`。未采用原 PR 的 passed 或既有门禁作为结论：独立反例先复现模型自由文案
+  泄露“生成订货单并执行采购”的越权承诺；三个 `0.1s` 慢任务被逐项等待约 `0.315s`，
+  超过同批预算上界 `0.22s`；未声明依赖的参数引用未被拒绝、不同引用被错误去重、后置
+  库存工具未收到前置 SKU，且缺失路径退化为宽范围查询。修复后 `clarify` 仍保留模型语义
+  决策而文案受固定能力边界约束；同批 future 共享一次 wait 和 plan deadline；显式
+  `task_id + path` 引用只从声明的前置结构化结果解析，缺失或越界 fail closed，解析值继续
+  进入现有严格工具参数校验。聚焦依赖反例分别为 `3 passed, 21 deselected` 与
+  `2 passed, 27 deselected`，超时文件为 `24 passed`；当前功能 tip `ba8275c` 的独立影响
+  范围回归为 `60 passed in 30.80s`，compileall、whitespace 与 project-to-act validate
+  均通过。该证据仅证明本机代码与固定/mock 反例；未运行真实模型 benchmark、真实平台/
+  数据、长稳或生产 Gate，PR 应保持 Draft 并交由其他成员测试。
 - E-20260820-001：M7-R WP5 独立验收归档、PR #20 合入与 merge-tip 复验。WP1 功能提交
   `0b54a247` 和集成提交 `e127c397` 已在 PR base `48013b1` 的祖先链，故 PR #20 只承载
   WP2～WP4 差异但 WP5 验收对象仍是 WP1～WP4 组合态。缪海南原报告 SHA-256 为
@@ -748,6 +761,11 @@
   边界；独立反例由 `5 failed` 转为 `5 passed`，最终影响范围 `40 passed`，静态与治理校验
   通过。仍仅为 Draft 交测候选，不替代真实模型、真实数据、长稳或生产 Gate。见
   E-20260820-002。
+- 2026-08-20：完成 PR #12 三项已知问题的独立红→绿修复候选。功能提交 `3d68f2e`
+  收紧澄清文案，`ed188fd` 将并发读取限制在共享超时预算，`ba8275c` 增加显式结构化依赖
+  参数引用并对未声明依赖与缺失路径 fail closed；最终影响范围 `60 passed`，静态与治理
+  校验通过。仍仅为 Draft 交测候选，不替代真实模型、真实数据、长稳或生产 Gate。见
+  E-20260820-003。
 - 2026-08-20：完成 M7-R WP5 正式收口。WP1 因公共基建需要先行合入，PR #20 只包含
   WP2～WP4；补充报告将验收对象明确为 base 中 WP1 与 head `ece61e1` 的 WP2～WP4 组合态，
   且不改写缪海南原独立报告。第二轮独立 double-check 对报告/截图哈希、PR 拓扑、detached

@@ -4,9 +4,79 @@ import json
 
 from ecommerce_agent.workspace_presenter import (
     TOOL_LABELS,
+    critical_fact_values,
+    observation_data_status,
     observation_summary,
     present_observation,
 )
+
+
+def test_metric_presenter_distinguishes_no_data_from_verified_zero() -> None:
+    no_data = {
+        "display_name": "已支付且未取消订单金额",
+        "value": "0.00",
+        "unit": "currency",
+        "quality": "no_data",
+        "evidence_count": 0,
+    }
+    verified_zero = {
+        "display_name": "已支付且未取消订单金额",
+        "value": "0.00",
+        "unit": "currency",
+        "quality": "available",
+        "evidence_count": 1,
+    }
+
+    no_data_view = present_observation("get_business_metric", no_data)
+    zero_view = present_observation("get_business_metric", verified_zero)
+
+    assert observation_data_status("get_business_metric", no_data) == "no_data"
+    assert "暂无数据" in no_data_view["已核实信息"][0]
+    assert critical_fact_values(no_data_view) == []
+    assert observation_data_status("get_business_metric", verified_zero) == "success"
+    assert "0.00 元" in zero_view["已核实信息"][0]
+    assert critical_fact_values(zero_view) == ["0.00", "1"]
+
+
+def test_inventory_presenter_distinguishes_empty_scope_from_zero_replenishment() -> None:
+    empty = {"risks": []}
+    verified = {
+        "risks": [
+            {
+                "sku_id": "SKU-HEALTHY-001",
+                "risk_code": "healthy",
+                "risk_level": "low",
+                "available": "100.00",
+                "coverage_days": "100.00",
+                "recommended_replenishment": "0.00",
+            }
+        ]
+    }
+
+    empty_view = present_observation("get_inventory_risk", empty)
+    verified_view = present_observation("get_inventory_risk", verified)
+
+    assert observation_data_status("get_inventory_risk", empty) == "no_data"
+    assert "暂无数据" in empty_view["已核实信息"][0]
+    assert observation_data_status("get_inventory_risk", verified) == "success"
+    assert "建议补货 0.00 件" in json.dumps(verified_view, ensure_ascii=False)
+    assert {"1", "0", "SKU-HEALTHY-001", "0.00"} <= set(
+        critical_fact_values(verified_view)
+    )
+
+
+def test_product_search_requires_unique_resolution_before_dependent_query() -> None:
+    ambiguous = {
+        "resolution": "ambiguous",
+        "items": [{"sku_id": "SKU-A"}, {"sku_id": "SKU-B"}],
+    }
+    resolved = {
+        "resolution": "resolved",
+        "items": [{"sku_id": "SKU-A"}],
+    }
+
+    assert observation_data_status("search_products", ambiguous) == "no_data"
+    assert observation_data_status("search_products", resolved) == "success"
 
 
 def test_customer_service_is_expressed_as_people_and_work_not_internal_fields() -> None:

@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
 
 from ecommerce_agent.api import create_app
+from ecommerce_agent.business import CatalogItemUpsert, OrderUpsert
+from ecommerce_agent.business.inventory import InventoryBalanceUpsert
+from ecommerce_agent.business.orders import OrderLineInput
 from ecommerce_agent.llm import ModelError, ModelUnavailableError
+from ecommerce_agent.workspace_read_plan import WorkspaceTaskResult
 
 from conftest import make_settings
 
@@ -23,6 +28,304 @@ def _events(response) -> list[dict]:
         for line in response.text.splitlines()
         if line.startswith("data: ")
     ]
+
+
+def test_workspace_composite_inventory_and_revenue_uses_one_read_plan(
+    tmp_path, monkeypatch
+) -> None:
+    app = create_app(make_settings(tmp_path))
+    service = app.state.agent
+    source_time = datetime.now(UTC) - timedelta(days=1)
+    for index in range(10):
+        service.operations.inventory.upsert(
+            "tenant-test",
+            InventoryBalanceUpsert(
+                connector_id="composite-fixture",
+                store_id="qingchuan-flagship-001",
+                warehouse_id="warehouse-001",
+                sku_id=f"QC-COMPOSITE-{index:02d}",
+                on_hand="1" if index < 4 else "100",
+                average_daily_sales="10" if index < 4 else "1",
+                source_updated_at=source_time,
+                source_id=f"inventory-composite-{index:02d}",
+            ),
+        )
+    service.operations.orders.upsert(
+        "tenant-test",
+        OrderUpsert(
+            connector_id="composite-fixture",
+            store_id="qingchuan-flagship-001",
+            order_id="ORDER-COMPOSITE-001",
+            order_status="paid",
+            payment_status="paid",
+            total_amount="4181.00",
+            placed_at=source_time,
+            lines=[
+                OrderLineInput(
+                    line_id="line-composite-001",
+                    sku_id="QC-COMPOSITE-00",
+                    title="Composite fixture product",
+                    quantity=1,
+                    unit_price="4181.00",
+                )
+            ],
+            source_updated_at=source_time,
+            source_id="order-composite-001",
+        ),
+    )
+    planning_calls: list[list[dict[str, str]]] = []
+
+    def plan_once(messages, **_kwargs):
+        planning_calls.append(messages)
+        return {
+            "tasks": [
+                {
+                    "task_id": "inventory",
+                    "objective": "核对库存风险",
+                    "tool_name": "get_inventory_risk",
+                    "arguments": {"store_id": "qingchuan-flagship-001"},
+                    "depends_on": [],
+                },
+                {
+                    "task_id": "revenue",
+                    "objective": "核对已支付收入",
+                    "tool_name": "get_business_metric",
+                    "arguments": {
+                        "metric": "gross_revenue",
+                        "store_id": "qingchuan-flagship-001",
+                    },
+                    "depends_on": [],
+                },
+            ]
+        }
+
+    monkeypatch.setattr(service.model, "generate_json", plan_once)
+    monkeypatch.setattr(
+        service.model,
+        "stream_generate",
+        lambda _messages: iter(
+            ["共检查 10 个库存记录，其中 4 个需要优先关注；", "已支付收入为 4181.00 元。"]
+        ),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/admin/workspace/chat/stream",
+            headers=ADMIN_HEADERS,
+            json={
+                "session_id": "workspace:test-composite-inventory-revenue-001",
+                "message": "查看库存风险和最近收入。",
+                "history": [],
+                "context": {"store_id": "qingchuan-flagship-001"},
+            },
+        )
+
+    assert response.status_code == 200
+    events = _events(response)
+    done = events[-1]["response"]
+    assert len(planning_calls) == 1
+    assert [item["tool_name"] for item in done["tools_used"]] == [
+        "get_inventory_risk",
+        "get_business_metric",
+    ]
+    assert done["completion_status"] == "completed"
+    assert [item["status"] for item in done["task_results"]] == [
+        "success",
+        "success",
+    ]
+    assert "10" in done["answer"]
+    assert "4" in done["answer"]
+    assert "4181.00" in done["answer"]
+
+
+def test_workspace_composite_partial_failure_does_not_turn_failure_into_zero(
+    tmp_path, monkeypatch
+) -> None:
+    app = create_app(make_settings(tmp_path))
+    service = app.state.agent
+    workspace = app.state.workspace_agent
+    monkeypatch.setattr(
+        service.model,
+        "generate_json",
+        lambda _messages, **_kwargs: {
+            "tasks": [
+                {
+                    "task_id": "inventory",
+                    "objective": "核对库存风险",
+                    "tool_name": "get_inventory_risk",
+                    "arguments": {},
+                    "depends_on": [],
+                },
+                {
+                    "task_id": "revenue",
+                    "objective": "核对最近收入",
+                    "tool_name": "get_business_metric",
+                    "arguments": {"metric": "gross_revenue"},
+                    "depends_on": [],
+                },
+            ]
+        },
+    )
+
+    def run_task(task, *_args):
+        if task.task_id == "revenue":
+            raise ValueError("metric_source_unavailable")
+        return WorkspaceTaskResult(
+            task_id=task.task_id,
+            objective=task.objective,
+            tool_name=task.tool_name,
+            tool_label="库存风险",
+            status="success",
+            verified_facts=["共检查 10 个库存记录，其中 4 个需要优先关注。"],
+            critical_values=["10", "4"],
+        )
+
+    monkeypatch.setattr(workspace, "_run_read_task", run_task)
+    monkeypatch.setattr(
+        service.model,
+        "stream_generate",
+        lambda _messages: iter(
+            ["共检查 10 个库存记录，其中 4 个需要优先关注；收入为 0 元。"]
+        ),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/admin/workspace/chat/stream",
+            headers=ADMIN_HEADERS,
+            json={
+                "session_id": "workspace:test-composite-partial-001",
+                "message": "查看库存风险和最近收入。",
+                "history": [],
+                "context": {},
+            },
+        )
+
+    done = _events(response)[-1]["response"]
+    assert done["completion_status"] == "partial"
+    assert [item["status"] for item in done["task_results"]] == [
+        "success",
+        "failed",
+    ]
+    assert "10" in done["answer"]
+    assert "4" in done["answer"]
+    assert "收入为 0" not in done["answer"]
+    assert "核对最近收入" in done["answer"]
+    assert "暂时无法判断" in done["answer"]
+
+
+def test_workspace_composite_rejects_answer_that_changes_verified_amount(
+    tmp_path, monkeypatch
+) -> None:
+    app = create_app(make_settings(tmp_path))
+    service = app.state.agent
+    workspace = app.state.workspace_agent
+    monkeypatch.setattr(
+        service.model,
+        "generate_json",
+        lambda _messages, **_kwargs: {
+            "tasks": [
+                {
+                    "task_id": "revenue",
+                    "objective": "核对最近收入",
+                    "tool_name": "get_business_metric",
+                    "arguments": {"metric": "gross_revenue"},
+                    "depends_on": [],
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        workspace,
+        "_run_read_task",
+        lambda task, *_args: WorkspaceTaskResult(
+            task_id=task.task_id,
+            objective=task.objective,
+            tool_name=task.tool_name,
+            tool_label="经营指标",
+            status="success",
+            verified_facts=["已支付且未取消订单金额为 4181.00 元。"],
+            critical_values=["4181.00"],
+        ),
+    )
+    monkeypatch.setattr(
+        service.model,
+        "stream_generate",
+        lambda _messages: iter(["最近收入为 4811.00 元。"]),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/admin/workspace/chat/stream",
+            headers=ADMIN_HEADERS,
+            json={
+                "session_id": "workspace:test-composite-number-guard-001",
+                "message": "查看最近收入。",
+                "history": [],
+                "context": {},
+            },
+        )
+
+    done = _events(response)[-1]["response"]
+    assert "4811.00" not in done["answer"]
+    assert "4181.00" in done["answer"]
+    assert "critical_value_mismatch" in done["degraded_reasons"]
+
+
+def test_workspace_composite_no_data_cannot_be_rewritten_as_zero(
+    tmp_path, monkeypatch
+) -> None:
+    app = create_app(make_settings(tmp_path))
+    service = app.state.agent
+    workspace = app.state.workspace_agent
+    monkeypatch.setattr(
+        service.model,
+        "generate_json",
+        lambda _messages, **_kwargs: {
+            "tasks": [
+                {
+                    "task_id": "revenue",
+                    "objective": "核对最近收入",
+                    "tool_name": "get_business_metric",
+                    "arguments": {"metric": "gross_revenue"},
+                    "depends_on": [],
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        workspace,
+        "_run_read_task",
+        lambda task, *_args: WorkspaceTaskResult(
+            task_id=task.task_id,
+            objective=task.objective,
+            tool_name=task.tool_name,
+            tool_label="经营指标",
+            status="no_data",
+            verified_facts=["当前查询范围内暂无数据。"],
+        ),
+    )
+    monkeypatch.setattr(
+        service.model,
+        "stream_generate",
+        lambda _messages: iter(["最近收入为 0.00 元。"]),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/admin/workspace/chat/stream",
+            headers=ADMIN_HEADERS,
+            json={
+                "session_id": "workspace:test-composite-no-data-001",
+                "message": "查看最近收入。",
+                "history": [],
+                "context": {},
+            },
+        )
+
+    done = _events(response)[-1]["response"]
+    assert "0.00" not in done["answer"]
+    assert "暂无数据" in done["answer"]
 
 
 def test_workspace_replaces_default_admin_page_and_preserves_advanced_console(tmp_path) -> None:
@@ -1098,6 +1401,210 @@ def test_workspace_uses_verified_product_language_when_response_model_is_unavail
     assert not any(event["event"] == "error" for event in events)
     done = events[-1]["response"]
     assert done["answer"].startswith("已完成事实核对：")
-    assert "共检查" in done["answer"]
+    assert "当前查询范围内暂无数据" in done["answer"]
     assert done["degraded"] is True
     assert done["degraded_reasons"] == ["response_model_unavailable"]
+
+
+def test_workspace_first_round_explicit_write_request_keeps_propose_action(
+    tmp_path, monkeypatch
+) -> None:
+    app = create_app(make_settings(tmp_path))
+    service = app.state.agent
+
+    def plan_once(_messages, **_kwargs):
+        return {
+            "mode": "propose_action",
+            "response": "确认要对这些订单执行退款？",
+            "action_summary": "执行退款",
+            "reason": "用户明确要求退款",
+        }
+
+    monkeypatch.setattr(service.model, "generate_json", plan_once)
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/admin/workspace/chat/stream",
+            headers=ADMIN_HEADERS,
+            json={
+                "session_id": "workspace:test-write-round1-001",
+                "message": "把这些订单全部退款",
+                "history": [],
+                "context": {},
+            },
+        )
+
+    assert response.status_code == 200
+    events = _events(response)
+    done = events[-1]["response"]
+    assert done["mode"] == "propose_action"
+    assert done["requires_confirmation"] is True
+    assert done["tools_used"] == []
+    assert done["answer"]
+
+
+def test_workspace_dependency_argument_reference_reaches_strict_tool_schema(
+    tmp_path, monkeypatch
+) -> None:
+    app = create_app(make_settings(tmp_path))
+    service = app.state.agent
+    source_time = datetime.now(UTC) - timedelta(hours=1)
+    service.operations.catalog.upsert(
+        "tenant-test",
+        CatalogItemUpsert(
+            connector_id="dependent-fixture",
+            store_id="qingchuan-flagship-001",
+            item_id="dependent-item-001",
+            sku_id="QC-DEPENDENT-01",
+            title="依赖参数测试商品",
+            status="active",
+            sale_price="99.00",
+            source_updated_at=source_time,
+            source_id="catalog-dependent-001",
+        ),
+    )
+    service.operations.inventory.upsert(
+        "tenant-test",
+        InventoryBalanceUpsert(
+            connector_id="dependent-fixture",
+            store_id="qingchuan-flagship-001",
+            warehouse_id="warehouse-001",
+            sku_id="QC-DEPENDENT-01",
+            on_hand="8",
+            average_daily_sales="2",
+            source_updated_at=source_time,
+            source_id="inventory-dependent-001",
+        ),
+    )
+    seen_inventory_arguments: list[dict] = []
+    original_validate_selection = service.tools.validate_selection
+
+    def capture_inventory_arguments(**kwargs):
+        if kwargs["name"] == "get_inventory_risk":
+            seen_inventory_arguments.append(dict(kwargs["arguments"]))
+        return original_validate_selection(**kwargs)
+
+    monkeypatch.setattr(
+        service.tools, "validate_selection", capture_inventory_arguments
+    )
+
+    def plan_once(_messages, **_kwargs):
+        return {
+            "tasks": [
+                {
+                    "task_id": "catalog",
+                    "objective": "查找目标商品",
+                    "tool_name": "get_catalog_status",
+                    "arguments": {
+                        "store_id": "qingchuan-flagship-001",
+                        "status": "active",
+                    },
+                    "depends_on": [],
+                },
+                {
+                    "task_id": "inventory",
+                    "objective": "按商品编号核对库存风险",
+                    "tool_name": "get_inventory_risk",
+                    "arguments": {"store_id": "qingchuan-flagship-001"},
+                    "argument_refs": {
+                        "sku_id": {
+                            "task_id": "catalog",
+                            "path": ["items", 0, "sku_id"],
+                        }
+                    },
+                    "depends_on": ["catalog"],
+                },
+            ]
+        }
+
+    monkeypatch.setattr(service.model, "generate_json", plan_once)
+    monkeypatch.setattr(
+        service.model,
+        "stream_generate",
+        lambda _messages: iter(["已核对库存与商品目录。"]),
+    )
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/admin/workspace/chat/stream",
+            headers=ADMIN_HEADERS,
+            json={
+                "session_id": "workspace:test-dependent-strict-001",
+                "message": "查看库存风险并按库存核对商品目录。",
+                "history": [],
+                "context": {"store_id": "qingchuan-flagship-001"},
+            },
+        )
+
+    assert response.status_code == 200
+    events = _events(response)
+    assert all(event.get("event") != "error" for event in events)
+    done = events[-1]["response"]
+    assert done["completion_status"] == "completed"
+    assert [item["status"] for item in done["task_results"]] == [
+        "success",
+        "success",
+    ]
+    assert seen_inventory_arguments == [
+        {
+            "store_id": "qingchuan-flagship-001",
+            "sku_id": "QC-DEPENDENT-01",
+        }
+    ]
+
+
+def test_workspace_missing_dependency_argument_path_is_typed_failure(
+    tmp_path, monkeypatch
+) -> None:
+    app = create_app(make_settings(tmp_path))
+    service = app.state.agent
+
+    def plan_once(_messages, **_kwargs):
+        return {
+            "tasks": [
+                {
+                    "task_id": "catalog",
+                    "objective": "查找目标商品",
+                    "tool_name": "get_catalog_status",
+                    "arguments": {"store_id": "empty-store-001"},
+                    "depends_on": [],
+                },
+                {
+                    "task_id": "inventory",
+                    "objective": "按商品编号核对库存风险",
+                    "tool_name": "get_inventory_risk",
+                    "arguments": {"store_id": "empty-store-001"},
+                    "argument_refs": {
+                        "sku_id": {
+                            "task_id": "catalog",
+                            "path": ["items", 0, "sku_id"],
+                        }
+                    },
+                    "depends_on": ["catalog"],
+                },
+            ]
+        }
+
+    monkeypatch.setattr(service.model, "generate_json", plan_once)
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/admin/workspace/chat/stream",
+            headers=ADMIN_HEADERS,
+            json={
+                "session_id": "workspace:test-dependent-missing-001",
+                "message": "查找商品后核对该商品的库存。",
+                "history": [],
+                "context": {"store_id": "empty-store-001"},
+            },
+        )
+
+    assert response.status_code == 200
+    events = _events(response)
+    assert all(event.get("event") != "error" for event in events)
+    done = events[-1]["response"]
+    assert [item["status"] for item in done["task_results"]] == [
+        "success",
+        "failed",
+    ]
+    assert (
+        done["task_results"][1]["error_summary"]
+        == "read_dependency_value_missing"
+    )
