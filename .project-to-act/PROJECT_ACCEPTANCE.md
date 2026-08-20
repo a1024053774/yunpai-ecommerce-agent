@@ -5,6 +5,15 @@
 
 ## 当前验收结论
 
+- 结论：2026-08-20 统筹 Agent 统一前端已形成可交功能与集成测试的固定候选，代码核验对象为
+  `a0d09ab`，其中 `921e676` 合成 PR #9 基线、PR #11 会话持久化与 PR #12 复合只读
+  查询；PR #9 已恢复为 Open + Draft，PR #11/#12 保持 Draft，fork `main` 仍为
+  `454b35c`。本轮不采信 PR/Claude 已有 passed 结论，七组独立探针对旧版保留失败反证并
+  在候选上通过；影响范围为 `81 passed in 39.05s`，全量为
+  `1115 passed in 785.87s`。v35 原地迁移保留 156 条知识和 2 条 SOP，HTTP 与真实浏览器
+  smoke 覆盖统一工作台、历史消息、高级控制台和 fail-closed 路径。Gate
+  G-WORKSPACE-HANDOVER-001 据此通过；该结论不代表 PR #9 冲突已解决、可直接合并 main、
+  真实模型/平台已验收、长稳完成或生产放行。见 E-20260820-004。
 - 结论：2026-08-20 M7-R WP1～WP4 已在固定代码对象上通过 WP5 代码级、本机技术 Gate，
   PR #20 已合入 `main`，证据 ID 为 E-20260820-001。WP1 因是 M8-R～M10-R 共用基建而
   先行合入，PR base `48013b1` 已包含 WP1；缪海南独立验收的 WP2～WP4 head 为
@@ -496,6 +505,24 @@
 
 ## 证据索引
 
+- E-20260820-004：统筹 Agent 统一前端最终独立交测核验。固定代码对象为
+  `a0d09abddb40c9f9cc0e5d964a0b6abf4aeaccd5`，功能合成提交为 `921e676`；PR #9
+  `adee44e`、PR #11 `6ec6a89`、PR #12 `68e3846` 均经
+  `git merge-base --is-ancestor` 确认为祖先，fork `main` 保持 `454b35c`。未使用
+  PR 正文、Claude 报告或原有 passed 门禁作为结论：七组独立探针在已知坏版本复现 metadata
+  拒绝、模型语义被正则覆盖、澄清文案越权承诺、并发超时累计、缺少
+  `argument_refs` 和首轮 `propose_action` 契约等失败，在候选上全部退出 0；影响范围
+  `81 passed in 39.05s`，仓库全量 `1115 passed in 785.87s`，无
+  failed/skipped/xfailed。用 `main@454b35c` 创建的 v35 数据原地打开后仍保留 156 条知识、
+  2 条 SOP，补齐工作台表和六个 metadata 列；全新目录真实 uvicorn 的 health、`/admin`、
+  `/admin/advanced`、会话与能力 API 成功，真实浏览器完成登录、新建会话、发送消息、恢复
+  2 条历史消息，两个页面 console error/warning 为 0，离线 mock 对经营问题明确
+  `planning_failed`。PR #9 已恢复为 Open + Draft 但仍与 main 冲突；PR #11/#12 保持
+  Draft。已知非阻断项为 `/favicon.ico` 404 和未接线的
+  `_requires_confirmation_request`；未覆盖真实模型 benchmark、真实平台/生产数据、
+  24/72 小时长稳、安全发布、灾备实操和生产 Gate。详细命令、边界和自测步骤见
+  `docs/AGENT_WORKSPACE_HANDOVER_20260820.md`。证据在代码对象、运行环境或依赖契约变化后
+  失效，届时须重跑。
 - E-20260820-002：PR #11 已知问题独立修复候选，功能验证对象为原 PR head
   `082eabf56a67aec31d814310108eb75221d2015d` 之上的 `f44dcfa` 与 `b3b4cba`。未采用
   原 PR 的 passed 或既有门禁作为结论：新增消息专用元数据恢复、显式 `None` 清空、遗漏字段
@@ -688,6 +715,7 @@
 
 | Gate ID | 日期 | Gate | 对象 | 结果 | 证据 ID | 豁免与确认人 |
 |---|---|---|---|---|---|---|
+| G-WORKSPACE-HANDOVER-001 | 2026-08-20 | 统筹 Agent 统一前端功能与集成交测门 | PR #9 统一工作台基线、PR #11 会话持久化、PR #12 复合只读查询、独立已知问题修复、v35 迁移、HTTP/浏览器 smoke | 通过；以交测分支固定代码对象 `a0d09ab` 为准 | E-20260820-004 | 仅批准交给他人做功能与集成测试；不豁免 PR #9 冲突、正式合 main、真实模型/平台、长稳、安全/灾备或生产发布 Gate |
 | G-M7R-ALL-001 | 2026-08-20 | M7-R WP1～WP4 完整代码级本机门 | v34 统一导入/隐私/来源/证据、八类报表规范化、v35 商品身份与对账、readiness API/页面、显式隔离 Demo、WP5 独立报告与 merge-tip 回归 | 通过；PR #20 已合入并在 `f6bb47c` 复验 | E-20260820-001 | 仅关闭 F-323 代码级本机里程碑；不豁免真实平台字段/数据、真实经营结论、生产发布/权限/写能力或 M8-R～M10-R |
 | G-M7R-WP5-001 | 2026-08-20 | M7-R WP5 独立验收与合入后复验门 | 原独立报告与 6 项探针、补充验收矩阵、mutation 红→绿、桌面/390px、报告/截图哈希 double-check、精确 merge-tip 聚焦/全量/静态门禁 | 通过；独立签署原件保持不变，补充证据不代签 | E-20260820-001 | 只签署已验证代码对象和本机技术 Gate；真实平台接入、业务签署与生产 Gate 无豁免 |
 | G-FORECAST-PLANNING-CONTRACT-001 | 2026-08-13 | Forecast/Planning 联合配置与 current plan 门 | 7/14/30、lead+review/max-stock required days、legacy POST guard、no partial write、GET/tool no superseded plan | 通过 | E-20260813-013 | 仅限本机 API/虚拟策略证据；未运行全量，不豁免真实补货策略、长稳、自动动作或生产 Gate |
@@ -756,6 +784,13 @@
 
 ## 验收记录
 
+- 2026-08-20：完成统筹 Agent 统一前端的最终独立交测核验。恢复误关闭的老板 PR #9 并确认
+  代码未丢失；以 `921e676` 合成 PR #9/#11/#12，以 `a0d09ab` 固定代码对象，fork
+  `main` 未动且 PR #11/#12 保持 Draft。七组旧版失败反证在候选上转绿，影响范围
+  `81 passed`、全量 `1115 passed`；v35 原地迁移、真实 HTTP 和真实浏览器 smoke
+  通过。交接文档已按 PR #9 的真实边界列明后续新增功能、修复 bug、启动和自测步骤。
+  当前只批准交给其他成员做功能/集成测试；PR #9 仍 conflicting，真实模型、真实平台、长稳、
+  安全/灾备和生产 Gate 均未签署。见 E-20260820-004、G-WORKSPACE-HANDOVER-001。
 - 2026-08-20：完成 PR #11 两项已知问题的独立红→绿修复候选。功能提交 `f44dcfa` 恢复
   结构化会话消息元数据的持久化读侧与部分更新语义，`b3b4cba` 收紧澄清文案到当前能力
   边界；独立反例由 `5 failed` 转为 `5 passed`，最终影响范围 `40 passed`，静态与治理校验
