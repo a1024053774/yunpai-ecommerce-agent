@@ -342,6 +342,30 @@ def test_execute_read_plan_bounds_wall_clock_on_task_timeout() -> None:
     assert elapsed < 0.5
 
 
+def test_execute_read_plan_shares_timeout_budget_across_parallel_tasks() -> None:
+    plan = WorkspaceReadPlan(tasks=[_task(task_id) for task_id in "abc"])
+
+    def runner(
+        task: WorkspaceReadTask,
+        predecessors: dict[str, WorkspaceTaskResult],
+    ) -> WorkspaceTaskResult:
+        time.sleep(0.5)
+        return _success(task)
+
+    started = time.monotonic()
+    results = execute_read_plan(
+        plan,
+        runner=runner,
+        maximum_parallel=3,
+        task_timeout_seconds=0.1,
+    )
+    elapsed = time.monotonic() - started
+
+    assert [item.status for item in results] == ["failed", "failed", "failed"]
+    assert {item.error_summary for item in results} == {"read_timeout"}
+    assert elapsed < 0.22
+
+
 def test_execute_read_plan_plan_timeout_marks_plan_timeout_and_bounds_wall_clock() -> None:
     plan = WorkspaceReadPlan(tasks=[_task("a"), _task("b")])
 

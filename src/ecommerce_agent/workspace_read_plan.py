@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 import json
 from time import monotonic
 from typing import Any, Literal
@@ -200,40 +200,32 @@ def execute_read_plan(
                 ))
                 for task in runnable
             ]
-            plan_timeout = False
+            timeout = task_timeout_seconds
+            plan_timeout_wins = False
+            if deadline is not None:
+                remaining = max(0.0, deadline - monotonic())
+                if timeout is None or remaining <= timeout:
+                    timeout = remaining
+                    plan_timeout_wins = True
+            completed, pending = wait(
+                [future for _, future in futures],
+                timeout=timeout,
+            )
+            for future in pending:
+                future.cancel()
             for task, future in futures:
-                try:
-                    if deadline is not None and monotonic() >= deadline:
-                        plan_timeout = True
-                        for _, pending in futures:
-                            pending.cancel()
-                        raise TimeoutError
-                    timeout = None
-                    if task_timeout_seconds is not None:
-                        timeout = task_timeout_seconds
-                    if deadline is not None:
-                        remaining = deadline - monotonic()
-                        if remaining <= 0:
-                            plan_timeout = True
-                            for _, pending in futures:
-                                pending.cancel()
-                            raise TimeoutError
-                        timeout = remaining if timeout is None else min(timeout, remaining)
-                    result = future.result(timeout=timeout)
-                except TimeoutError:
-                    for _, pending in futures:
-                        pending.cancel()
-                    hit_deadline = (
-                        deadline is not None and monotonic() >= deadline
-                    )
+                if future not in completed:
                     result = failed_result(
                         task,
                         "read_plan_timeout"
-                        if (plan_timeout or hit_deadline)
+                        if plan_timeout_wins
                         else "read_timeout",
                     )
-                except Exception as exc:  # Each read failure is isolated to its task.
-                    result = failed_result(task, str(exc))
+                else:
+                    try:
+                        result = future.result()
+                    except Exception as exc:  # Each read failure is isolated to its task.
+                        result = failed_result(task, str(exc))
                 results_by_id[task.task_id] = result
                 signature = json.dumps(
                     {"tool_name": task.tool_name, "arguments": task.arguments},
