@@ -47,7 +47,7 @@ class Database:
     # main）、v33 归 knowledge/retrieval、v34 归 M7-R WP1 readonly data、
     # v35 归 M7-R WP3 product identity。
     # 防同名方法静默覆盖事故，见 CONTRIBUTING「Schema 版本号占用登记」。
-    SCHEMA_VERSION = 37
+    SCHEMA_VERSION = 38
 
     def __init__(self, path: Path):
         self.path = path
@@ -195,6 +195,10 @@ class Database:
             if 37 not in applied:
                 self._apply_v37(conn)
                 conn.execute("INSERT INTO schema_migrations VALUES (37, ?)", (utc_now(),))
+            # MERGE-GATE M10-R WP4: v38 费用 ledger；v36/v37 未合入 main 时保持跳过。
+            if 38 not in applied:
+                self._apply_v38(conn)
+                conn.execute("INSERT INTO schema_migrations VALUES (38, ?)", (utc_now(),))
             conn.execute(f"PRAGMA user_version = {self.SCHEMA_VERSION}")
             self._validate_schema(conn)
 
@@ -3485,6 +3489,48 @@ class Database:
         )
 
     @staticmethod
+    def _apply_v38(conn: sqlite3.Connection) -> None:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS profit_policies (
+                policy_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                revenue_recognition_basis TEXT NOT NULL,
+                required_categories_json TEXT NOT NULL,
+                policy_version TEXT NOT NULL,
+                active_from TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(tenant_id, policy_version)
+            );
+            CREATE TABLE IF NOT EXISTS profit_ledger_entries (
+                entry_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                store_id TEXT NOT NULL,
+                period TEXT NOT NULL,
+                category TEXT NOT NULL,
+                scope TEXT NOT NULL CHECK(scope IN ('formal','demo')),
+                amount TEXT NOT NULL,
+                currency TEXT NOT NULL DEFAULT 'CNY',
+                source_kind TEXT NOT NULL
+                    CHECK(source_kind IN ('actual','manual','demo')),
+                sku_id TEXT,
+                order_id TEXT,
+                mapping_version TEXT NOT NULL,
+                entry_key TEXT NOT NULL,
+                payload_hash TEXT NOT NULL CHECK(length(payload_hash) = 64),
+                source_reference TEXT,
+                created_at TEXT NOT NULL,
+                UNIQUE(tenant_id, entry_key),
+                UNIQUE(tenant_id, entry_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_profit_ledger_scope
+                ON profit_ledger_entries(
+                    tenant_id, store_id, period, scope, category
+                );
+            """
+        )
+
+    @staticmethod
     def _ensure_column(conn: sqlite3.Connection, table: str, column: str, declaration: str) -> None:
         columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
         if column not in columns:
@@ -3667,6 +3713,15 @@ class Database:
             "purchase_order_events": {
                 "tenant_id", "order_draft_id", "from_status", "to_status",
                 "actor", "created_at",
+            },
+            "profit_policies": {
+                "tenant_id", "revenue_recognition_basis",
+                "required_categories_json", "policy_version",
+                "active_from", "created_at",
+            },
+            "profit_ledger_entries": {
+                "tenant_id", "store_id", "period", "category", "scope",
+                "amount", "entry_key", "payload_hash", "created_at",
             },
             "readonly_import_row_issues": {
                 "issue_id", "import_id", "tenant_id", "store_id",
