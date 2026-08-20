@@ -574,7 +574,7 @@ def test_workspace_never_executes_write_requests_without_confirmation(
     assert done["advanced_view"] == "orders"
 
 
-def test_workspace_clarify_is_not_overridden_by_write_keyword(
+def test_workspace_model_clarification_is_bounded_by_available_capabilities(
     tmp_path, monkeypatch
 ) -> None:
     app = create_app(make_settings(tmp_path))
@@ -587,6 +587,7 @@ def test_workspace_clarify_is_not_overridden_by_write_keyword(
             "tool_name": None,
             "arguments": {},
             "response": "请提供范围，确认后我会生成订货单并执行采购。",
+            "missing_information": ["store_id", "sku_id"],
             "reason": "需要补充采购范围",
         },
     )
@@ -607,6 +608,10 @@ def test_workspace_clarify_is_not_overridden_by_write_keyword(
     done = events[-1]["response"]
     assert done["mode"] == "clarify"
     assert done["requires_confirmation"] is False
+    assert "请补充：店铺编号、商品编号。" in done["answer"]
+    assert "我会生成" not in done["answer"]
+    assert "执行采购" not in done["answer"]
+    assert "不会据此直接生成、提交或执行" in done["answer"]
 
 
 def test_workspace_can_generate_a_review_only_copy_draft(tmp_path, monkeypatch) -> None:
