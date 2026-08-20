@@ -141,7 +141,7 @@ def test_admin_console_isolates_simulation_sessions_and_exposes_decisions(tmp_pa
 def test_admin_console_page_and_audit_api(tmp_path) -> None:
     app = create_app(make_settings(tmp_path))
     with TestClient(app) as client:
-        page = client.get("/admin")
+        page = client.get("/admin/advanced")
         assert page.status_code == 200
         assert "yunpai-admin-console" in page.text
         assert 'id="overviewScope"' in page.text
@@ -244,8 +244,10 @@ def test_admin_console_page_and_audit_api(tmp_path) -> None:
         assert 'id="serviceScope"' in page.text
         assert 'id="chatMessage"' in page.text
         assert 'id="newCustomerTestSession"' in page.text
-        assert "/v1/test/customer-chat" in page.text
-        assert "localTestApi" in page.text
+        assert "/v1/test/customer-chat/stream" in page.text
+        assert "streamLocalCustomerTest" in page.text
+        assert 'id="agentWorkStatus"' in page.text
+        assert 'id="agentWorkElapsed"' in page.text
         assert "customerTestSessionId" in page.text
         assert "qingchuan-flagship-001" in page.text
         assert 'id="clientKey"' not in page.text
@@ -270,6 +272,24 @@ def test_admin_console_page_and_audit_api(tmp_path) -> None:
         assert audit.status_code == 200
         assert audit.json()[0]["event_type"] == "connector.sync.succeeded"
         assert audit.json()[0]["detail"]["virtual"] is True
+
+
+def test_service_workbench_prioritizes_customer_testing(tmp_path) -> None:
+    app = create_app(make_settings(tmp_path))
+    with TestClient(app) as client:
+        page = client.get("/admin/advanced")
+        assert page.status_code == 200
+
+        service_view = page.text.split('id="view-service"', 1)[1].split(
+            'id="view-commerce"', 1
+        )[0]
+        test_position = service_view.index('id="serviceTestWorkbench"')
+        tools_position = service_view.index('id="serviceTools"')
+
+        assert test_position < tools_position
+        assert '<details class="service-tools" id="serviceTools">' in service_view
+        assert 'id="chatMessage"' in service_view[:tools_position]
+        assert 'id="conversationList"' in service_view[tools_position:]
 
 
 def test_local_admin_bypass_is_loopback_only_and_keeps_client_authentication(tmp_path) -> None:
@@ -307,7 +327,7 @@ def test_workbench_surfaces_adapters_rollouts_and_night_watch(tmp_path) -> None:
     )
     app = create_app(settings)
     with TestClient(app) as client:
-        page = client.get("/admin")
+        page = client.get("/admin/advanced")
         assert page.status_code == 200
         html = page.text
         for marker in (

@@ -946,7 +946,7 @@ def test_forecasting_console_has_complete_structured_evidence_without_auto_run(
     app = create_app(make_settings(tmp_path))
     before = _evidence_counts(app.state.agent)
     with TestClient(app) as client:
-        page = client.get("/admin")
+        page = client.get("/admin/advanced")
     structure = _ForecastConsoleStructure()
     structure.feed(page.text)
     assert page.status_code == 200
