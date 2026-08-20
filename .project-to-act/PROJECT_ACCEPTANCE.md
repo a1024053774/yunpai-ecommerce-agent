@@ -5,6 +5,45 @@
 
 ## 当前验收结论
 
+- 结论：2026-08-20 M7-R WP1～WP4 已在固定代码对象上通过 WP5 代码级、本机技术 Gate，
+  PR #20 已合入 `main`，证据 ID 为 E-20260820-001。WP1 因是 M8-R～M10-R 共用基建而
+  先行合入，PR base `48013b1` 已包含 WP1；缪海南独立验收的 WP2～WP4 head 为
+  `ece61e1`，最终 merge tip 为 `f6bb47c`。原独立报告记录 PR 自带 `85 passed`、独立探针
+  `6/6`、含探针全量 `1041 passed / 0 failed`，并建议合入；实施方补充报告在固定 head 上
+  补齐 WP1～WP4 矩阵、`104 passed` 聚焦、`1035 passed, 24 warnings` 全量、mutation
+  红→绿及桌面/窄屏证据。用户转交的第二轮独立 double-check 核对报告/截图哈希、PR 与祖先
+  关系，并复现命令链、mutation 和截图内容。合入后又在干净 detached merge tip 上得到
+  `104 passed in 16.74s`、全量 `1035 passed, 24 warnings in 421.29s`，无
+  failed/skipped/xfailed；compileall、whitespace、后台 JavaScript 与 project-to-act 均通过。
+  F-323 的代码级本机里程碑据此标记完成，Gate 为 G-M7R-WP5-001 / G-M7R-ALL-001。该
+  签署不包含真实平台字段全覆盖、真实经营结论、生产发布/权限/写能力或 M8-R～M10-R 完成。
+- 结论：2026-08-19 M7-R WP4 数据准备度 API、只读工作台与端到端 Demo 已形成开发者本机
+  候选 `fe828a0`，初始证据 E-20260819-001、独立反馈收口 E-20260819-002。
+  `readonly-readiness-v1` 从 WP1 manifest /
+  field evidence 与 WP3 映射/对账公开读侧统一投影八类数据域的来源、覆盖、水位、时效、
+  质量、映射和四项明确缺口；管理员 GET、后台页面和显式 Demo 使用同一语义。Demo 经 WP2 /
+  WP3 公开服务装载，默认 operational 隔离，顺序及并发重放均不增加经营事实，显式写操作有
+  审计。用户转交的独立报告记录 47/47 门禁外探针通过，仅指出空白 `store_id` 返回 200 的
+  非阻断 nit；开发方先红后绿统一六个 GET 的查询约束。当前聚焦 `10 passed`、WP1～WP4
+  关联 `109 passed`、最终全量 `1035 passed, 24 warnings`（335.51 秒），无
+  failed/skipped/xfailed；原桌面/390px、页面零隐式写入、双重放计数和 console 证据未因本次
+  非页面修复失效。该候选尚未合入 main，F-323 继续保持进行中；不替代缪海南正式 WP5、
+  真实平台样本、真实经营结论、M7-R Gate 或生产放行。
+- 结论：2026-08-18 M7-R WP3 商品身份与对账已形成开发者本机候选 `6f0b116`，证据 ID
+  为 E-20260818-002。schema v35 预留在本地 main `d35bfe1`；四张只追加表、tenant/store
+  范围、人工确认/改判/撤销、乐观版本、四终态逐行对账、稳定重放、未知策略拒绝和 WP1
+  manifest operational/demo 隔离均有契约测试。标题、商家编码或唯一候选不自动建立正式
+  绑定，只有有效人工确认输出 canonical ID 与内部料号。聚焦 `17 passed`、关联 `184 passed`，
+  最终全量 `1025 passed, 24 warnings`，无 failed/skipped/xfailed。该候选尚未合入 main；仓库
+  中也没有经授权的真实平台导出，因此不批准 WP4、正式 WP5、真实平台映射全覆盖、真实
+  经营结论、M7-R Gate 或生产放行。
+- 结论：2026-08-18 M7-R WP2 `generic-cn-v1` 报表适配与规范化写入已形成开发者本机候选
+  `a5d02ed`，证据 ID 为 E-20260818-001。八类适配器按正常、缺字段、非法类型、重复、
+  乱序和跨店逐项覆盖；CSV/XLSX、隐私、manifest、部分成功、冲突前置拒绝、订单子事实保留、
+  Excel 日期和 Demo 显式回执通过。WP1+WP2 聚焦 `77 passed`，最终全量
+  `1008 passed, 24 warnings`，无 failed/skipped/xfailed。沿用 schema v34，无新依赖、HTTP、
+  Agent、语义路由或平台写动作。仓库与会话附件未找到经授权的真实平台受控样本，故只批准
+  通用开发候选，不批准淘宝/天猫字段全覆盖、WP3～WP5、正式 WP5、真实经营结论或生产放行。
 - 结论：2026-08-17 M7-R WP1 功能提交 `0b54a24` 与 D-046/v34 集成文档提交 `e127c39` 已从
   `9619383` 快进推送到 `origin/main`，远端回读精确一致，测试树为 `8b962e9b`。隔离 main
   worktree 上 compileall、责任矩阵、project-to-act、whitespace 和全量 `950 passed, 24 warnings`
@@ -457,6 +496,21 @@
 
 ## 证据索引
 
+- E-20260820-001：M7-R WP5 独立验收归档、PR #20 合入与 merge-tip 复验。WP1 功能提交
+  `0b54a247` 和集成提交 `e127c397` 已在 PR base `48013b1` 的祖先链，故 PR #20 只承载
+  WP2～WP4 差异但 WP5 验收对象仍是 WP1～WP4 组合态。缪海南原报告 SHA-256 为
+  `007edc5001f39e4aba26e6361b75152625a52a7f61ac5281699d33e5580aa794`，记录自带
+  `85 passed`、独立探针 `6/6`、含探针全量 `1041 passed / 0 failed`；实施方补充报告
+  SHA-256 为 `458a743b1a450f8ec2b4488557cbca853611e51052fcfdb911fae63fc990d19e`，补齐固定
+  对象、WP1～WP4 矩阵、`104 passed` 聚焦、`1035 passed, 24 warnings` 全量、隔离
+  mutation 红→绿及桌面/窄屏证据，且明确不代签独立验收。用户转交的第二轮 independent
+  double-check 复核两份报告及三张截图哈希、PR/提交/树/祖先关系、命令链、mutation 和截图
+  内容均一致。PR #20 head `ece61e1` 于 2026-08-20 合入为 `f6bb47c`；干净 detached
+  merge tip 再得聚焦 `104 passed in 16.74s`、全量 `1035 passed, 24 warnings in
+  421.29s`，无 failed/skipped/xfailed，compileall、diff、后台 JavaScript 与 project-to-act
+  均通过。原报告、补充报告和三张浏览器证据归档于
+  `docs/works/15-feature-m7r-readonly-data/` 与 `docs/screenshots/m7r-wp5-20260819/`。仅关闭
+  F-323 代码级本机里程碑，不豁免真实平台字段、真实经营数据、生产放行/写能力或 M8-R～M10-R。
 - E-20260813-025：F-322 main 合入与 post-merge 复验。PR #14 将 head `298eede` clean merge 为 main `ee5e443`；PR #11 留言固定 v31 并要求后续保留 v31/v32。精确 main detached worktree 的导入路径核对通过，交叉 `51 passed`，全量 `770 passed, 1 xfailed`（282.54 秒），静态与台账门禁通过。首次 cwd 错误运行已作废，不计入证据；不关闭 PR #10 v33 改号或尚未完成的 PR #11 实际集成 Gate。
 - E-20260813-024：v31 占号先行合入与 F-322 v32 合并回归。PR #13（单文件 2+/1-、无 CI、mergeable clean）转 Ready 后以 `60c8052` 合入 origin/main；当前分支以 `76c2c85` 合入该 main，只解析 `CONTRIBUTING.md` 为 v31/v32/v33 顺序，4 个既有未提交文件未进入 merge commit。日历/身份/迁移/灾备 `51 passed`，全量 `770 passed, 1 xfailed`（282.56 秒），compileall、JS、AST migration 唯一性、diff 与台账校验通过。该证据只覆盖 PR #13 的占号通知 + F-322；main 尚无 PR #11 的 `_apply_v31` 代码，也不关闭 PR #10 改号或 E-023 的实际 v31/v32 页面整合待办。
 - E-20260813-023：F-322 远端与 v31/v32 合成核验。HTTP/1.1 fetch 成功刷新两远端及 origin PR refs；最新 `origin/main=dbf2027`，F-322 合并树干净且 v32 在全部 refs 中唯一。发现开放 PR #10 的知识唯一索引与 PR #11 的 workspace 会话表分别使用同名 `_apply_v31`；F-322 不改该既有冲突。PR #11 + F-322 临时合成树保留 v31/v32 后，交叉聚焦 `62 passed`，全量 `805 passed, 1 xfailed, 2 failed`。PR #11 单独可复现其中 workspace 旧 URL 断言失败；另一项是合成后 Forecasting 测试仍访问 `/admin` 而高级控制台已移至 `/admin/advanced`。临时仅对齐两条断言后 `2 passed`；未写回当前分支，故不声称合成全量 Gate 已通过。
@@ -492,6 +546,10 @@
 
 | 证据 ID | 时间 | 方法或命令 | 退出状态 | 版本或文件哈希 | 结果摘要 | 证据位置 | 有效期 |
 |---|---|---|---|---|---|---|---|
+| E-20260819-002 | 2026-08-19 | 读取用户转交的 WP4 独立复验报告，保留其聚焦/全量及 47/47 门禁外探针为外部报告证据；由开发方在原候选上新增六个 GET 共用的空白 `store_id` 回归，先运行单例复现，再以单一 `Annotated` Query 契约修复；重跑同一单例、WP4 聚焦、WP1～WP4 关联集、隔离代理环境下仓库全量、compileall、后台 JS syntax、whitespace 和 project-to-act validate | 修复前单例稳定 `1 failed`，实际为 readiness 返回 200；修复后单例、聚焦、关联、全量和静态门禁均退出 0。独立报告的探针由用户转交，不冒充开发方运行；报告注明未重复浏览器实测 | base `9670aa1`；修复候选 `fe828a0`；schema v35、`readonly-readiness-v1`、Demo fixture 和页面不变 | 六个带 `store_id` 的 readonly-data GET 现在共用同一约束，纯空白请求均返回 422，不泄露数据且不产生写入。聚焦 `10 passed`、关联 `109 passed`、全量 `1035 passed, 24 warnings`（335.51 秒），无 failed/skipped/xfailed；24 条均为既有 Traffic Lab 重复 Operation ID warning。无 schema、依赖、Agent/模型、Demo、页面或平台动作变化；E-20260819-001 浏览器证据仍对应未变页面 | `fe828a0`；`src/ecommerce_agent/readonly_data_api.py`；`tests/test_m7r_wp4_readiness.py`；`docs/tasks/M7R_WP4_READINESS_HANDOFF.md`；用户在本会话转交的独立复验摘要 | 上述查询契约、WP4 代码/测试、基准提交或独立报告来源变化前；只关闭开发候选 nit，不替代合入 main、缪海南正式 WP5、真实平台样本、真实经营结论、M7-R/生产 Gate |
+| E-20260819-001 | 2026-08-19 | 读取 M7-R WP4 验收标准及 WP1～WP3/F-310 契约；先运行缺实现测试；实现单点准备度策略、八域只读投影、管理员下钻 API、后台 view 和固定脱敏 Demo；以同数据时点冲突、缺 Demo 写审计、撤销后旧确认误标 active 建立先红后绿反例；运行聚焦、WP1～WP4 关联集、compileall、后台 JS syntax、whitespace 和隔离代理环境下仓库全量；使用本机浏览器对空页面、显式装载、重放、桌面和 390px 窄屏做实际核验 | 初始缺实现收集退出 2；fixture 同时点触发预期外 D-014 冲突；缺审计与历史 active 反例均稳定 `1 failed`；修复后聚焦、关联、静态、浏览器和全量均退出 0 | base `1936a2f`；代码候选 `7d8bf47`；schema v35；readiness policy `readonly-readiness-v1`；Demo `m7r-readonly-demo-v1` | operational 默认排除 Demo；actual/manual/demo/missing 保持可区分，缺失不转零。每个域状态和数值保留 manifest ID，四项缺口保留 field evidence/import，映射保留 run/source import。顺序及线程并发重放只有 8 manifest、1 product、1 mapping、1 reconciliation；管理员 Demo POST 逐次审计，所有 GET 零事实变更。浏览器首次打开前后事实计数均 0；显式 Demo 后 8 manifest、66 evidence、1 product、1 mapping、1 run、3 reconciliation rows，重放不变；1280×720 无页面横向溢出，390×844 仅 panel 内表格滚动，console 0 error/warning。聚焦 `9 passed`、关联 `108 passed`、全量 `1034 passed, 24 warnings`（687.63 秒），无 failed/skipped/xfailed；24 条均为既有 Traffic Lab 重复 Operation ID warning | `src/ecommerce_agent/readonly_readiness/`；`src/ecommerce_agent/readonly_data_api.py`；`src/ecommerce_agent/product_identity/service.py`；`docs/admin-console.html`；`tests/test_m7r_wp4_readiness.py`；`docs/tasks/M7R_WP4_READINESS_HANDOFF.md` | WP4 代码/测试、WP1～WP3 来源/映射契约、准备度策略、Demo fixture、后台页面或基准提交变化前；仅开发者本机候选，不替代合入 main、真实平台样本、缪海南正式 WP5、真实经营结论、M7-R/生产 Gate |
+| E-20260818-002 | 2026-08-18 | 读取 M7-R WP3 验收标准、WP1/WP2 契约和 catalog/inventory/order 公开服务；先运行缺实现契约测试；实现 v35 四张只追加表、canonical 商品、映射裁决/撤销/历史和逐行对账；为 `expected_version`、逐行 `evidence_keys` 与 Demo 领域来源混入分别建立红测后修复；运行聚焦、WP1～WP3、关联领域/迁移/灾备、compileall、迁移唯一性、whitespace 和仓库全量 pytest | 初始缺实现收集退出 2；审计列补强 `3 failed, 12 passed`；Demo 来源反证退出 1；修复后所有聚焦、关联、静态和干净环境全量均退出 0。首次全量因桌面会话畸形 `NO_PROXY` 触发 `httpx.InvalidURL`，中止后隔离 proxy/bypass 环境变量复跑通过 | base `0815cf8`；本地 main v35 预留 `d35bfe1`；代码候选 `6f0b116`；schema v35；policy `product-identity-v1` | tenant/store/internal part 稳定唯一；平台 SKU 映射确认、显式改判和撤销只追加，完整载荷幂等且旧 `expected_version` 不能覆盖新裁决。标题/商家编码/唯一候选只给证据，不自动绑定；每个输入行恰为 matched/ambiguous/unmapped/rejected，旧 run/history 在新映射后仍可读。WP2 source ID 经 WP1 manifest 隔离 operational/demo，未知 readonly 来源 fail closed。聚焦 `17 passed`、WP1～WP3 `93 passed`、关联 `184 passed`、最终全量 `1025 passed, 24 warnings`（391.62 秒），无 failed/skipped/xfailed；24 条为既有 FastAPI Operation ID warning | `src/ecommerce_agent/product_identity/`；`src/ecommerce_agent/database.py`；`src/ecommerce_agent/readonly_data/{__init__,ingestion}.py`；`tests/test_product_identity.py`；`docs/tasks/M7R_WP3_PRODUCT_IDENTITY_HANDOFF.md` | WP3 代码/测试、schema v35、映射/对账策略、WP1/WP2 来源契约或基准提交变化前；仅开发者本机候选，不替代合入 main、真实平台样本、WP4、缪海南正式 WP5、M7-R/生产 Gate |
+| E-20260818-001 | 2026-08-18 | 读取 M7-R 工作台/WP1 契约和六个既有领域公开服务；先运行缺实现契约测试；实现权威适配器注册表、严格 UTF-8 CSV/受控 XLSX 解析、逐行隔离、批次部分成功、来源 preflight 和公开领域写入；按每适配器六场景矩阵复验；为订单子事实覆盖、Excel 日期序列和 Demo 导入回执分别建立红测后修复；运行 WP1+WP2 聚焦、关联领域回归、compileall、whitespace 与最终仓库全量 pytest | 初始缺实现收集退出 2；三项缺陷定点各退出 1；修复后聚焦、关联、静态和全量均退出 0 | base `fbc26dd`；代码候选 `a5d02ed`；schema v34；`generic-cn-v1` | 八类报表唯一注册并复用同一 WP1 policy；每类正常/缺字段/非法类型/重复/乱序/跨店均覆盖。CSV/XLSX 不执行公式/宏/外链，显式记录粒度/单位/时区；同戳冲突在领域写前拒绝；订单快照不再清空独立物流/售后；Demo 显式回执完整但默认 operational 查询为空。聚焦 `77 passed`；最终全量 `1008 passed, 24 warnings`（392.76 秒），无 failed/skipped/xfailed；24 条为既有 FastAPI Operation ID warning。仓库及会话附件无经授权真实平台导出，故不声称平台全覆盖 | `src/ecommerce_agent/readonly_data/{adapters,file_parser,ingestion,service}.py`；`src/ecommerce_agent/business/orders.py`；`tests/test_readonly_data_{contract,ingestion}.py`；`docs/tasks/M7R_WP2_REPORT_ADAPTER_HANDOFF.md` | WP2 代码/测试、`generic-cn-v1`、WP1 契约、领域公开服务或样本边界变化前；仅开发者本机候选，不替代真实平台 mapping、WP3～WP5、缪海南正式 WP5、真实数据或生产 Gate |
 | E-20260817-007 | 2026-08-17 | 从刷新后的 `origin/main` `9619383` 创建干净 detached worktree，以 `--ff-only` 接入 WP1 功能提交 `0b54a24`；完成 D-046、M10-R WORKBENCH、schema v34 main 登记和 PR #11 四迁移合并提示后，运行 compileall、责任矩阵结构校验、迁移唯一性、project-to-act validate、whitespace 与仓库全量 pytest；提交 `e127c39` 后再次 fetch，验证远端祖先关系，快进推送并回读 `HEAD == origin/main` | 0 | base `961938321d6ac4fb3314756e8ca061bb4484dd09`；WP1 `0b54a24`；首轮 main 集成 `e127c397f7e291248990b0006ca4876d7e20a075`；测试树 `8b962e9be36961b439478892898e9c25e29dc559`；schema v34 | 全量 `950 passed, 24 warnings`（524.53 秒），无 failed/skipped/xfailed；24 条均为既有 FastAPI 重复 Operation ID warning。责任矩阵确认四个里程碑共 20 个工作包，M10-R WP1～WP4 全归缪海南且 WP5 胡磊不参与开发；v32/v33/v34 迁移各自唯一定义，v34 已登记 main，下一空闲 v35。`origin/main` 首轮回读精确为 `e127c39`。本条证据提交仅追加账本，不改变已测试运行树 | `0b54a24`；`e127c39`；`src/ecommerce_agent/readonly_data/`；`src/ecommerce_agent/{database,storage_refs}.py`；`tests/test_readonly_data_contract.py`；`docs/tasks/{ECOMMERCE_CLOSED_LOOP_ROADMAP,M10R_OPERATING_DECISION_WORKBENCH}.md`；`CONTRIBUTING.md`；E-20260817-003～006 | WP1 代码/测试、schema v34、责任矩阵、集成树、远端 main 或测试环境变化前；只证明开发候选已合入和全绿代码基线，不替代正式 WP5、真实数据、M7-R/生产 Gate |
 | E-20260817-006 | 2026-08-17 | 按项目负责人最新要求复核总路线、M10-R WORKBENCH、D-046 与项目台账；结构化解析四份 WORKBENCH 的 WP1～WP5、负责人和 WP5 互斥关系；扫描现行口径中的 M10-R 双负责人残留；运行 `git diff --check` 与 project-to-act validate | 0 | base/功能提交 `0b54a24` + docs-only D-046 责任调整；无 schema、依赖或运行代码变化 | 四个里程碑均恰有 WP1～WP5。M10-R WP1～WP4 全部由缪海南开发，WP5 由胡磊独立验收；胡磊不参与 M10-R 开发。M7-R、M8-R、M9-R 分工未变，现行口径不再保留 M10-R 双开发负责人。D-044/D-045 历史记录保留，但其中 M10-R 人员派工由 D-046 取代。本证据不验收功能实现 | `docs/tasks/ECOMMERCE_CLOSED_LOOP_ROADMAP.md`；`docs/tasks/M10R_OPERATING_DECISION_WORKBENCH.md`；`.project-to-act/PROJECT_{OVERVIEW,PROGRESS,FEATURES,ACCEPTANCE}.md` | 人员、工作包、验收独立性、D-046 或上述文档变化前；不得用于证明 M10-R 开发开始、功能实现、里程碑通过或生产放行 |
 | E-20260817-005 | 2026-08-17 | 对 E-20260817-003/004 已隔离的七项既有 M4/知识库失败逐项复现和归因；修复会话错误码、消息历史元数据与 `(created_at,id)` URL-safe/legacy 游标兼容；把知识热更新测试改为真实内容变更和显式全局管理作用域；handoff 出仓时验证权威生成脚本而非 skip；将无实时模型的意图留出集 xfail 改为显式负向能力边界。重跑原七项、skip/xfail 相关集合、关联回归和仓库全量；无文件故障注入强制关闭知识更新以证明测试可捕获退化；运行 compileall、whitespace、`CONTRIBUTING.md` 零改动与 project-to-act validate | 修复前原七项 1（`7 failed`）；故障注入 1（预期 `1 failed`）；还原后所有定点、集合、关联、全量和静态检查 0 | base `961938321d6ac4fb3314756e8ca061bb4484dd09`；本轮四文件组合 SHA-256 `3f313b3fade39bfe3964d102c8a39d8994a549ba00a6f5bf80f8427a6a6a50e9`；schema v34 不变 | 原七项 `7 passed`；skip/xfail 相关集合 `59 passed`；关联回归 `108 passed`；全量 `950 passed, 24 warnings`（566.70 秒），无 failed/skipped/xfailed。热更新故障注入稳定得到 `updated == 0` 对 `1` 的断言失败，还原后通过。24 条为既有 FastAPI 重复 Operation ID warning。租户不得修改全局知识的权限保持，D-034 语义权威不变，无 schema、依赖、API 或生产动作扩张 | `src/ecommerce_agent/database.py`；`tests/test_{memory_api,single_source,m4_acceptance}.py`；E-20260817-003/004 | 上述会话/游标、知识更新、单一事实源或无模型能力边界变化前；只关闭既有测试欠账并提供全绿开发基线，不证明 WP2～WP5、正式 WP5、真实平台接入、M7-R Gate 或生产放行 |
@@ -607,6 +665,8 @@
 
 | Gate ID | 日期 | Gate | 对象 | 结果 | 证据 ID | 豁免与确认人 |
 |---|---|---|---|---|---|---|
+| G-M7R-ALL-001 | 2026-08-20 | M7-R WP1～WP4 完整代码级本机门 | v34 统一导入/隐私/来源/证据、八类报表规范化、v35 商品身份与对账、readiness API/页面、显式隔离 Demo、WP5 独立报告与 merge-tip 回归 | 通过；PR #20 已合入并在 `f6bb47c` 复验 | E-20260820-001 | 仅关闭 F-323 代码级本机里程碑；不豁免真实平台字段/数据、真实经营结论、生产发布/权限/写能力或 M8-R～M10-R |
+| G-M7R-WP5-001 | 2026-08-20 | M7-R WP5 独立验收与合入后复验门 | 原独立报告与 6 项探针、补充验收矩阵、mutation 红→绿、桌面/390px、报告/截图哈希 double-check、精确 merge-tip 聚焦/全量/静态门禁 | 通过；独立签署原件保持不变，补充证据不代签 | E-20260820-001 | 只签署已验证代码对象和本机技术 Gate；真实平台接入、业务签署与生产 Gate 无豁免 |
 | G-FORECAST-PLANNING-CONTRACT-001 | 2026-08-13 | Forecast/Planning 联合配置与 current plan 门 | 7/14/30、lead+review/max-stock required days、legacy POST guard、no partial write、GET/tool no superseded plan | 通过 | E-20260813-013 | 仅限本机 API/虚拟策略证据；未运行全量，不豁免真实补货策略、长稳、自动动作或生产 Gate |
 | G-DEMAND-SKU-UNIVERSE-001 | 2026-08-13 | store-wide Demand SKU universe 门 | order∪inventory、explicit scope、true zero/coverage missing/cold start、tenant/store isolation、response/audit digest | 通过 | E-20260813-012 | 仅限本机公开领域服务与合成/虚拟数据；未运行全量，不豁免真实 coverage 声明、完整商品主数据、长稳或生产 Gate |
 | G-FORECAST-FINAL-FALLBACK-001 | 2026-08-13 | Forecast final-stage 候选回退门 | ranking/baseline gate 重选、final-only failure、attempt/failure 固化、全部可用候选失败、v1 read compatibility | 通过 | E-20260813-011 | 仅限本机合成序列与代码契约；未运行全量，不豁免真实数据分布、长稳、库存业务验收或生产 Gate |
@@ -673,6 +733,13 @@
 
 ## 验收记录
 
+- 2026-08-20：完成 M7-R WP5 正式收口。WP1 因公共基建需要先行合入，PR #20 只包含
+  WP2～WP4；补充报告将验收对象明确为 base 中 WP1 与 head `ece61e1` 的 WP2～WP4 组合态，
+  且不改写缪海南原独立报告。第二轮独立 double-check 对报告/截图哈希、PR 拓扑、detached
+  命令链、mutation 与截图逐项复核通过。PR #20 合入 `main` 为 `f6bb47c` 后，merge tip
+  聚焦 `104 passed`、全量 `1035 passed, 24 warnings`，静态与台账门禁均通过。原始报告、
+  补充报告和三张浏览器证据已按原字节归档；F-323 仅按代码级本机范围完成，真实平台、真实
+  经营与生产边界继续保留。见 E-20260820-001、G-M7R-WP5-001、G-M7R-ALL-001。
 - 2026-08-17：在不接触既有脏 main worktree 的前提下，从 `origin/main` `9619383` 建立隔离
   worktree，将 WP1 `0b54a24` 和 D-046/v34 集成提交 `e127c39` 快进推送到 main。全量
   `950 passed, 24 warnings`，compileall、责任矩阵、迁移唯一性、whitespace 和账本校验通过；
