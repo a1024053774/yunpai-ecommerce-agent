@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 WorkspaceRole = Literal["user", "assistant"]
 WorkspaceConversationStatus = Literal["active", "archived"]
+WorkspaceMessageStatus = Literal["completed", "generating", "incomplete"]
 
 
 class WorkspaceConversationSummary(BaseModel):
@@ -35,8 +36,15 @@ class WorkspaceMessageRecord(BaseModel):
     conversation_id: str = Field(min_length=1, max_length=128)
     role: WorkspaceRole
     content: str = Field(min_length=1, max_length=12000)
+    status: WorkspaceMessageStatus = "completed"
     created_at: datetime | str
+    updated_at: datetime | str
     trace_id: str | None = Field(default=None, max_length=128)
+    tool_name: str | None = Field(default=None, max_length=128)
+    tool_label: str | None = Field(default=None, max_length=200)
+    tool_summary: str | None = Field(default=None, max_length=2400)
+    requires_confirmation: bool = False
+    action_summary: str | None = Field(default=None, max_length=500)
     processing: dict[str, Any] = Field(default_factory=dict)
 
 

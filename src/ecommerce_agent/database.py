@@ -4206,6 +4206,7 @@ class Database:
             )
         message["processing"] = processing or {}
         message.pop("processing_json")
+        message["requires_confirmation"] = bool(message["requires_confirmation"])
         message["updated_at"] = message["created_at"]
         return message
 
@@ -4227,6 +4228,7 @@ class Database:
             return None
         result = dict(row)
         result["processing"] = json.loads(result.pop("processing_json") or "{}")
+        result["requires_confirmation"] = bool(result["requires_confirmation"])
         return result
 
     def update_workspace_message(
@@ -4278,30 +4280,38 @@ class Database:
                     ),
                 )
             if metadata is not None:
-                conn.execute(
-                    """UPDATE workspace_messages SET
-                       trace_id=COALESCE(?, trace_id),
-                       tool_name=COALESCE(?, tool_name),
-                       tool_label=COALESCE(?, tool_label),
-                       tool_summary=COALESCE(?, tool_summary),
-                       requires_confirmation=?,
-                       action_summary=COALESCE(?, action_summary),
-                       updated_at=?
-                       WHERE id=? AND tenant_id=? AND admin_id=? AND conversation_id=?""",
-                    (
-                        metadata.get("trace_id"),
-                        metadata.get("tool_name"),
-                        metadata.get("tool_label"),
-                        metadata.get("tool_summary"),
-                        1 if metadata.get("requires_confirmation") else 0,
-                        metadata.get("action_summary"),
-                        updated_at,
-                        message_id,
-                        tenant_id,
-                        admin_id,
-                        conversation_id,
-                    ),
-                )
+                metadata_columns = {
+                    "trace_id": "trace_id",
+                    "tool_name": "tool_name",
+                    "tool_label": "tool_label",
+                    "tool_summary": "tool_summary",
+                    "requires_confirmation": "requires_confirmation",
+                    "action_summary": "action_summary",
+                }
+                assignments: list[str] = []
+                values: list[Any] = []
+                for key, column in metadata_columns.items():
+                    if key not in metadata:
+                        continue
+                    value = metadata[key]
+                    if key == "requires_confirmation":
+                        value = 1 if value else 0
+                    assignments.append(f"{column}=?")
+                    values.append(value)
+                if assignments:
+                    conn.execute(
+                        f"""UPDATE workspace_messages
+                           SET {', '.join(assignments)}, updated_at=?
+                           WHERE id=? AND tenant_id=? AND admin_id=? AND conversation_id=?""",
+                        (
+                            *values,
+                            updated_at,
+                            message_id,
+                            tenant_id,
+                            admin_id,
+                            conversation_id,
+                        ),
+                    )
         return self.get_workspace_message(
             tenant_id=tenant_id,
             admin_id=admin_id,
@@ -4327,10 +4337,12 @@ class Database:
         with self.connect() as conn:
             rows = conn.execute(
                 """SELECT id, conversation_id, role, content, status, trace_id,
-                          processing_json, created_at, updated_at
+                          tool_name, tool_label, tool_summary, requires_confirmation,
+                          action_summary, processing_json, created_at, updated_at
                 FROM (
                     SELECT id, conversation_id, role, content, status, trace_id,
-                           processing_json, created_at, updated_at, rowid
+                           tool_name, tool_label, tool_summary, requires_confirmation,
+                           action_summary, processing_json, created_at, updated_at, rowid
                     FROM workspace_messages
                     WHERE conversation_id=? AND tenant_id=? AND admin_id=?
                     ORDER BY created_at DESC, rowid DESC LIMIT ?
@@ -4341,6 +4353,7 @@ class Database:
         for row in rows:
             item = dict(row)
             item["processing"] = json.loads(item.pop("processing_json") or "{}")
+            item["requires_confirmation"] = bool(item["requires_confirmation"])
             result.append(item)
         return result
 

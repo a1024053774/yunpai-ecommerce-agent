@@ -54,13 +54,22 @@ def test_workspace_contract_validates_persisted_records() -> None:
         conversation_id=summary.id,
         role="assistant",
         content="已完成库存核对",
+        status="completed",
         created_at=summary.updated_at,
+        updated_at=summary.updated_at,
         trace_id="trace-1",
+        tool_name="get_inventory_risk",
+        tool_label="库存风险",
+        tool_summary="共核对 6 个商品",
+        requires_confirmation=True,
+        action_summary="进入高级管理确认补货",
         processing={"stage": "completed", "tool_name": "get_inventory_risk"},
     )
 
     assert summary.message_count == 2
     assert message.conversation_id == summary.id
+    assert message.requires_confirmation is True
+    assert message.tool_summary == "共核对 6 个商品"
     assert message.processing["stage"] == "completed"
 
 
@@ -389,6 +398,118 @@ def test_workspace_stream_persists_structured_metadata_columns(
     assert "completed" in row["processing_json"]
 
 
+def test_workspace_messages_restore_structured_metadata_without_processing_json(
+    tmp_path, monkeypatch
+) -> None:
+    app = create_app(make_settings(tmp_path))
+    decisions = iter(
+        [
+            {
+                "mode": "observe",
+                "tool_name": "get_workspace_overview",
+                "arguments": {},
+                "reason": "先核对当前状态",
+            },
+            {
+                "mode": "propose_action",
+                "response": "确认后执行退款",
+                "action_summary": "执行退款",
+                "reason": "需要改变订单和资金状态",
+            },
+            {
+                "mode": "propose_action",
+                "response": "确认后执行退款",
+                "action_summary": "执行退款",
+                "reason": "需要改变订单和资金状态",
+            },
+        ]
+    )
+    monkeypatch.setattr(
+        app.state.agent.model,
+        "generate_json",
+        lambda messages, **kwargs: next(decisions),
+    )
+
+    with TestClient(app) as client:
+        conversation = client.post(
+            "/v1/admin/workspace/conversations", headers=ADMIN_HEADERS
+        ).json()
+        response = client.post(
+            f"/v1/admin/workspace/conversations/{conversation['id']}/chat/stream",
+            headers=ADMIN_HEADERS,
+            json={"message": "先核对整体状态，再把异常订单退款", "context": {}},
+        )
+        with app.state.agent.db.connect() as conn:
+            conn.execute(
+                "UPDATE workspace_messages SET processing_json='{}' "
+                "WHERE conversation_id=? AND role='assistant'",
+                (conversation["id"],),
+            )
+        messages = client.get(
+            f"/v1/admin/workspace/conversations/{conversation['id']}/messages",
+            headers=ADMIN_HEADERS,
+        ).json()
+
+    assert response.status_code == 200
+    assistant = messages[-1]
+    assert assistant["processing"] == {}
+    assert assistant["trace_id"].startswith("workspace-")
+    assert assistant["tool_name"] == "get_workspace_overview"
+    assert assistant["tool_label"] == "经营全局概况"
+    assert assistant["tool_summary"]
+    assert assistant["requires_confirmation"] is True
+    assert assistant["action_summary"] == "该操作需要在对应管理模块核对后再执行"
+
+
+def test_workspace_message_metadata_updates_only_explicit_fields(tmp_path) -> None:
+    app = create_app(make_settings(tmp_path))
+    db = app.state.agent.db
+    conversation = db.create_workspace_conversation(
+        tenant_id="tenant-test", admin_id="admin-test", title="元数据更新"
+    )
+    message = db.append_workspace_message(
+        tenant_id="tenant-test",
+        admin_id="admin-test",
+        conversation_id=conversation["id"],
+        role="assistant",
+        content="需要确认",
+        trace_id="trace-original",
+        metadata={
+            "tool_name": "get_inventory_risk",
+            "tool_label": "库存风险",
+            "requires_confirmation": True,
+            "action_summary": "确认补货",
+        },
+    )
+
+    updated = db.update_workspace_message(
+        tenant_id="tenant-test",
+        admin_id="admin-test",
+        conversation_id=conversation["id"],
+        message_id=message["id"],
+        status="completed",
+        metadata={"tool_summary": "共核对 6 个商品"},
+    )
+
+    assert updated["trace_id"] == "trace-original"
+    assert updated["tool_name"] == "get_inventory_risk"
+    assert updated["requires_confirmation"] is True
+    assert updated["tool_summary"] == "共核对 6 个商品"
+
+    cleared = db.update_workspace_message(
+        tenant_id="tenant-test",
+        admin_id="admin-test",
+        conversation_id=conversation["id"],
+        message_id=message["id"],
+        status="completed",
+        metadata={"tool_name": None, "action_summary": None},
+    )
+
+    assert cleared["tool_name"] is None
+    assert cleared["action_summary"] is None
+    assert cleared["requires_confirmation"] is True
+
+
 def test_workspace_model_answer_not_overridden_by_write_keywords(
     tmp_path, monkeypatch
 ) -> None:
@@ -473,4 +594,6 @@ def test_workspace_page_uses_server_conversation_history() -> None:
     assert 'id="newConversationButton"' in page
     assert 'id="conversationList"' in page
     assert "/v1/admin/workspace/conversations" in page
+    assert "item.tool_label ?? processing.tool_label" in page
+    assert "item.requires_confirmation ?? processing.requires_confirmation" in page
     assert "localStorage.setItem(conversationStorageKey()" not in page

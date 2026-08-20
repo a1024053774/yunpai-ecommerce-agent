@@ -727,7 +727,15 @@
     async function selectConversation(conversationId, refreshList = true) {
       const messages = await api(`/v1/admin/workspace/conversations/${encodeURIComponent(conversationId)}/messages`);
       state.sessionId = conversationId; state.messages = messages; state.history = messages.filter((item) => ['user','assistant'].includes(item.role)).slice(-12).map((item) => ({role:item.role, content:item.content}));
-      clearRenderedMessages(); state.messages.forEach((item) => appendMessage(item.role, item.content, item.processing || {}, false));
+      clearRenderedMessages(); state.messages.forEach((item) => {
+        const processing = item.processing || {};
+        appendMessage(item.role, item.content, {
+          toolLabel: item.tool_label ?? processing.tool_label,
+          toolSummary: item.tool_summary ?? processing.tool_summary,
+          requiresConfirmation: item.requires_confirmation ?? processing.requires_confirmation,
+          actionSummary: item.action_summary ?? processing.action_summary,
+        }, false);
+      });
       if (refreshList) renderConversationList();
     }
     async function createConversation() {
