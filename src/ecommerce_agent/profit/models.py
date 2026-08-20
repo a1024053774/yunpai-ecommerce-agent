@@ -78,6 +78,32 @@ CATEGORY_LAYER: dict[ExpenseCategory, ProfitLayer] = {
     ExpenseCategory.PERIOD_ADJUSTMENT: ProfitLayer.FINAL,
 }
 
+# 金额方向（D-035 单一事实源）：收入为正、退款/成本为负；期间调整允许双向。
+CATEGORY_SIGN: dict[ExpenseCategory, Literal["positive", "negative", "either"]] = {
+    ExpenseCategory.SIGNED_REVENUE: "positive",
+    ExpenseCategory.REFUND_OFFSET: "negative",
+    ExpenseCategory.PURCHASE_COST: "negative",
+    ExpenseCategory.DIRECT_PRODUCT_COST: "negative",
+    ExpenseCategory.PACKAGING_COST: "negative",
+    ExpenseCategory.WAREHOUSE_PICKING_COST: "negative",
+    ExpenseCategory.FORWARD_LOGISTICS_COST: "negative",
+    ExpenseCategory.REVERSE_LOGISTICS_COST: "negative",
+    ExpenseCategory.RETURN_INBOUND_COST: "negative",
+    ExpenseCategory.PLATFORM_FEE: "negative",
+    ExpenseCategory.PLATFORM_COMMISSION: "negative",
+    ExpenseCategory.TECH_SERVICE_FEE: "negative",
+    ExpenseCategory.TRANSPORT_INSURANCE: "negative",
+    ExpenseCategory.PIT_FEE: "negative",
+    ExpenseCategory.SERVICE_FEE: "negative",
+    ExpenseCategory.KOL_COMMISSION: "negative",
+    ExpenseCategory.GIFT_COST: "negative",
+    ExpenseCategory.PUBLIC_WELFARE_COST: "negative",
+    ExpenseCategory.ADVERTISING_COST: "negative",
+    ExpenseCategory.REFURBISHMENT_COST: "negative",
+    ExpenseCategory.TAX_COST: "negative",
+    ExpenseCategory.PERIOD_ADJUSTMENT: "either",
+}
+
 
 # 正式口径必需费用（缺失任一即该层“暂不可核算”，缺失不补零）。
 REQUIRED_CATEGORIES_BY_LAYER: dict[ProfitLayer, frozenset[ExpenseCategory]] = {
@@ -197,6 +223,11 @@ class LedgerEntryInput(BaseModel):
             raise ValueError("invalid_ledger_amount") from exc
         if not amount.is_finite() or amount == 0:
             raise ValueError("invalid_ledger_amount")
+        sign = CATEGORY_SIGN[category]
+        if sign == "positive" and amount <= 0:
+            raise ValueError("ledger_amount_must_be_positive")
+        if sign == "negative" and amount >= 0:
+            raise ValueError("ledger_amount_must_be_negative")
         return self
 
 

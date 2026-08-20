@@ -1,5 +1,6 @@
 from .models import (
     CATEGORY_LAYER,
+    CATEGORY_SIGN,
     REQUIRED_CATEGORIES_BY_LAYER,
     ExpenseCategory,
     LayerProjection,
@@ -17,6 +18,7 @@ from .service import ProfitError, ProfitService
 
 __all__ = [
     "CATEGORY_LAYER",
+    "CATEGORY_SIGN",
     "REQUIRED_CATEGORIES_BY_LAYER",
     "ExpenseCategory",
     "LayerProjection",

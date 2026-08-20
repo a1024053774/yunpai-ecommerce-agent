@@ -166,6 +166,19 @@ class ProfitService:
         scope: ProfitScope,
     ) -> ProfitProjectionView:
         policy = self._active_policy(tenant_id)
+        try:
+            policy_required: dict[str, list[str]] = json.loads(
+                policy["required_categories_json"] or "{}"
+            )
+        except (TypeError, json.JSONDecodeError):
+            policy_required = {}
+
+        def required_for(layer: ProfitLayer) -> frozenset[ExpenseCategory]:
+            custom = policy_required.get(layer.value)
+            if custom:
+                return frozenset(ExpenseCategory(item) for item in custom)
+            return layer_required_categories(layer)
+
         entries = self._entries(tenant_id, store_id, period, scope)
         amounts: dict[ExpenseCategory, Decimal] = {}
         for entry in entries:
@@ -190,7 +203,7 @@ class ProfitService:
                     label=demo_label if demo_labels else formal_label,
                     missing_fields=[],
                 )
-            required = layer_required_categories(layer)
+            required = required_for(layer)
             missing = sorted(
                 category.value for category in required if category not in present
             )

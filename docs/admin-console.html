@@ -2690,6 +2690,7 @@ const titles = { overview: '经营总览', service: '智能客服', commerce: '�
       const period = $('m10Period').value.trim();
       const scope = $('m10Scope').value;
       const q = (name, value) => `${name}=${encodeURIComponent(value)}`;
+      const orderTone = { draft: 'warn', awaiting_confirmation: 'warn', confirmed: 'info', in_transit: 'info', received: 'ok', cancelled: 'bad', overdue: 'bad' };
       const [projection, reconcile, drafts, risks, marketing] = await Promise.all([
         api(`/v1/profit/projection?${q('store_id', store)}&${q('period', period)}&${q('scope', scope)}`),
         api(`/v1/profit/reconciliation?${q('store_id', store)}&${q('period', period)}&${q('scope', scope)}`),
@@ -2707,9 +2708,9 @@ const titles = { overview: '经营总览', service: '智能客服', commerce: '�
       $('m10Reconcile').innerHTML = reconcile.double_count_ok
         ? `<div class="notice">对账通过：${reconcile.entry_count} 条 ledger 无重复/漏算问题</div>`
         : `<div class="notice"><strong>对账未通过</strong>${reconcile.issues.map((issue) => `<div>${escapeHtml(issue.message)}</div>`).join('')}</div>`;
-      $('m10OrderRows').innerHTML = drafts.length ? drafts.map((draft) => `<tr><td>${escapeHtml(draft.order_draft_id.slice(0, 12))}</td><td><span class="status ${statusClass(draft.status)}">${escapeHtml(draft.status)}</span></td><td>${escapeHtml(String(draft.recommended_qty))} / ${escapeHtml(String(draft.confirmed_qty ?? '-'))}</td><td>${escapeHtml(draft.material_no)}</td><td>${escapeHtml(draft.unsent_label)}</td></tr>`).join('') : '<tr><td colspan="5"><div class="empty">暂无订购单草稿</div></td></tr>';
-      $('m10RiskRows').innerHTML = risks.length ? risks.map((risk) => `<tr><td>${escapeHtml(risk.sku_id || '-')}</td><td><span class="status ${statusClass(risk.risk_level || risk.severity)}">${escapeHtml(risk.risk_level || risk.severity || '-')}</span></td><td>${escapeHtml(risk.summary || risk.reason || '')}</td></tr>`).join('') : '<tr><td colspan="3"><div class="empty">暂无库存风险</div></td></tr>';
-      $('m10Marketing').innerHTML = marketing
+      $('m10OrderRows').innerHTML = drafts.length ? drafts.map((draft) => `<tr><td>${escapeHtml(draft.order_draft_id.slice(0, 12))}</td><td><span class="status ${orderTone[draft.status] || 'warn'}">${escapeHtml(draft.status)}</span></td><td>${escapeHtml(String(draft.recommended_qty))} / ${escapeHtml(String(draft.confirmed_qty ?? '-'))}</td><td>${escapeHtml(draft.material_no)}</td><td>${escapeHtml(draft.unsent_label)}</td></tr>`).join('') : '<tr><td colspan="5"><div class="empty">暂无订购单草稿</div></td></tr>';
+      $('m10RiskRows').innerHTML = risks.length ? risks.map((risk) => `<tr><td>${escapeHtml(risk.sku_id || '-')}</td><td><span class="status ${statusClass(risk.risk_level || risk.severity) || 'warn'}">${escapeHtml(risk.risk_level || risk.severity || '-')}</span></td><td>${escapeHtml(risk.summary || risk.reason || '')}</td></tr>`).join('') : '<tr><td colspan="3"><div class="empty">暂无库存风险</div></td></tr>';
+      $('m10Marketing').innerHTML = marketing && marketing.length
         ? '<div class="notice">营销数据可用（ROI/诊断入口正常）</div>'
         : '<div class="notice">广告 ROI 暂不可核算：无营销数据或接口未就绪（M9-R 数据接入后可用）</div>';
       const unsent = drafts.filter((draft) => draft.status === 'draft' || draft.status === 'awaiting_confirmation');
@@ -2743,7 +2744,7 @@ const titles = { overview: '经营总览', service: '智能客服', commerce: '�
           owner: '管理员人工确认',
         });
       }
-      if (!marketing) {
+      if (!marketing || !marketing.length) {
         suggestions.push({
           title: '广告 ROI 不可核算',
           body: '缺少营销数据，无法评估投放效率；数据接入前不猜测。',

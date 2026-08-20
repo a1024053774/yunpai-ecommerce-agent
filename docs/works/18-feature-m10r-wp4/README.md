@@ -1,6 +1,6 @@
 # M10-R WP4 费用底账、三层利润政策与经营决策数据层 — 交付证据
 
-Commit：`ec5ad37`（feature/m10r-wp4-profit-ledger，基于统一分支 WP1-WP3）
+Commit：`2618f7e`（feature/m10r-wp4-profit-ledger，基于统一分支 WP1-WP3）
 
 ## 交付内容
 

@@ -239,3 +239,52 @@ def test_category_belongs_to_exactly_one_layer() -> None:
         assert category not in seen or seen[category] is layer
         seen[category] = layer
     assert len(seen) == len(list(ExpenseCategory))
+
+
+def test_positive_refund_and_negative_revenue_rejected(tmp_path) -> None:
+    service = make_service(tmp_path)
+    with pytest.raises(ValueError) as exc:
+        service.record_entry(
+            TENANT,
+            entry(ExpenseCategory.REFUND_OFFSET, "50.00", order_id="O1"),
+        )
+    assert "ledger_amount_must_be_negative" in str(exc.value)
+    with pytest.raises(ValueError) as exc:
+        service.record_entry(
+            TENANT,
+            entry(ExpenseCategory.SIGNED_REVENUE, "-1000.00", order_id="O1"),
+        )
+    assert "ledger_amount_must_be_positive" in str(exc.value)
+
+
+def test_custom_policy_required_categories_respected(tmp_path) -> None:
+    service = make_service(tmp_path)
+    service.register_policy(
+        TENANT,
+        ProfitPolicyInput(
+            policy_version="v-custom",
+            required_categories={
+                ProfitLayer.SALES: [ExpenseCategory.SIGNED_REVENUE],
+                ProfitLayer.OPERATING: [
+                    ExpenseCategory.SIGNED_REVENUE,
+                    ExpenseCategory.PLATFORM_FEE,
+                ],
+                ProfitLayer.FINAL: [
+                    ExpenseCategory.SIGNED_REVENUE,
+                    ExpenseCategory.PLATFORM_FEE,
+                    ExpenseCategory.TAX_COST,
+                ],
+            },
+        ),
+    )
+    service.record_entry(
+        TENANT, entry(ExpenseCategory.SIGNED_REVENUE, "1000.00", order_id="O1")
+    )
+    service.record_entry(TENANT, entry(ExpenseCategory.PLATFORM_FEE, "-80.00"))
+    service.record_entry(TENANT, entry(ExpenseCategory.TAX_COST, "-20.00"))
+    view = service.projection(TENANT, STORE, PERIOD, ProfitScope.FORMAL)
+    assert view.sales.status == "available"
+    assert view.operating.status == "available"
+    assert view.operating.amount == "920.00"
+    assert view.final.status == "available"
+    assert view.final.amount == "900.00"
