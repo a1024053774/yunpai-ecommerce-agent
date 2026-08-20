@@ -525,7 +525,7 @@ def test_admin_console_has_readiness_view_and_only_explicit_demo_action(tmp_path
     app = create_app(make_settings(tmp_path))
     before = _table_counts(app.state.agent)
     with TestClient(app) as client:
-        page = client.get("/admin")
+        page = client.get("/admin/advanced")
     structure = _ReadonlyConsoleStructure()
     structure.feed(page.text)
 
