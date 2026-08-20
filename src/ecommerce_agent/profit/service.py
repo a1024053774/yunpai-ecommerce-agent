@@ -303,13 +303,25 @@ class ProfitService:
                 and entry["order_id"]
                 and entry["order_id"] not in signed_orders
             ):
-                issues.append(
-                    ReconciliationIssue(
-                        code="refund_without_signed_revenue",
-                        entry_key=entry["entry_key"],
-                        message=f"退款冲减 {entry['order_id']} 缺少对应签收确认收入",
+                # 退款可能跨期间滞后于签收收入：跨期间查找同店铺的签收收入，避免误报。
+                with self.db.connect() as conn:
+                    revenue = conn.execute(
+                        """
+                        SELECT 1 FROM profit_ledger_entries
+                        WHERE tenant_id=? AND store_id=? AND scope=?
+                          AND category='signed_receipt_revenue' AND order_id=?
+                        LIMIT 1
+                        """,
+                        (tenant_id, store_id, scope.value, entry["order_id"]),
+                    ).fetchone()
+                if revenue is None:
+                    issues.append(
+                        ReconciliationIssue(
+                            code="refund_without_signed_revenue",
+                            entry_key=entry["entry_key"],
+                            message=f"退款冲减 {entry['order_id']} 缺少对应签收确认收入",
+                        )
                     )
-                )
         return ReconciliationView(
             tenant_id=tenant_id,
             store_id=store_id,

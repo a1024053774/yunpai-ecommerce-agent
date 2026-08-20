@@ -215,6 +215,32 @@ def test_refund_without_signed_revenue_flagged(tmp_path) -> None:
     )
 
 
+def test_cross_period_refund_is_not_false_positive(tmp_path) -> None:
+    service = make_service(tmp_path)
+    service.record_entry(
+        TENANT,
+        LedgerEntryInput(
+            store_id=STORE,
+            period="2026-07",
+            category=ExpenseCategory.SIGNED_REVENUE,
+            scope=ProfitScope.FORMAL,
+            amount="1000.00",
+            source_kind="actual",
+            order_id="O-CROSS",
+            entry_key="rev-cross",
+        ),
+    )
+    service.record_entry(
+        TENANT,
+        entry(ExpenseCategory.REFUND_OFFSET, "-50.00", order_id="O-CROSS"),
+    )
+    result = service.reconcile(TENANT, STORE, PERIOD, ProfitScope.FORMAL)
+    assert result.double_count_ok is True
+    assert not any(
+        issue.code == "refund_without_signed_revenue" for issue in result.issues
+    )
+
+
 def test_demo_source_cannot_enter_formal_scope(tmp_path) -> None:
     service = make_service(tmp_path)
     with pytest.raises(ValueError) as exc:

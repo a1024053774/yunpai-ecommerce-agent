@@ -2692,32 +2692,46 @@ const titles = { overview: '经营总览', service: '智能客服', commerce: '�
       const q = (name, value) => `${name}=${encodeURIComponent(value)}`;
       const orderTone = { draft: 'warn', awaiting_confirmation: 'warn', confirmed: 'info', in_transit: 'info', received: 'ok', cancelled: 'bad', overdue: 'bad' };
       const [projection, reconcile, drafts, risks, marketing] = await Promise.all([
-        api(`/v1/profit/projection?${q('store_id', store)}&${q('period', period)}&${q('scope', scope)}`),
-        api(`/v1/profit/reconciliation?${q('store_id', store)}&${q('period', period)}&${q('scope', scope)}`),
+        api(`/v1/profit/projection?${q('store_id', store)}&${q('period', period)}&${q('scope', scope)}`).catch(() => null),
+        api(`/v1/profit/reconciliation?${q('store_id', store)}&${q('period', period)}&${q('scope', scope)}`).catch(() => null),
         api(`/v1/ordering/drafts?${q('store_id', store)}&limit=50`),
         api(`/v1/forecasting/risks?${q('store_id', store)}&limit=20`).catch(() => []),
         api(`/v1/marketing/performance?${q('store_id', store)}`).catch(() => null),
       ]);
-      $('m10ProfitPolicy').textContent = `政策 ${projection.policy_version} · ${projection.scope === 'demo' ? '演示参数' : '正式口径'}`;
-      const layerMeta = [
-        ['销售利润', projection.sales],
-        ['经营利润', projection.operating],
-        ['财务最终净利润', projection.final],
-      ];
-      $('m10ProfitRows').innerHTML = layerMeta.map(([name, layer]) => `<tr><td>${escapeHtml(name)}</td><td><span class="status ${layer.status === 'available' ? 'ok' : 'warn'}">${layer.status === 'available' ? '可用' : '缺失'}</span></td><td>${escapeHtml(layer.amount ?? '-')}</td><td>${layer.missing_fields.length ? layer.missing_fields.map(escapeHtml).join('、') : '-'}</td></tr>`).join('');
-      $('m10Reconcile').innerHTML = reconcile.double_count_ok
-        ? `<div class="notice">对账通过：${reconcile.entry_count} 条 ledger 无重复/漏算问题</div>`
-        : `<div class="notice"><strong>对账未通过</strong>${reconcile.issues.map((issue) => `<div>${escapeHtml(issue.message)}</div>`).join('')}</div>`;
+      if (projection && reconcile) {
+        $('m10ProfitPolicy').textContent = `政策 ${projection.policy_version} · ${projection.scope === 'demo' ? '演示参数' : '正式口径'}`;
+        const layerMeta = [
+          ['销售利润', projection.sales],
+          ['经营利润', projection.operating],
+          ['财务最终净利润', projection.final],
+        ];
+        $('m10ProfitRows').innerHTML = layerMeta.map(([name, layer]) => `<tr><td>${escapeHtml(name)}</td><td><span class="status ${layer.status === 'available' ? 'ok' : 'warn'}">${layer.status === 'available' ? '可用' : '缺失'}</span></td><td>${escapeHtml(layer.amount ?? '-')}</td><td>${layer.missing_fields.length ? layer.missing_fields.map(escapeHtml).join('、') : '-'}</td></tr>`).join('');
+        $('m10Reconcile').innerHTML = reconcile.double_count_ok
+          ? `<div class="notice">对账通过：${reconcile.entry_count} 条 ledger 无重复/漏算问题</div>`
+          : `<div class="notice"><strong>对账未通过</strong>${reconcile.issues.map((issue) => `<div>${escapeHtml(issue.message)}</div>`).join('')}</div>`;
+      } else {
+        $('m10ProfitPolicy').textContent = '不可用';
+        $('m10ProfitRows').innerHTML = '<tr><td colspan="4"><div class="notice">利润投影不可用：请先登记利润政策，或检查店铺/期间输入</div></td></tr>';
+        $('m10Reconcile').innerHTML = '<div class="notice">利润对账不可用：同上</div>';
+      }
       $('m10OrderRows').innerHTML = drafts.length ? drafts.map((draft) => `<tr><td>${escapeHtml(draft.order_draft_id.slice(0, 12))}</td><td><span class="status ${orderTone[draft.status] || 'warn'}">${escapeHtml(draft.status)}</span></td><td>${escapeHtml(String(draft.recommended_qty))} / ${escapeHtml(String(draft.confirmed_qty ?? '-'))}</td><td>${escapeHtml(draft.material_no)}</td><td>${escapeHtml(draft.unsent_label)}</td></tr>`).join('') : '<tr><td colspan="5"><div class="empty">暂无订购单草稿</div></td></tr>';
-      $('m10RiskRows').innerHTML = risks.length ? risks.map((risk) => `<tr><td>${escapeHtml(risk.sku_id || '-')}</td><td><span class="status ${statusClass(risk.risk_level || risk.severity) || 'warn'}">${escapeHtml(risk.risk_level || risk.severity || '-')}</span></td><td>${escapeHtml(risk.summary || risk.reason || '')}</td></tr>`).join('') : '<tr><td colspan="3"><div class="empty">暂无库存风险</div></td></tr>';
+      $('m10RiskRows').innerHTML = risks.length ? risks.map((risk) => `<tr><td>${escapeHtml(risk.sku_id || '-')}</td><td><span class="status ${statusClass(risk.risk_level || risk.severity) || 'warn'}">${escapeHtml(risk.risk_level || risk.severity || '-')}</span><td>${escapeHtml(risk.summary || risk.reason || risk.message || '')}</td></tr>`).join('') : '<tr><td colspan="3"><div class="empty">暂无库存风险</div></td></tr>';
       $('m10Marketing').innerHTML = marketing && marketing.length
         ? '<div class="notice">营销数据可用（ROI/诊断入口正常）</div>'
         : '<div class="notice">广告 ROI 暂不可核算：无营销数据或接口未就绪（M9-R 数据接入后可用）</div>';
       const unsent = drafts.filter((draft) => draft.status === 'draft' || draft.status === 'awaiting_confirmation');
       const criticalRisks = risks.filter((risk) => ['high', 'critical'].includes(risk.risk_level || risk.severity || ''));
       const suggestions = [];
-      const missingLayer = [projection.sales, projection.operating, projection.final].find((layer) => layer.status === 'missing');
-      if (missingLayer) {
+      const missingLayer = projection ? [projection.sales, projection.operating, projection.final].find((layer) => layer.status === 'missing') : null;
+      if (!projection) {
+        suggestions.push({
+          title: '利润暂不可核算',
+          body: '利润政策未登记或投影不可用；请先通过 /v1/profit/policies 登记政策。',
+          basis: '利润接口',
+          gap: '利润政策登记',
+          owner: '管理员人工确认',
+        });
+      } else if (missingLayer) {
         suggestions.push({
           title: '利润暂不可核算',
           body: `缺少：${missingLayer.missing_fields.join('、')}。缺失费用不得按 0 处理。`,
@@ -2764,11 +2778,11 @@ const titles = { overview: '经营总览', service: '智能客服', commerce: '�
       }
       $('m10Suggestions').innerHTML = suggestions.map((suggestion) => `<div class="panel" style="margin:0 0 10px"><div class="panel-head"><strong>${escapeHtml(suggestion.title)}</strong></div><div class="panel-body stack"><div>${escapeHtml(suggestion.body)}</div><div class="muted">依据：${escapeHtml(suggestion.basis)} · 缺口：${escapeHtml(suggestion.gap)} · 需确认：${escapeHtml(suggestion.owner)}</div></div></div>`).join('');
       $('m10Kpis').innerHTML = [
-        ['销售利润', projection.sales.amount ?? '-', projection.sales.status === 'available' ? '可用' : '缺失'],
-        ['经营利润', projection.operating.amount ?? '-', projection.operating.status === 'available' ? '可用' : '缺失'],
-        ['财务最终净利润', projection.final.amount ?? '-', projection.final.status === 'available' ? '可用' : '缺失'],
+        ['销售利润', projection?.sales.amount ?? '-', projection?.sales.status === 'available' ? '可用' : '缺失'],
+        ['经营利润', projection?.operating.amount ?? '-', projection?.operating.status === 'available' ? '可用' : '缺失'],
+        ['财务最终净利润', projection?.final.amount ?? '-', projection?.final.status === 'available' ? '可用' : '缺失'],
         ['订购单', String(drafts.length), `${unsent.length} 张待确认`],
-        ['对账', reconcile.double_count_ok ? '通过' : '未通过', `${reconcile.entry_count} 条 ledger`],
+        ['对账', reconcile?.double_count_ok ? '通过' : '未通过', `${reconcile?.entry_count ?? 0} 条 ledger`],
       ].map(([label, value, meta]) => `<div class="kpi"><span class="label">${escapeHtml(label)}</span><span class="value">${escapeHtml(String(value))}</span><span class="meta">${escapeHtml(meta)}</span></div>`).join('');
     }
 
