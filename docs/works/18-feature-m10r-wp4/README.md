@@ -54,5 +54,7 @@ git diff --check
 - 端到端场景（WP4-04 主体）：`scripts/m10r_wp4_e2e.py` HTTP 全链复跑，
   9/9 通过（正式三层利润 / 缺失不补零 / demo 隔离与标签 / 双算对账 /
   订购单 Gate 与状态机 / 写屏障），证据见同目录 `e2e-scenario-20260821.json`。
-- 剩余：浏览器截图证据（Playwright/Edge headless 未在本机安装，工具就绪后补拍），
-  以及经营建议卡片的模型解释接入（模型 key 配置后）。
+- 浏览器截图证据（WP4-04）：`scripts/m10r_wp4_dashboard_screenshot.py`
+  （Playwright + Edge headless）产出 `screenshots/m10-decision-formal-20260821.png`
+  与 `m10-decision-demo-20260821.png`，DOM 校验 KPI/三层利润/对账/建议卡片均已渲染。
+- 剩余：经营建议卡片的模型解释接入（模型 key 配置后）。
