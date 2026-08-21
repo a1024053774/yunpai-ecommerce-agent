@@ -35,13 +35,28 @@ def build_ordering_router(
         payload: OrderDraftCreate,
         admin: AdminPrincipal = Depends(require_admin),
     ):
-        return call(
+        result = call(
             ordering.create_draft,
             admin.tenant_id,
             payload.store_id,
             admin.admin_id,
             payload,
         )
+        service.db.audit(
+            "ordering.draft.created",
+            admin.admin_id,
+            result.order_draft_id,
+            {
+                "store_id": payload.store_id,
+                "sku_id": payload.sku_id,
+                "material_no": result.material_no,
+                "mode": result.mode.value,
+                "status": result.status.value,
+                "recommended_qty": result.recommended_qty,
+            },
+            admin.tenant_id,
+        )
+        return result
 
     @router.get("/drafts")
     def list_drafts(
@@ -72,13 +87,21 @@ def build_ordering_router(
         store_id: str = Query(min_length=1, max_length=128),
         admin: AdminPrincipal = Depends(require_admin),
     ):
-        return call(
+        result = call(
             ordering.submit_for_confirmation,
             admin.tenant_id,
             store_id,
             order_draft_id,
             admin.admin_id,
         )
+        service.db.audit(
+            "ordering.draft.submitted",
+            admin.admin_id,
+            order_draft_id,
+            {"store_id": store_id, "status": result.status.value},
+            admin.tenant_id,
+        )
+        return result
 
     @router.post("/drafts/{order_draft_id}/confirm")
     def confirm_draft(
@@ -87,7 +110,7 @@ def build_ordering_router(
         store_id: str = Query(min_length=1, max_length=128),
         admin: AdminPrincipal = Depends(require_admin),
     ):
-        return call(
+        result = call(
             ordering.confirm,
             admin.tenant_id,
             store_id,
@@ -95,6 +118,19 @@ def build_ordering_router(
             admin.admin_id,
             payload,
         )
+        service.db.audit(
+            "ordering.draft.confirmed",
+            admin.admin_id,
+            order_draft_id,
+            {
+                "store_id": store_id,
+                "confirmed_qty": result.confirmed_qty,
+                "version": result.version,
+                "status": result.status.value,
+            },
+            admin.tenant_id,
+        )
+        return result
 
     @router.post("/drafts/{order_draft_id}/cancel")
     def cancel_draft(
@@ -102,13 +138,21 @@ def build_ordering_router(
         store_id: str = Query(min_length=1, max_length=128),
         admin: AdminPrincipal = Depends(require_admin),
     ):
-        return call(
+        result = call(
             ordering.cancel,
             admin.tenant_id,
             store_id,
             order_draft_id,
             admin.admin_id,
         )
+        service.db.audit(
+            "ordering.draft.cancelled",
+            admin.admin_id,
+            order_draft_id,
+            {"store_id": store_id, "status": result.status.value},
+            admin.tenant_id,
+        )
+        return result
 
     @router.post("/drafts/{order_draft_id}/status")
     def advance_status(
@@ -117,7 +161,7 @@ def build_ordering_router(
         store_id: str = Query(min_length=1, max_length=128),
         admin: AdminPrincipal = Depends(require_admin),
     ):
-        return call(
+        result = call(
             ordering.advance_status,
             admin.tenant_id,
             store_id,
@@ -125,5 +169,18 @@ def build_ordering_router(
             admin.admin_id,
             payload,
         )
+        service.db.audit(
+            "ordering.draft.status_advanced",
+            admin.admin_id,
+            order_draft_id,
+            {
+                "store_id": store_id,
+                "to_status": payload.to_status.value,
+                "source_ref": payload.source_ref,
+                "status": result.status.value,
+            },
+            admin.tenant_id,
+        )
+        return result
 
     return router

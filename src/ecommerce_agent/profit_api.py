@@ -32,14 +32,40 @@ def build_profit_router(
         payload: ProfitPolicyInput,
         admin: AdminPrincipal = Depends(require_admin),
     ):
-        return call(profit.register_policy, admin.tenant_id, payload)
+        result = call(profit.register_policy, admin.tenant_id, payload)
+        service.db.audit(
+            "profit.policy.registered",
+            admin.admin_id,
+            payload.policy_version,
+            {
+                "policy_version": payload.policy_version,
+                "revenue_recognition_basis": result["revenue_recognition_basis"],
+            },
+            admin.tenant_id,
+        )
+        return result
 
     @router.post("/ledger/entries")
     def record_entry(
         payload: LedgerEntryInput,
         admin: AdminPrincipal = Depends(require_admin),
     ):
-        return call(profit.record_entry, admin.tenant_id, payload)
+        result = call(profit.record_entry, admin.tenant_id, payload)
+        service.db.audit(
+            "profit.ledger.entry_recorded",
+            admin.admin_id,
+            result["entry_id"],
+            {
+                "store_id": payload.store_id,
+                "period": payload.period,
+                "category": payload.category.value,
+                "scope": payload.scope.value,
+                "amount": payload.amount,
+                "entry_key": payload.entry_key,
+            },
+            admin.tenant_id,
+        )
+        return result
 
     @router.get("/projection")
     def projection(
