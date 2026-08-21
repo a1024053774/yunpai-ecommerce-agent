@@ -155,7 +155,7 @@ class ProfitService:
             row = conn.execute(
                 """
                 SELECT 1 FROM commerce_orders
-                WHERE tenant_id=? AND store_id=? AND id=?
+                WHERE tenant_id=? AND store_id=? AND external_order_id=?
                   AND order_status='delivered'
                 """,
                 (tenant_id, store_id, order_id),

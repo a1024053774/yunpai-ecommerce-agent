@@ -92,6 +92,36 @@ def post_entry(
     return call(base, admin_id, admin_key, "POST", "/v1/profit/ledger/entries", body)
 
 
+def seed_delivered_order(
+    base: str,
+    admin_id: str,
+    admin_key: str,
+    store: str,
+    order_id: str,
+) -> tuple[int, Any]:
+    body = {
+        "connector_id": "e2e-conn",
+        "store_id": store,
+        "order_id": order_id,
+        "order_status": "delivered",
+        "payment_status": "paid",
+        "currency": "CNY",
+        "total_amount": "1000.00",
+        "placed_at": "2026-08-01T00:00:00+00:00",
+        "lines": [
+            {
+                "line_id": f"{order_id}-l1",
+                "sku_id": "E2E-SKU",
+                "title": "e2e product",
+                "quantity": 1,
+                "unit_price": "1000.00",
+            }
+        ],
+        "source_updated_at": "2026-08-01T00:00:00+00:00",
+    }
+    return call(base, admin_id, admin_key, "POST", "/v1/orders", body)
+
+
 def run(
     base_url: str,
     admin_id: str,
@@ -115,6 +145,7 @@ def run(
     check(checks, "登记利润政策", status == 200, f"status={status} policy={policy}")
 
     # 2. 正式全量
+    seed_delivered_order(base, admin_id, admin_key, STORE, ORDER)
     entries = [
         ("signed_receipt_revenue", "1000.00", "actual", ORDER),
         ("purchase_cost", "-300.00", "manual", None),
@@ -153,6 +184,7 @@ def run(
     )
 
     # 3. 缺失不补零
+    seed_delivered_order(base, admin_id, admin_key, MISSING_STORE, "E2E-MISS")
     for index, (category, amount, source, order) in enumerate(
         [
             ("signed_receipt_revenue", "1000.00", "actual", "E2E-MISS"),

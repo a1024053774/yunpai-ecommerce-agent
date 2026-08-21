@@ -78,7 +78,7 @@ def seed_delivered_order(service: ProfitService, order_id: str) -> None:
                       ?, 1, '2026-08-01T00:00:00+00:00',
                       '2026-08-01T00:00:00+00:00')
             """,
-            (order_id, TENANT, STORE, order_id, "0" * 64),
+            (f"order-{order_id}", TENANT, STORE, order_id, "0" * 64),
         )
 
 
@@ -327,7 +327,7 @@ def test_non_delivered_order_revenue_rejected(tmp_path) -> None:
                 id, tenant_id, connector_id, store_id, external_order_id,
                 order_status, payment_status, currency, total_amount, placed_at,
                 source_updated_at, payload_hash, version, created_at, updated_at
-            ) VALUES ('ND', ?, 'conn-1', ?, 'ND', 'shipped', 'paid', 'CNY', '100.00',
+            ) VALUES ('order-ND', ?, 'conn-1', ?, 'ND', 'shipped', 'paid', 'CNY', '100.00',
                       '2026-08-01T00:00:00+00:00', '2026-08-01T00:00:00+00:00',
                       ?, 1, '2026-08-01T00:00:00+00:00', '2026-08-01T00:00:00+00:00')
             """,
