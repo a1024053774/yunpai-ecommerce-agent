@@ -1,12 +1,12 @@
 {
   "title": "M10-R WP4 端到端场景证据",
-  "generated_at": "2026-08-21T04:23:58.506270+00:00",
+  "generated_at": "2026-08-21T06:47:18.159178+00:00",
   "base_url": "http://127.0.0.1:8081",
   "checks": [
     {
       "name": "登记利润政策",
       "passed": true,
-      "detail": "status=200 policy={'tenant_id': 'local-appliance', 'policy_version': 'v-e2e-20260821-042358', 'revenue_recognition_basis': 'signed_receipt'}"
+      "detail": "status=200 policy={'tenant_id': 'local-appliance', 'policy_version': 'v-e2e-20260821-064717', 'revenue_recognition_basis': 'signed_receipt'}"
     },
     {
       "name": "正式三层利润全可用（600/430/410）",
@@ -26,12 +26,12 @@
     {
       "name": "重复退款被对账检出",
       "passed": true,
-      "detail": "status=200 issues=1"
+      "detail": "status=200 issues=2"
     },
     {
       "name": "订购单 formal Gate 阻断（缺证据）",
       "passed": true,
-      "detail": "status=409 detail={'detail': 'ordering_gate_blocked:material_no,forecast_run_ref,supply_constraint'}"
+      "detail": "status=409 detail={'detail': 'ordering_gate_blocked:material_no,forecast_run_ref,supply_constraint,delivery_constraint'}"
     },
     {
       "name": "订购单 demo 放行且带未发送标签",
