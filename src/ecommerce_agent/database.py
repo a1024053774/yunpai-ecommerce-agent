@@ -3519,6 +3519,11 @@ class Database:
                 entry_key TEXT NOT NULL,
                 payload_hash TEXT NOT NULL CHECK(length(payload_hash) = 64),
                 source_reference TEXT,
+                granularity TEXT,
+                is_estimated INTEGER NOT NULL DEFAULT 0
+                    CHECK(is_estimated IN (0, 1)),
+                reconciliation_status TEXT NOT NULL DEFAULT 'pending'
+                    CHECK(reconciliation_status IN ('pending','reconciled','disputed')),
                 created_at TEXT NOT NULL,
                 UNIQUE(tenant_id, entry_key),
                 UNIQUE(tenant_id, entry_id)
@@ -3721,7 +3726,8 @@ class Database:
             },
             "profit_ledger_entries": {
                 "tenant_id", "store_id", "period", "category", "scope",
-                "amount", "entry_key", "payload_hash", "created_at",
+                "amount", "entry_key", "payload_hash", "granularity",
+                "is_estimated", "reconciliation_status", "created_at",
             },
             "readonly_import_row_issues": {
                 "issue_id", "import_id", "tenant_id", "store_id",

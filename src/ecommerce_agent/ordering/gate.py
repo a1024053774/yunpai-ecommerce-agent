@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Mapping
+from decimal import Decimal, InvalidOperation
+from typing import Any
 
 from .models import DraftGateResult, OrderDraftCreate, OrderDraftMode
 
@@ -8,13 +9,15 @@ from .models import DraftGateResult, OrderDraftCreate, OrderDraftMode
 FORMAL_GATE_FIELDS = (
     "material_no",
     "forecast_run_ref",
+    "inventory_plan",
+    "recommended_qty",
     "supply_constraint",
     "delivery_constraint",
 )
 
 
 class OrderDraftGate:
-    """草稿生成 Gate：canonical 料号 + 补货证据 + 必需供货约束（D-035 单一实现）。"""
+    """草稿生成 Gate：料号须绑定 SKU，补货证据须最新且绑定库存计划。"""
 
     def __init__(self, db: Any) -> None:
         self.db = db
@@ -26,16 +29,6 @@ class OrderDraftGate:
         sku_id: str,
         requested: str | None,
     ) -> str | None:
-        if requested is not None:
-            with self.db.connect() as conn:
-                exists = conn.execute(
-                    """
-                    SELECT 1 FROM readonly_canonical_products
-                    WHERE tenant_id=? AND store_id=? AND internal_part_number=?
-                    """,
-                    (tenant_id, store_id, requested),
-                ).fetchone()
-            return requested if exists is not None else None
         with self.db.connect() as conn:
             row = conn.execute(
                 """
@@ -52,21 +45,66 @@ class OrderDraftGate:
                 """,
                 (tenant_id, store_id, sku_id),
             ).fetchone()
-        return str(row[0]) if row and row[0] else None
+        resolved = str(row[0]) if row and row[0] else None
+        if requested is not None:
+            return requested if requested == resolved else None
+        return resolved
+
+    def _latest_completed_run(
+        self, tenant_id: str, store_id: str, sku_id: str
+    ) -> str | None:
+        with self.db.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT run_id FROM forecast_runs
+                WHERE tenant_id=? AND store_id=? AND sku_id=? AND status='completed'
+                ORDER BY created_at DESC, rowid DESC LIMIT 1
+                """,
+                (tenant_id, store_id, sku_id),
+            ).fetchone()
+        return str(row[0]) if row else None
 
     def _forecast_evidence(
         self, tenant_id: str, store_id: str, sku_id: str, run_ref: str
     ) -> bool:
+        return self._latest_completed_run(tenant_id, store_id, sku_id) == run_ref
+
+    def _advisory_plan(
+        self,
+        tenant_id: str,
+        store_id: str,
+        sku_id: str,
+        plan_ref: str | None,
+    ) -> dict[str, Any] | None:
         with self.db.connect() as conn:
-            row = conn.execute(
-                """
-                SELECT 1 FROM forecast_runs
-                WHERE tenant_id = ? AND store_id = ? AND run_id = ?
-                  AND sku_id = ? AND status = 'completed'
-                """,
-                (tenant_id, store_id, run_ref, sku_id),
-            ).fetchone()
-        return row is not None
+            if plan_ref is not None:
+                row = conn.execute(
+                    """
+                    SELECT * FROM inventory_plans
+                    WHERE tenant_id=? AND store_id=? AND sku_id=? AND plan_id=?
+                      AND quantity_status='advisory'
+                    """,
+                    (tenant_id, store_id, sku_id, plan_ref),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """
+                    SELECT * FROM inventory_plans
+                    WHERE tenant_id=? AND store_id=? AND sku_id=?
+                      AND quantity_status='advisory'
+                    ORDER BY rowid DESC LIMIT 1
+                    """,
+                    (tenant_id, store_id, sku_id),
+                ).fetchone()
+        return dict(row) if row else None
+
+    def _quantity_matches(self, plan: dict[str, Any], recommended_qty: int) -> bool:
+        try:
+            expected = Decimal(str(plan["recommended_order_qty"]))
+            actual = Decimal(str(recommended_qty))
+        except (InvalidOperation, TypeError, KeyError):
+            return False
+        return expected == actual
 
     def _supply_constraint_evidence(
         self, tenant_id: str, store_id: str, sku_id: str, policy_ref: str | None
@@ -128,6 +166,10 @@ class OrderDraftGate:
                 missing_fields=[],
                 reason="demo_draft_allowed_with_labels",
             )
+
+        plan = self._advisory_plan(
+            tenant_id, store_id, payload.sku_id, payload.inventory_snapshot_ref
+        )
         missing: list[str] = []
         if not material_no:
             missing.append("material_no")
@@ -135,12 +177,20 @@ class OrderDraftGate:
             tenant_id, store_id, payload.sku_id, payload.forecast_run_ref
         ):
             missing.append("forecast_run_ref")
+        if plan is None:
+            missing.append("inventory_plan")
+        elif str(plan.get("forecast_run_id")) != payload.forecast_run_ref:
+            missing.append("inventory_plan")
+        else:
+            if not self._quantity_matches(plan, payload.recommended_qty):
+                missing.append("recommended_qty")
         if not self._supply_constraint_evidence(
             tenant_id, store_id, payload.sku_id, payload.policy_ref
         ):
             missing.append("supply_constraint")
         if not self._delivery_constraint_evidence(tenant_id, store_id):
             missing.append("delivery_constraint")
+
         if missing:
             return DraftGateResult(
                 allowed=False,

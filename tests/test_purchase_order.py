@@ -122,6 +122,35 @@ def seed_gate_ready(
                 """,
                 ("POL-1", TENANT, STORE, SKU, "2026-08-01T00:00:00+00:00"),
             )
+            conn.execute(
+                """
+                INSERT INTO inventory_plans (
+                    plan_id, tenant_id, store_id, sku_id, forecast_run_id,
+                    planning_policy_id, planning_policy_version,
+                    inventory_snapshot_json, inventory_snapshot_hash,
+                    inventory_as_of, forecast_evidence_json, selected_quantile,
+                    on_hand, reserved, inbound, available, reservation_shortfall,
+                    future_supply, lead_time_demand, lead_review_demand,
+                    reorder_point, target_stock, maximum_stock,
+                    recommended_order_qty, quantity_status, quantity_reason,
+                    stockout_dates_json, risk_level, risk_evidence_json,
+                    overstock_risk, plan_quality, quality_issues_json,
+                    assumptions_json, allocation_boundary_json,
+                    calculation_steps_json, action_mode, input_hash, created_at
+                ) VALUES (?, ?, ?, ?, 'RUN-1', 'POL-1', 'v1',
+                          '{}', ?, ?, '{}', 'p50',
+                          '10', '1', '2', '10', '0',
+                          '0', '12', '12',
+                          '12', '30', '60',
+                          '12', 'advisory', NULL,
+                          '[]', 'low', '{}',
+                          0, 'standard', '{}',
+                          '{}', '{}',
+                          '{}', 'advisory_only', ?, ?)
+                """,
+                ("PLAN-1", TENANT, STORE, SKU, H64,
+                 "2026-08-19T04:00:00+00:00", H64, "2026-08-19T04:00:00+00:00"),
+            )
         if with_evidence:
             _seed_import_manifest(conn)
             conn.execute(
@@ -486,7 +515,7 @@ def test_status_updates_never_touch_other_tables(tmp_path) -> None:
         draft_rows = conn.execute(
             "SELECT COUNT(*) FROM purchase_order_drafts"
         ).fetchone()[0]
-    assert inventory_rows == 0
+    assert inventory_rows == 1
     assert run_rows == 1
     assert order_rows == 0
     assert draft_rows == 1

@@ -456,7 +456,7 @@ class OrderingService:
             updated = conn.execute(
                 """
                 UPDATE purchase_order_drafts
-                SET status=?, updated_at=?
+                SET status=?, version=version+1, updated_at=?
                 WHERE tenant_id=? AND store_id=? AND order_draft_id=?
                   AND version=?
                 """,

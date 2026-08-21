@@ -89,6 +89,21 @@ class ProfitService:
             raise ProfitError("profit_policy_not_registered")
         return dict(row)
 
+    def _policy_for_period(self, tenant_id: str, period: str) -> dict[str, Any]:
+        cutoff = f"{period}-31T23:59:59+00:00"
+        with self.db.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM profit_policies
+                WHERE tenant_id=? AND active_from <= ?
+                ORDER BY active_from DESC, rowid DESC LIMIT 1
+                """,
+                (tenant_id, cutoff),
+            ).fetchone()
+        if row is None:
+            raise ProfitError("profit_policy_not_registered_for_period")
+        return dict(row)
+
     # ---------- ledger ----------
 
     def record_entry(self, tenant_id: str, payload: LedgerEntryInput) -> dict[str, Any]:
@@ -109,8 +124,8 @@ class ProfitService:
                         entry_id, tenant_id, store_id, period, category, scope,
                         amount, currency, source_kind, sku_id, order_id,
                         mapping_version, entry_key, payload_hash, source_reference,
-                        created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        granularity, is_estimated, reconciliation_status, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         entry_id,
@@ -128,6 +143,9 @@ class ProfitService:
                         payload.entry_key,
                         digest,
                         payload.source_reference,
+                        payload.granularity,
+                        1 if payload.is_estimated else 0,
+                        payload.reconciliation_status,
                         _utc_now(),
                     ),
                 )
@@ -189,7 +207,7 @@ class ProfitService:
         period: str,
         scope: ProfitScope,
     ) -> ProfitProjectionView:
-        policy = self._active_policy(tenant_id)
+        policy = self._policy_for_period(tenant_id, period)
         try:
             policy_required: dict[str, list[str]] = json.loads(
                 policy["required_categories_json"] or "{}"
@@ -204,6 +222,9 @@ class ProfitService:
             return layer_required_categories(layer)
 
         entries = self._entries(tenant_id, store_id, period, scope)
+        currencies = {str(entry["currency"]) for entry in entries}
+        if len(currencies) > 1:
+            raise ProfitError("mixed_currency_projection")
         amounts: dict[ExpenseCategory, Decimal] = {}
         for entry in entries:
             category = ExpenseCategory(entry["category"])
@@ -305,7 +326,7 @@ class ProfitService:
         issues: list[ReconciliationIssue] = []
         seen_order_category: set[tuple[str, str]] = set()
         signed_orders: set[str] = set()
-        ledger_identity: dict[tuple[str, str, str, str], set[str]] = {}
+        ledger_identity: dict[tuple[str, str, str, str, str], set[str]] = {}
         for entry in entries:
             category = ExpenseCategory(entry["category"])
             identity = (
@@ -313,6 +334,7 @@ class ProfitService:
                 entry["sku_id"] or "",
                 entry["order_id"] or "",
                 str(entry["amount"]),
+                entry["source_reference"] or "",
             )
             ledger_identity.setdefault(identity, set()).add(entry["entry_key"])
             if entry["order_id"]:

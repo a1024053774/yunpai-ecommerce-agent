@@ -192,6 +192,9 @@ class LedgerEntryInput(BaseModel):
     mapping_version: str = "v1"
     entry_key: str
     source_reference: str | None = None
+    granularity: str | None = None
+    is_estimated: bool = False
+    reconciliation_status: Literal["pending", "reconciled", "disputed"] = "pending"
 
     @field_validator("store_id", "period", "mapping_version", "entry_key")
     @classmethod
@@ -204,6 +207,13 @@ class LedgerEntryInput(BaseModel):
         if value is None:
             return None
         return _require_code(value, error="invalid_source_reference", max_length=512)
+
+    @field_validator("granularity")
+    @classmethod
+    def validate_granularity(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _require_code(value, error="invalid_ledger_granularity", max_length=64)
 
     @model_validator(mode="after")
     def validate_entry(self) -> "LedgerEntryInput":
