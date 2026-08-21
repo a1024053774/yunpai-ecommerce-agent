@@ -27,6 +27,18 @@ class Principal:
 class AdminPrincipal:
     tenant_id: str
     admin_id: str
+    capabilities: frozenset[str] = frozenset()
+
+
+def _final_profit_capability(admin_id: str) -> frozenset[str]:
+    allowed = {
+        item.strip()
+        for item in os.environ.get("FINAL_PROFIT_READ_ADMIN_IDS", "").split(",")
+        if item.strip()
+    }
+    if admin_id in allowed:
+        return frozenset({"finance:final_profit:read"})
+    return frozenset()
 
 
 class AdminOperatorCreateRequest(BaseModel):
@@ -143,6 +155,7 @@ class AuthenticationService:
             return AdminPrincipal(
                 tenant_id=self.settings.bootstrap_tenant_id,
                 admin_id=self.settings.bootstrap_admin_id,
+                capabilities=_final_profit_capability(self.settings.bootstrap_admin_id),
             )
         if not self.admin_configured:
             raise AuthError("administrator authentication is not configured")
@@ -157,7 +170,11 @@ class AuthenticationService:
             admin_key, row["key_salt"], row["key_hash"], row["key_iterations"]
         ):
             raise AuthError("invalid administrator credentials")
-        return AdminPrincipal(tenant_id=str(row["tenant_id"]), admin_id=str(row["id"]))
+        return AdminPrincipal(
+            tenant_id=str(row["tenant_id"]),
+            admin_id=str(row["id"]),
+            capabilities=_final_profit_capability(str(row["id"])),
+        )
 
     def create_admin_operator(
         self,

@@ -254,6 +254,7 @@
         <button data-view="commerce">商品库存</button>
         <button data-view="readonly-data">数据准备度</button>
         <button data-view="forecasting">需求预测</button>
+        <button data-view="m10-decision">经营决策台</button>
         <button data-view="orders">订单售后</button>
         <button data-view="competitive">竞品分析</button>
         <button data-view="ops">运营辅助</button>
@@ -404,6 +405,17 @@
             <article class="panel"><div class="panel-head"><h3 data-forecast-field="backtest">Rolling backtest</h3></div><div class="table-wrap"><table><thead><tr><th>模型 / Origin</th><th>训练截止</th><th>预测窗口</th><th>指标 / 失败理由</th></tr></thead><tbody id="forecastBacktestRows"></tbody></table></div></article>
             <article class="panel"><div class="panel-head"><h3 data-forecast-field="recommended_quantity">库存建议与风险</h3></div><div class="panel-body stack" data-forecast-field="data_quality" id="forecastRiskDetail"><div class="empty">暂无固化库存计划</div></div></article>
           </div>
+        </section>
+
+        <section class="view" id="view-m10-decision">
+          <div class="section-head"><div><h2>M10 经营决策台</h2><p>预测、库存、广告、利润与订购单的只读整合视图；全部为固化事实，页面不自动运行、不生成单据、不执行任何写动作</p></div><div class="toolbar"><input class="input" id="m10Store" value="store-1" placeholder="店铺 ID"><input class="input" id="m10Period" value="2026-08" placeholder="期间 YYYY-MM"><select class="input" id="m10Scope"><option value="formal" selected>正式口径</option><option value="demo">演示参数</option></select><button class="button primary" id="loadM10Decision">刷新决策台</button></div></div>
+          <div class="grid kpis" id="m10Kpis"></div>
+          <article class="panel" style="margin-top:14px"><div class="panel-head"><h3>三层利润</h3><span class="muted" id="m10ProfitPolicy"></span></div><div class="table-wrap"><table><thead><tr><th>层级</th><th>状态</th><th>金额</th><th>缺失项</th></tr></thead><tbody id="m10ProfitRows"></tbody></table></div></article>
+          <article class="panel"><div class="panel-head"><h3>利润对账</h3><span class="muted">双算/漏算检查</span></div><div class="panel-body stack" id="m10Reconcile"></div></article>
+          <article class="panel"><div class="panel-head"><h3>订购单</h3><span class="muted">V1 未发送边界</span></div><div class="table-wrap"><table><thead><tr><th>单据</th><th>状态</th><th>建议/确认数量</th><th>料号</th><th>标签</th></tr></thead><tbody id="m10OrderRows"></tbody></table></div></article>
+          <article class="panel"><div class="panel-head"><h3>库存风险</h3><span class="muted">来自固化库存计划</span></div><div class="table-wrap"><table><thead><tr><th>SKU</th><th>级别</th><th>说明</th></tr></thead><tbody id="m10RiskRows"></tbody></table></div></article>
+          <article class="panel"><div class="panel-head"><h3>广告 ROI 可用性</h3></div><div class="panel-body" id="m10Marketing"></div></article>
+          <article class="panel"><div class="panel-head"><h3>经营建议（只读，需人工确认）</h3><span class="muted">建议由固化事实推导，页面无执行按钮</span></div><div class="panel-body stack" id="m10Suggestions"></div></article>
         </section>
 
         <section class="view" id="view-orders">
@@ -966,7 +978,7 @@
       customerTestSessionId: `customer-test:${crypto.randomUUID ? crypto.randomUUID() : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`}`
     };
 
-    const titles = { overview: '经营总览', service: '智能客服', commerce: '商品与库存', 'readonly-data': '数据准备度', forecasting: '需求预测', orders: '订单与售后', competitive: '竞品分析', ops: '运营辅助', 'traffic-lab': '流量实验', marketing: '营销投放', finance: '利润对账', knowledge: '知识与 SOP', quality: '质检 VOC', evaluations: '客服评测', simulation: '场景验收', channels: '渠道接待', releases: '发布门禁', modules: '功能模块', audit: '审计记录' };
+const titles = { overview: '经营总览', service: '智能客服', commerce: '商品与库存', 'readonly-data': '数据准备度', forecasting: '需求预测', 'm10-decision': '经营决策台', orders: '订单与售后', competitive: '竞品分析', ops: '运营辅助', 'traffic-lab': '流量实验', marketing: '营销投放', finance: '利润对账', knowledge: '知识与 SOP', quality: '质检 VOC', evaluations: '客服评测', simulation: '场景验收', channels: '渠道接待', releases: '发布门禁', modules: '功能模块', audit: '审计记录' };
     const sourceLabels = { api:'API 会话', channel:'渠道会话', simulation:'虚拟验收', evaluation:'隔离评测' };
     const $ = (id) => document.getElementById(id);
 
@@ -2655,6 +2667,7 @@
       if (view === 'commerce') return loadCommerce();
       if (view === 'readonly-data') return loadReadonlyData();
       if (view === 'forecasting') return loadForecasting();
+      if (view === 'm10-decision') return loadM10Decision();
       if (view === 'orders') return loadOrders();
       if (view === 'competitive') return loadCompetitive();
       if (view === 'ops') return loadOpsAssistant();
@@ -2672,9 +2685,111 @@
       if (view === 'audit') return loadAudit();
     }
 
+    async function loadM10Decision() {
+      const store = $('m10Store').value.trim();
+      const period = $('m10Period').value.trim();
+      const scope = $('m10Scope').value;
+      const q = (name, value) => `${name}=${encodeURIComponent(value)}`;
+      const orderTone = { draft: 'warn', awaiting_confirmation: 'warn', confirmed: 'info', in_transit: 'info', received: 'ok', cancelled: 'bad', overdue: 'bad' };
+      const [projection, reconcile, drafts, risks, marketing] = await Promise.all([
+        api(`/v1/profit/projection?${q('store_id', store)}&${q('period', period)}&${q('scope', scope)}`).catch(() => null),
+        api(`/v1/profit/reconciliation?${q('store_id', store)}&${q('period', period)}&${q('scope', scope)}`).catch(() => null),
+        api(`/v1/ordering/drafts?${q('store_id', store)}&limit=50`),
+        api(`/v1/forecasting/risks?${q('store_id', store)}&limit=20`).catch(() => []),
+        api(`/v1/marketing/performance?${q('store_id', store)}`).catch(() => null),
+      ]);
+      if (projection && reconcile) {
+        $('m10ProfitPolicy').textContent = `政策 ${projection.policy_version} · ${projection.scope === 'demo' ? '演示参数' : '正式口径'}`;
+        const layerMeta = [
+          ['销售利润', projection.sales],
+          ['经营利润', projection.operating],
+          ['财务最终净利润', projection.final],
+        ];
+        $('m10ProfitRows').innerHTML = layerMeta.map(([name, layer]) => `<tr><td>${escapeHtml(name)}</td><td><span class="status ${layer.status === 'available' ? 'ok' : 'warn'}">${layer.status === 'available' ? '可用' : '缺失'}</span></td><td>${escapeHtml(layer.amount ?? '-')}</td><td>${layer.missing_fields.length ? layer.missing_fields.map(escapeHtml).join('、') : '-'}</td></tr>`).join('');
+        $('m10Reconcile').innerHTML = reconcile.double_count_ok
+          ? `<div class="notice">对账通过：${reconcile.entry_count} 条 ledger 无重复/漏算问题</div>`
+          : `<div class="notice"><strong>对账未通过</strong>${reconcile.issues.map((issue) => `<div>${escapeHtml(issue.message)}</div>`).join('')}</div>`;
+      } else {
+        $('m10ProfitPolicy').textContent = '不可用';
+        $('m10ProfitRows').innerHTML = '<tr><td colspan="4"><div class="notice">利润投影不可用：请先登记利润政策，或检查店铺/期间输入</div></td></tr>';
+        $('m10Reconcile').innerHTML = '<div class="notice">利润对账不可用：同上</div>';
+      }
+      $('m10OrderRows').innerHTML = drafts.length ? drafts.map((draft) => `<tr><td>${escapeHtml(draft.order_draft_id.slice(0, 12))}</td><td><span class="status ${orderTone[draft.status] || 'warn'}">${escapeHtml(draft.status)}</span></td><td>${escapeHtml(String(draft.recommended_qty))} / ${escapeHtml(String(draft.confirmed_qty ?? '-'))}</td><td>${escapeHtml(draft.material_no)}</td><td>${escapeHtml(draft.unsent_label)}</td></tr>`).join('') : '<tr><td colspan="5"><div class="empty">暂无订购单草稿</div></td></tr>';
+      $('m10RiskRows').innerHTML = risks.length ? risks.map((risk) => `<tr><td>${escapeHtml(risk.sku_id || '-')}</td><td><span class="status ${statusClass(risk.risk_level || risk.severity) || 'warn'}">${escapeHtml(risk.risk_level || risk.severity || '-')}</span><td>${escapeHtml(risk.summary || risk.reason || risk.message || '')}</td></tr>`).join('') : '<tr><td colspan="3"><div class="empty">暂无库存风险</div></td></tr>';
+      $('m10Marketing').innerHTML = marketing && marketing.length
+        ? '<div class="notice">营销数据可用（ROI/诊断入口正常）</div>'
+        : '<div class="notice">广告 ROI 暂不可核算：无营销数据或接口未就绪（M9-R 数据接入后可用）</div>';
+      const unsent = drafts.filter((draft) => draft.status === 'draft' || draft.status === 'awaiting_confirmation');
+      const criticalRisks = risks.filter((risk) => ['high', 'critical'].includes(risk.risk_level || risk.severity || ''));
+      const suggestions = [];
+      const missingLayer = projection ? [projection.sales, projection.operating, projection.final].find((layer) => layer.status === 'missing') : null;
+      if (!projection) {
+        suggestions.push({
+          title: '利润暂不可核算',
+          body: '利润政策未登记或投影不可用；请先通过 /v1/profit/policies 登记政策。',
+          basis: '利润接口',
+          gap: '利润政策登记',
+          owner: '管理员人工确认',
+        });
+      } else if (missingLayer) {
+        suggestions.push({
+          title: '利润暂不可核算',
+          body: `缺少：${missingLayer.missing_fields.join('、')}。缺失费用不得按 0 处理。`,
+          basis: projection.scope === 'demo' ? '演示参数' : '正式 ledger',
+          gap: missingLayer.missing_fields.join('、'),
+          owner: '管理员人工确认',
+        });
+      }
+      if (unsent.length) {
+        suggestions.push({
+          title: `${unsent.length} 张订购单待人工确认`,
+          body: '系统只生成草稿，绝不自动下单；请人工核对数量与交期。',
+          basis: `/v1/ordering/drafts（${store}）`,
+          gap: '人工确认后进入 confirmed',
+          owner: '管理员人工确认',
+        });
+      }
+      if (criticalRisks.length) {
+        suggestions.push({
+          title: `${criticalRisks.length} 项库存风险需关注`,
+          body: '来自固化库存计划的缺货/滞销风险，建议结合预测与订购单复核。',
+          basis: `/v1/forecasting/risks（${store}）`,
+          gap: '真实库存快照完整性',
+          owner: '管理员人工确认',
+        });
+      }
+      if (!marketing || !marketing.length) {
+        suggestions.push({
+          title: '广告 ROI 不可核算',
+          body: '缺少营销数据，无法评估投放效率；数据接入前不猜测。',
+          basis: '营销接口',
+          gap: 'M9-R 营销数据接入',
+          owner: '管理员人工确认',
+        });
+      }
+      if (!suggestions.length) {
+        suggestions.push({
+          title: '当前无待处理建议',
+          body: '利润可核算、订购单无待确认、无高危库存风险。',
+          basis: '决策台只读事实',
+          gap: '无',
+          owner: '管理员',
+        });
+      }
+      $('m10Suggestions').innerHTML = suggestions.map((suggestion) => `<div class="panel" style="margin:0 0 10px"><div class="panel-head"><strong>${escapeHtml(suggestion.title)}</strong></div><div class="panel-body stack"><div>${escapeHtml(suggestion.body)}</div><div class="muted">依据：${escapeHtml(suggestion.basis)} · 缺口：${escapeHtml(suggestion.gap)} · 需确认：${escapeHtml(suggestion.owner)}</div></div></div>`).join('');
+      $('m10Kpis').innerHTML = [
+        ['销售利润', projection?.sales.amount ?? '-', projection?.sales.status === 'available' ? '可用' : '缺失'],
+        ['经营利润', projection?.operating.amount ?? '-', projection?.operating.status === 'available' ? '可用' : '缺失'],
+        ['财务最终净利润', projection?.final.amount ?? '-', projection?.final.status === 'available' ? '可用' : '缺失'],
+        ['订购单', String(drafts.length), `${unsent.length} 张待确认`],
+        ['对账', reconcile?.double_count_ok ? '通过' : '未通过', `${reconcile?.entry_count ?? 0} 条 ledger`],
+      ].map(([label, value, meta]) => `<div class="kpi"><span class="label">${escapeHtml(label)}</span><span class="value">${escapeHtml(String(value))}</span><span class="meta">${escapeHtml(meta)}</span></div>`).join('');
+    }
+
     document.querySelectorAll('.nav button').forEach((node) => node.addEventListener('click', () => switchView(node.dataset.view)));
     document.querySelectorAll('[data-go]').forEach((node) => node.addEventListener('click', () => switchView(node.dataset.go)));
     $('refreshButton').addEventListener('click', () => loadView(state.currentView).then(() => toast('数据已刷新')).catch((error) => toast(error.message)));
+    $('loadM10Decision').addEventListener('click', () => loadM10Decision().then(() => toast('决策台已刷新')).catch((error) => toast(error.message)));
     $('refreshOpsAssistant').addEventListener('click', () => loadOpsAssistant().catch((error) => toast(error.message)));
     $('opsDatasetFile').addEventListener('change', () => {
       const name = $('opsDatasetFile').files?.[0]?.name?.toLowerCase() || '';
