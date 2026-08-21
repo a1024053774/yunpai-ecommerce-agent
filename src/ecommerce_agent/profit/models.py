@@ -259,6 +259,7 @@ class LayerProjection(BaseModel):
     amount: str | None = None
     label: str
     missing_fields: list[str] = Field(default_factory=list)
+    restricted: bool = False
 
 
 class ProfitProjectionView(BaseModel):

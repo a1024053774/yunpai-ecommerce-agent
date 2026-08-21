@@ -74,7 +74,23 @@ def build_profit_router(
         scope: ProfitScope = Query(default=ProfitScope.FORMAL),
         admin: AdminPrincipal = Depends(require_admin),
     ):
-        return call(profit.projection, admin.tenant_id, store_id, period, scope)
+        result = call(profit.projection, admin.tenant_id, store_id, period, scope)
+        if "finance:final_profit:read" not in admin.capabilities:
+            result = result.model_copy(
+                update={
+                    "final": result.final.model_copy(
+                        update={"amount": None, "restricted": True}
+                    )
+                }
+            )
+            service.db.audit(
+                "profit.final_profit.read_denied",
+                admin.admin_id,
+                store_id,
+                {"period": period, "scope": scope.value},
+                admin.tenant_id,
+            )
+        return result
 
     @router.get("/reconciliation")
     def reconciliation(

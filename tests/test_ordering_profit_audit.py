@@ -66,3 +66,40 @@ def test_ordering_write_operations_are_audited(tmp_path) -> None:
     assert _audit_rows(app, "ordering.draft.created")[0]["subject_id"] == draft_id
     assert _audit_rows(app, "ordering.draft.submitted")[0]["subject_id"] == draft_id
     assert _audit_rows(app, "ordering.draft.confirmed")[0]["subject_id"] == draft_id
+
+
+def test_final_profit_capability_default_denies(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("FINAL_PROFIT_READ_ADMIN_IDS", raising=False)
+    app = create_app(make_settings(tmp_path))
+    with TestClient(app) as client:
+        client.post(
+            "/v1/profit/policies",
+            headers=ADMIN_HEADERS,
+            json={"policy_version": "v-deny"},
+        )
+        response = client.get(
+            "/v1/profit/projection?store_id=store-x&period=2026-08&scope=formal",
+            headers=ADMIN_HEADERS,
+        )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["final"]["restricted"] is True
+    assert body["final"]["amount"] is None
+    assert _audit_rows(app, "profit.final_profit.read_denied")
+
+
+def test_final_profit_capability_granted(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("FINAL_PROFIT_READ_ADMIN_IDS", "admin-test")
+    app = create_app(make_settings(tmp_path))
+    with TestClient(app) as client:
+        client.post(
+            "/v1/profit/policies",
+            headers=ADMIN_HEADERS,
+            json={"policy_version": "v-grant"},
+        )
+        response = client.get(
+            "/v1/profit/projection?store_id=store-x&period=2026-08&scope=formal",
+            headers=ADMIN_HEADERS,
+        )
+    assert response.status_code == 200
+    assert response.json()["final"]["restricted"] is False
