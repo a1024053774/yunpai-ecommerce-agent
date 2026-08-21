@@ -5,10 +5,11 @@ from typing import Any, Mapping
 from .models import DraftGateResult, OrderDraftCreate, OrderDraftMode
 
 
-FORMAL_GATE_FIELDS = ("material_no", "forecast_run_ref", "supply_constraint")
-SUPPLY_EVIDENCE_FIELD_KEYS = (
-    "readiness:supplier_lead_days",
-    "readiness:transport_lead_days",
+FORMAL_GATE_FIELDS = (
+    "material_no",
+    "forecast_run_ref",
+    "supply_constraint",
+    "delivery_constraint",
 )
 
 
@@ -26,7 +27,15 @@ class OrderDraftGate:
         requested: str | None,
     ) -> str | None:
         if requested is not None:
-            return requested
+            with self.db.connect() as conn:
+                exists = conn.execute(
+                    """
+                    SELECT 1 FROM readonly_canonical_products
+                    WHERE tenant_id=? AND store_id=? AND internal_part_number=?
+                    """,
+                    (tenant_id, store_id, requested),
+                ).fetchone()
+            return requested if exists is not None else None
         with self.db.connect() as conn:
             row = conn.execute(
                 """
@@ -45,15 +54,17 @@ class OrderDraftGate:
             ).fetchone()
         return str(row[0]) if row and row[0] else None
 
-    def _forecast_evidence(self, tenant_id: str, store_id: str, run_ref: str) -> bool:
+    def _forecast_evidence(
+        self, tenant_id: str, store_id: str, sku_id: str, run_ref: str
+    ) -> bool:
         with self.db.connect() as conn:
             row = conn.execute(
                 """
                 SELECT 1 FROM forecast_runs
                 WHERE tenant_id = ? AND store_id = ? AND run_id = ?
-                  AND status = 'completed'
+                  AND sku_id = ? AND status = 'completed'
                 """,
-                (tenant_id, store_id, run_ref),
+                (tenant_id, store_id, run_ref, sku_id),
             ).fetchone()
         return row is not None
 
@@ -76,12 +87,27 @@ class OrderDraftGate:
                 """
                 SELECT 1 FROM readonly_field_evidence
                 WHERE tenant_id = ? AND store_id = ?
-                  AND field_key IN (%s, %s)
+                  AND field_key = 'readiness:supplier_lead_days'
                   AND evidence_state IN ('actual', 'manual')
                 LIMIT 1
+                """,
+                (tenant_id, store_id),
+            ).fetchone()
+        return evidence is not None
+
+    def _delivery_constraint_evidence(
+        self, tenant_id: str, store_id: str
+    ) -> bool:
+        with self.db.connect() as conn:
+            evidence = conn.execute(
                 """
-                % ("?", "?"),
-                (tenant_id, store_id, *SUPPLY_EVIDENCE_FIELD_KEYS),
+                SELECT 1 FROM readonly_field_evidence
+                WHERE tenant_id = ? AND store_id = ?
+                  AND field_key = 'readiness:transport_lead_days'
+                  AND evidence_state IN ('actual', 'manual')
+                LIMIT 1
+                """,
+                (tenant_id, store_id),
             ).fetchone()
         return evidence is not None
 
@@ -106,13 +132,15 @@ class OrderDraftGate:
         if not material_no:
             missing.append("material_no")
         if not payload.forecast_run_ref or not self._forecast_evidence(
-            tenant_id, store_id, payload.forecast_run_ref
+            tenant_id, store_id, payload.sku_id, payload.forecast_run_ref
         ):
             missing.append("forecast_run_ref")
         if not self._supply_constraint_evidence(
             tenant_id, store_id, payload.sku_id, payload.policy_ref
         ):
             missing.append("supply_constraint")
+        if not self._delivery_constraint_evidence(tenant_id, store_id):
+            missing.append("delivery_constraint")
         if missing:
             return DraftGateResult(
                 allowed=False,

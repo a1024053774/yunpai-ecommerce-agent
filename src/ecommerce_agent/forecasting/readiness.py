@@ -152,6 +152,42 @@ class SignalReadinessService:
             ).fetchone()
         return int(row["sku_count"]) if row["sku_count"] is not None else None
 
+    def _traffic_stats(
+        self, *, tenant_id: str, store_id: str
+    ) -> tuple[int, str | None, int | None]:
+        with self._db.connect() as conn:
+            row = conn.execute(
+                """SELECT COUNT(*) AS cnt,
+                          MAX(b.data_as_of) AS latest,
+                          COUNT(DISTINCT r.sku_id) AS sku_count
+                   FROM traffic_metric_buckets b
+                   JOIN listing_revisions r ON r.id = b.listing_revision_id
+                   WHERE b.tenant_id=? AND r.store_id=?""",
+                (tenant_id, store_id),
+            ).fetchone()
+        return (
+            int(row["cnt"]),
+            _parse_time(row["latest"]),
+            int(row["sku_count"]) if row["sku_count"] is not None else None,
+        )
+
+    def _material_mapping_stats(
+        self, *, tenant_id: str, store_id: str
+    ) -> tuple[int, str | None, int | None]:
+        with self._db.connect() as conn:
+            row = conn.execute(
+                """SELECT COUNT(DISTINCT internal_part_number) AS cnt,
+                          MAX(created_at) AS latest
+                   FROM readonly_canonical_products
+                   WHERE tenant_id=? AND store_id=?""",
+                (tenant_id, store_id),
+            ).fetchone()
+        return (
+            int(row["cnt"]),
+            _parse_time(row["latest"]),
+            int(row["cnt"]),
+        )
+
     def _after_sale_stats(
         self, *, tenant_id: str, store_id: str
     ) -> tuple[int, str | None]:
@@ -181,6 +217,7 @@ class SignalReadinessService:
             granularity: TimeGranularity | None,
             missing_reason: str,
             source_kind: SourceKind | None = None,
+            material_coverage: int | None = None,
         ) -> None:
             items.append(
                 ReadinessInput(
@@ -193,7 +230,7 @@ class SignalReadinessService:
                     data_as_of=data_as_of,
                     granularity=granularity,
                     sku_coverage=sku_coverage,
-                    material_coverage=None,
+                    material_coverage=material_coverage,
                     missing_reason=missing_reason,
                 )
             )
@@ -219,16 +256,8 @@ class SignalReadinessService:
             else "无需求事实：等待订单/需求导入（M7-R WP1 导入契约）",
         )
 
-        # 候选信号：流量
-        count, latest, _ = self._stats(
-            tenant_id=tenant_id,
-            store_id=store_id,
-            table="traffic_metric_buckets",
-            time_column="data_as_of",
-            sku_expression=None,
-            store_scoped=False,
-        )
-        traffic_skus = self._traffic_sku_coverage(
+        # 候选信号：流量（按店铺隔离）
+        count, latest, traffic_skus = self._traffic_stats(
             tenant_id=tenant_id, store_id=store_id
         )
         append(
@@ -387,15 +416,21 @@ class SignalReadinessService:
             else "无商品主数据：等待 catalog 导入",
         )
 
+        count, latest, materials = self._material_mapping_stats(
+            tenant_id=tenant_id, store_id=store_id
+        )
         append(
             input_key="material_no_mapping",
             category=ReadinessCategory.MASTER_DATA,
             label="内部料号映射",
-            state=EvidenceState.MISSING,
-            data_as_of=None,
+            state=EvidenceState.ACTUAL if count > 0 else EvidenceState.MISSING,
+            data_as_of=latest,
             sku_coverage=None,
+            material_coverage=materials,
             granularity=None,
-            missing_reason="料号映射未完成（M7-R WP3）",
+            missing_reason=None
+            if count > 0
+            else "料号映射未完成（M7-R WP3 canonical 产品未登记）",
         )
 
         return items

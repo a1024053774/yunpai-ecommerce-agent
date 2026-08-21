@@ -16,7 +16,8 @@ from ..database import Database, utc_now
 from ..evidence_freshness import evidence_freshness
 from .engine import ForecastEngine, ForecastPolicy
 from .models import DEMAND_V1
-from .signal_gate import SignalGateResult
+from .signal_gate import SignalGate, SignalGateResult
+from ..readonly_data.contracts import SourceKind
 
 
 def _json(value: Any) -> str:
@@ -141,6 +142,13 @@ class ForecastRunService:
             if item["windows_failed"]
             or item.get("final_forecast_failure_reason") is not None
         ]
+        if signal_gate_result is None:
+            signal_gate_result = SignalGate().evaluate(
+                baseline_rows=evaluation["backtests"],
+                signal_by_date={},
+                source_kind=SourceKind.MANUAL,
+                data_as_of=None,
+            )
         anomalies = self._anomalies(input_issues, evaluation, model_failures)
         status = (
             "degraded"

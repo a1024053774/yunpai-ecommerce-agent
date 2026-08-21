@@ -51,6 +51,7 @@ def seed_gate_ready(
     db: Database,
     *,
     with_policy: bool = True,
+    with_transport: bool = True,
     with_evidence: bool = False,
 ) -> None:
     with db.connect() as conn:
@@ -94,6 +95,20 @@ def seed_gate_ready(
             """,
             ("RUN-1", TENANT, STORE, SKU, H64, "2026-08-19T04:00:00+00:00"),
         )
+        if with_transport:
+            _seed_import_manifest(conn)
+            conn.execute(
+                """
+                INSERT INTO readonly_field_evidence (
+                    evidence_id, tenant_id, store_id, field_key, scope,
+                    evidence_state, reason, data_as_of, source_reference,
+                    import_id, payload_hash, created_at
+                ) VALUES (?, ?, ?, 'readiness:transport_lead_days',
+                          'operational', 'actual', 'seed', NULL, NULL,
+                          'IMPORT-1', ?, ?)
+                """,
+                ("FE-T", TENANT, STORE, H64, "2026-08-19T04:00:00+00:00"),
+            )
         if with_policy:
             conn.execute(
                 """
@@ -190,6 +205,47 @@ def test_formal_gate_blocked_reports_all_missing_fields(tmp_path) -> None:
     assert "material_no" in detail
     assert "forecast_run_ref" in detail
     assert "supply_constraint" in detail
+    assert "delivery_constraint" in detail
+
+
+def test_formal_gate_blocks_forged_material_no(tmp_path) -> None:
+    db = make_db(tmp_path)
+    seed_gate_ready(db)
+    service = service_for(db)
+    with pytest.raises(OrderingError) as exc:
+        service.create_draft(
+            TENANT,
+            STORE,
+            ACTOR,
+            make_payload(material_no="FORGED-NO-SUCH"),
+        )
+    assert "material_no" in str(exc.value)
+
+
+def test_formal_gate_blocks_forecast_run_sku_mismatch(tmp_path) -> None:
+    db = make_db(tmp_path)
+    seed_gate_ready(db)
+    with db.connect() as conn:
+        conn.execute(
+            """
+            UPDATE forecast_runs SET sku_id='OTHER-SKU'
+            WHERE tenant_id=? AND store_id=? AND run_id=?
+            """,
+            (TENANT, STORE, "RUN-1"),
+        )
+    service = service_for(db)
+    with pytest.raises(OrderingError) as exc:
+        service.create_draft(TENANT, STORE, ACTOR, make_payload(material_no="MNO-001"))
+    assert "forecast_run_ref" in str(exc.value)
+
+
+def test_formal_gate_blocks_missing_transport_lead(tmp_path) -> None:
+    db = make_db(tmp_path)
+    seed_gate_ready(db, with_transport=False)
+    service = service_for(db)
+    with pytest.raises(OrderingError) as exc:
+        service.create_draft(TENANT, STORE, ACTOR, make_payload(material_no="MNO-001"))
+    assert "delivery_constraint" in str(exc.value)
 
 
 def test_demo_draft_allowed_with_labels_even_without_formal_data(tmp_path) -> None:

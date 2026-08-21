@@ -92,6 +92,13 @@ class ProfitService:
     # ---------- ledger ----------
 
     def record_entry(self, tenant_id: str, payload: LedgerEntryInput) -> dict[str, Any]:
+        if payload.scope is ProfitScope.FORMAL and payload.category in {
+            ExpenseCategory.SIGNED_REVENUE,
+            ExpenseCategory.REFUND_OFFSET,
+        }:
+            self._require_signed_receipt(
+                tenant_id, payload.store_id, payload.order_id
+            )
         digest = content_digest(payload.model_dump())
         entry_id = uuid.uuid4().hex
         try:
@@ -138,6 +145,23 @@ class ProfitService:
             "scope": payload.scope.value,
             "amount": payload.amount,
         }
+
+    def _require_signed_receipt(
+        self, tenant_id: str, store_id: str, order_id: str | None
+    ) -> None:
+        if not order_id:
+            raise ProfitError("signed_receipt_requires_order")
+        with self.db.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM commerce_orders
+                WHERE tenant_id=? AND store_id=? AND id=?
+                  AND order_status='delivered'
+                """,
+                (tenant_id, store_id, order_id),
+            ).fetchone()
+        if row is None:
+            raise ProfitError("signed_receipt_required")
 
     def _entries(
         self,
@@ -281,8 +305,16 @@ class ProfitService:
         issues: list[ReconciliationIssue] = []
         seen_order_category: set[tuple[str, str]] = set()
         signed_orders: set[str] = set()
+        ledger_identity: dict[tuple[str, str, str, str], set[str]] = {}
         for entry in entries:
             category = ExpenseCategory(entry["category"])
+            identity = (
+                category.value,
+                entry["sku_id"] or "",
+                entry["order_id"] or "",
+                str(entry["amount"]),
+            )
+            ledger_identity.setdefault(identity, set()).add(entry["entry_key"])
             if entry["order_id"]:
                 if category is ExpenseCategory.SIGNED_REVENUE:
                     signed_orders.add(entry["order_id"])
@@ -296,6 +328,18 @@ class ProfitService:
                         )
                     )
                 seen_order_category.add(key)
+        for identity, entry_keys in ledger_identity.items():
+            if len(entry_keys) > 1:
+                issues.append(
+                    ReconciliationIssue(
+                        code="duplicate_ledger_entry",
+                        entry_key=sorted(entry_keys)[0],
+                        message=(
+                            f"费用 {identity[0]} 重复入账 "
+                            f"(store={store_id}, period={period}, amount={identity[3]})"
+                        ),
+                    )
+                )
         for entry in entries:
             category = ExpenseCategory(entry["category"])
             if (

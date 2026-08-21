@@ -65,8 +65,26 @@ def entry(
     )
 
 
+def seed_delivered_order(service: ProfitService, order_id: str) -> None:
+    with service.db.connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO commerce_orders (
+                id, tenant_id, connector_id, store_id, external_order_id,
+                order_status, payment_status, currency, total_amount, placed_at,
+                source_updated_at, payload_hash, version, created_at, updated_at
+            ) VALUES (?, ?, 'conn-1', ?, ?, 'delivered', 'paid', 'CNY', '100.00',
+                      '2026-08-01T00:00:00+00:00', '2026-08-01T00:00:00+00:00',
+                      ?, 1, '2026-08-01T00:00:00+00:00',
+                      '2026-08-01T00:00:00+00:00')
+            """,
+            (order_id, TENANT, STORE, order_id, "0" * 64),
+        )
+
+
 def seed_full_formal(service: ProfitService) -> None:
     register_default_policy(service)
+    seed_delivered_order(service, "O1")
     service.record_entry(
         TENANT, entry(ExpenseCategory.SIGNED_REVENUE, "1000.00", order_id="O1")
     )
@@ -109,6 +127,7 @@ def test_three_layers_from_single_ledger(tmp_path) -> None:
 def test_missing_required_category_blocks_layer_and_never_zero(tmp_path) -> None:
     service = make_service(tmp_path)
     register_default_policy(service)
+    seed_delivered_order(service, "O1")
     service.record_entry(
         TENANT, entry(ExpenseCategory.SIGNED_REVENUE, "1000.00", order_id="O1")
     )
@@ -185,6 +204,7 @@ def test_duplicate_entry_key_rejected(tmp_path) -> None:
 
 def test_double_count_refund_offset_detected(tmp_path) -> None:
     service = make_service(tmp_path)
+    seed_delivered_order(service, "O1")
     service.record_entry(
         TENANT, entry(ExpenseCategory.SIGNED_REVENUE, "1000.00", order_id="O1")
     )
@@ -205,6 +225,7 @@ def test_double_count_refund_offset_detected(tmp_path) -> None:
 
 def test_refund_without_signed_revenue_flagged(tmp_path) -> None:
     service = make_service(tmp_path)
+    seed_delivered_order(service, "NO-REV")
     service.record_entry(
         TENANT,
         entry(ExpenseCategory.REFUND_OFFSET, "-50.00", order_id="NO-REV"),
@@ -217,6 +238,7 @@ def test_refund_without_signed_revenue_flagged(tmp_path) -> None:
 
 def test_cross_period_refund_is_not_false_positive(tmp_path) -> None:
     service = make_service(tmp_path)
+    seed_delivered_order(service, "O-CROSS")
     service.record_entry(
         TENANT,
         LedgerEntryInput(
@@ -286,6 +308,53 @@ def test_category_belongs_to_exactly_one_layer() -> None:
     assert len(seen) == len(list(ExpenseCategory))
 
 
+def test_ghost_order_revenue_rejected(tmp_path) -> None:
+    service = make_service(tmp_path)
+    with pytest.raises(ProfitError) as exc:
+        service.record_entry(
+            TENANT,
+            entry(ExpenseCategory.SIGNED_REVENUE, "1000.00", order_id="GHOST"),
+        )
+    assert "signed_receipt_required" in str(exc.value)
+
+
+def test_non_delivered_order_revenue_rejected(tmp_path) -> None:
+    service = make_service(tmp_path)
+    with service.db.connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO commerce_orders (
+                id, tenant_id, connector_id, store_id, external_order_id,
+                order_status, payment_status, currency, total_amount, placed_at,
+                source_updated_at, payload_hash, version, created_at, updated_at
+            ) VALUES ('ND', ?, 'conn-1', ?, 'ND', 'shipped', 'paid', 'CNY', '100.00',
+                      '2026-08-01T00:00:00+00:00', '2026-08-01T00:00:00+00:00',
+                      ?, 1, '2026-08-01T00:00:00+00:00', '2026-08-01T00:00:00+00:00')
+            """,
+            (TENANT, STORE, "0" * 64),
+        )
+    with pytest.raises(ProfitError) as exc:
+        service.record_entry(
+            TENANT, entry(ExpenseCategory.SIGNED_REVENUE, "1000.00", order_id="ND")
+        )
+    assert "signed_receipt_required" in str(exc.value)
+
+
+def test_duplicate_ledger_entry_detected(tmp_path) -> None:
+    service = make_service(tmp_path)
+    service.record_entry(
+        TENANT, entry(ExpenseCategory.PURCHASE_COST, "-300.00", entry_key="pc-a")
+    )
+    service.record_entry(
+        TENANT, entry(ExpenseCategory.PURCHASE_COST, "-300.00", entry_key="pc-b")
+    )
+    result = service.reconcile(TENANT, STORE, PERIOD, ProfitScope.FORMAL)
+    assert result.double_count_ok is False
+    assert any(
+        issue.code == "duplicate_ledger_entry" for issue in result.issues
+    )
+
+
 def test_positive_refund_and_negative_revenue_rejected(tmp_path) -> None:
     service = make_service(tmp_path)
     with pytest.raises(ValueError) as exc:
@@ -322,6 +391,7 @@ def test_custom_policy_required_categories_respected(tmp_path) -> None:
             },
         ),
     )
+    seed_delivered_order(service, "O1")
     service.record_entry(
         TENANT, entry(ExpenseCategory.SIGNED_REVENUE, "1000.00", order_id="O1")
     )
