@@ -71,6 +71,7 @@
     .tag.ok { color: #06675f; background: var(--teal-soft); }
     .tag.warn { color: var(--amber); background: var(--amber-soft); }
     .tag.danger { color: var(--red); background: var(--red-soft); }
+    .tag.info { color: var(--blue); background: var(--blue-soft); }
     .source-list { margin: 10px 0 0; padding: 10px; border-left: 3px solid #8bc7c0; background: #f3f8f8; color: #405158; font-size: 12px; }
     .source-list strong { color: var(--ink); }
     .composer { padding: 14px 16px; border-top: 1px solid var(--line); display: grid; gap: 9px; }
@@ -172,6 +173,25 @@
       $('errorNotice').classList.add('hidden');
     }
 
+    function polishTag(meta) {
+      const status = meta.polish_status || 'not_applicable';
+      const model = meta.polish_model ? ` · ${escapeHtml(meta.polish_model)}` : '';
+      const latency = Number.isInteger(meta.polish_latency_ms) ? ` · ${meta.polish_latency_ms}ms` : '';
+      if (status === 'applied') return `<span class="tag ok">Qwen 润色：已采用${model}${latency}</span>`;
+      if (status === 'unchanged') return `<span class="tag info">Qwen 润色：已调用，原文未变${model}${latency}</span>`;
+      if (status === 'disabled') return '<span class="tag">Qwen 润色：未启用</span>';
+      if (status === 'not_applicable' || status.startsWith('skipped_')) {
+        return `<span class="tag">Qwen 润色：本条未调用${model}</span>`;
+      }
+      if (status === 'error' || status === 'misconfigured') {
+        return `<span class="tag danger">Qwen 润色：调用失败，已回退原文${model}${latency}</span>`;
+      }
+      if (status.startsWith('rejected_')) {
+        return `<span class="tag warn">Qwen 润色：输出未采用${model}${latency}</span>`;
+      }
+      return `<span class="tag">Qwen 润色：${escapeHtml(status)}${model}${latency}</span>`;
+    }
+
     function appendMessage(kind, title, content, meta = null) {
       $('emptyState')?.remove();
       const node = document.createElement('article');
@@ -180,7 +200,7 @@
       let html = `<div class="message-head"><strong>${escapeHtml(title)}</strong><span>${time}</span></div><div>${escapeHtml(content)}</div>`;
       if (meta) {
         const handoffClass = meta.requires_human ? 'warn' : 'ok';
-        html += `<div class="reply-meta"><span class="tag ${handoffClass}">${meta.requires_human ? '已转人工' : escapeHtml(meta.intent)}</span><span class="tag">风险 ${escapeHtml(meta.risk_level)}</span><span class="tag">${escapeHtml(meta.reason)}</span></div>`;
+        html += `<div class="reply-meta"><span class="tag ${handoffClass}">${meta.requires_human ? '已转人工' : escapeHtml(meta.intent)}</span><span class="tag">风险 ${escapeHtml(meta.risk_level)}</span><span class="tag">${escapeHtml(meta.reason)}</span>${polishTag(meta)}</div>`;
         if (meta.sources?.length) {
           html += `<div class="source-list"><strong>命中来源</strong><br>${meta.sources.map((source) => `${escapeHtml(source.category)} · ${escapeHtml(source.source)} · v${escapeHtml(source.version)}`).join('<br>')}</div>`;
         }

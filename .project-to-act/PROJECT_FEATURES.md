@@ -81,13 +81,22 @@
 | F-321 M6-R Forecast Eval | P0 | 已完成 | F-317 至 F-320、D-035、D-039 | 十类 synthetic demand 与 WP3 库存决策场景经真实 forecast/plan service 运行；独立 oracle 在生产调用后评分，数值 Gate 覆盖 rolling-origin 未来不变性、候选/champion/fallback、WAPE 可比性、signed Bias、P80/P95 覆盖与库存公式；报告审计实际生产字段和 oracle overlap；独立对抗补强零宽区间反证、计划脏证据类型化错误与同戳 policy 稳定决胜 | `evals/forecasting/forecast_eval_v1.json`、`scripts/{forecast_eval_runtime,run_forecast_eval}.py`、`tests/test_forecasting_eval.py`、`docs/works/14-feature-m6r-forecast-eval/{README,GROK_INDEPENDENT_REVIEW}.md`、E-20260813-001/002/003/004；Grok 4.6 xhigh 明确批准后，`03d3b85` 已快进合入并推送 main；不代表服务器 v30、真实数据、长稳或生产放行 |
 | F-322 Traffic Lab 店铺业务日历与 metric 三元身份 | P0 | 已完成 | F-312、F-315、D-037、D-040、schema v32 | 版本化 `(tenant, store)` 业务日历，实验固化 IANA timezone/version，缺配置或 legacy 缺证据 fail closed；Traffic accepted/quarantine 身份为 `(tenant, connector, source_id)`，历史缺 connector 进入 `legacy_unscoped` 且禁止分析；revision-only 与显式身份使用同一 canonical hash，出窗隔离复用 revision 身份；v30 可迁移、旧 hash 可重放、双态冲突拒绝、备份 manifest 精确版本策略保持。Forecast/business 包导出按需加载，避免 eval CLI 循环导入 | `src/ecommerce_agent/business_calendar.py`、`traffic_source_identity.py`、`traffic_lab/{service,analysis,freshness}.py`、`database.py`、`simulation.py`、`forecasting/__init__.py`、`business/__init__.py`、`tests/test_traffic_{lab_business_calendar,metric_identity_v32}.py`、E-20260813-019/020/021/022/023/024/025；已通过 PR #14 合入 main `ee5e443` 并在精确 merge tip 通过全量；开放 PR #10 改号与 PR #11 实际代码集成仍须分别闭合，不代表真实数据/长稳/生产放行 |
 | F-323 M7-R 只读经营数据与 Demo 事实底座 | P0 | 进行中 | F-202、F-208、F-303、F-305 至 F-309、D-041 | 订单/商品/库存/履约物流快照/经营指标/推广/退款/收入报表经字段白名单、脱敏、版本 manifest、逐行隔离和公开领域服务可重放导入；平台 SKU、商家编码和料号可解释映射；字段证据状态为 `actual/manual/demo/missing`，实际来源类型仅为 `actual/manual/demo`，`missing` 不生成导入记录；缺失不转零，默认经营视图不混入 Demo | WP1 已随 `0b54a24` / `e127c39` 合入 main；WP2 `generic-cn-v1` 开发候选为 `a5d02ed`，见 E-20260818-001；WP3 商品身份与对账候选为 `6f0b116`，schema v35，见 E-20260818-002。WP4 当前候选 `fe828a0` 以 `readonly-readiness-v1` 统一八域来源/覆盖/水位/时效/质量/映射与四项缺口，additive 提供管理员只读下钻 API、后台页面和显式隔离的 `m7r-readonly-demo-v1`；页面 GET 零写入，Demo 顺序/并发重放不增加经营事实且保留管理员审计，六个带店铺参数的 GET 共用空白 ID 拒绝契约。见 `src/ecommerce_agent/readonly_readiness/`、`src/ecommerce_agent/readonly_data_api.py`、`docs/admin-console.html`、`tests/test_m7r_wp4_readiness.py`、`docs/tasks/M7R_WP4_READINESS_HANDOFF.md` 与 E-20260819-001/002。仓库中无经授权真实平台导出；F-323 保持进行中，正式 WP5、真实经营结论和生产放行仍待后续 |
-| F-324 M8-R 销售与售后客服闭环 | P0 | 已规划 | F-104、F-117、F-124 至 F-126、F-306、F-323、D-034、D-041 | 复用 M4 在只读影子模式跑通销售与售后多轮建议回复；批准话术、商品/订单/库存及履约物流快照、来源和新鲜度可追溯，回复只描述截至导出时间的状态，不冒充实时轨迹；缺事实追问/转人工；零平台发送、退款、赔付或订单写动作；独立客服 Eval 通过 | `docs/tasks/M8R_CUSTOMER_SERVICE_LOOP_WORKBENCH.md`；主动营销与真实渠道留待后续 Gate |
+| F-324 M8-R 销售与售后客服闭环 | P0 | 进行中 | F-104、F-117、F-124 至 F-126、F-306、F-323、D-034、D-041 | 复用 M4 在只读影子模式跑通销售与售后多轮建议回复；批准话术、商品/订单/库存及履约物流快照、来源和新鲜度可追溯，回复只描述截至导出时间的状态，不冒充实时轨迹；缺事实追问/转人工；零平台发送、退款、赔付或订单写动作；独立客服 Eval 通过 | 2026-08-21 已形成可选 Qwen 最终文案润色开发候选：OpenAI-compatible 接口只处理已生成且允许直接回复的正文，同步、流式、持久响应和测试页共享状态；显式保留事实、数字/单位、否定/条件/建议/保修语义及 `<keep>` 片段，漂移、超时或异常均回退原文。真实 4090 调用与全量回归通过，见 `src/ecommerce_agent/polish.py`、`tests/test_polish.py`、E-20260821-001；`docs/tasks/M8R_CUSTOMER_SERVICE_LOOP_WORKBENCH.md` 仍为完整范围，WP1～WP5、独立 WP5、真实渠道与生产 Gate 未完成 |
 | F-325 M9-R 商品流量与生命周期经营 | P0 | 已规划 | F-304、F-312 至 F-316、F-323、D-037 至 D-041 | 建立保留原始粒度的 Listing/SKU 经营读模型；当前真实导出只展示 SKU 交易/库存、店铺级流量背景和准备度，禁止把店铺流量拆成 SKU；隔离 Demo 以模拟 SKU 流量、revision 和窗口跑通 M5-R 诊断及生命周期建议；存量标题/主图默认保持，建议人工确认且无商品/价格/广告/活动写动作 | `docs/tasks/M9R_PRODUCT_TRAFFIC_LIFECYCLE_WORKBENCH.md`；当前仅规划，Demo 不代表真实店铺流量、平台权重或真实因果 |
 | F-326 M10-R 预测补货与订购单闭环 | P0 | 已规划 | F-303、F-317 至 F-323、D-039、D-041、D-042 | 分层接入预测目标、候选信号、库存/供货约束和料号主数据，复用 M6-R 产生可追溯 forecast/plan；缺供货参数时降级；按料号生成订购单 draft，人工确认并收集/跟踪供应商交期，零采购、付款、ERP、库存或生产工单写动作 | `docs/tasks/M10R_OPERATING_DECISION_WORKBENCH.md`；当前仅规划，演示参数不得冒充真实供货事实 |
 | F-327 M10-R 利润准备度与经营决策台 | P0 | 已规划 | F-307 至 F-309、F-323、F-325、F-326、D-041、D-042 | 按签收确认收入，版本化 canonical ledger 和财务政策覆盖采购、包装/分拣、平台扣点、运费险、坑位/服务、佣金、赠品/公益、广告、物流、退款/入库/整备等域；共用底账分销售利润、经营利润、财务最终净利润，缺必需费用时对应正式层级不可用，Demo 只显示试算标签；财务最终净利润仅授权视图可见，决策台无自动经营动作 | `docs/tasks/M10R_OPERATING_DECISION_WORKBENCH.md`；财务政策仍待实现与验收 |
 
 ## 功能变更历史
 
+- 2026-08-21：F-324 从规划进入开发。分支 `codex/m8r-qwen-polish` 在 base
+  `ece61e14fb9c326b38dcde084513494147c508e8` 的未提交工作树加入默认关闭的 Qwen 最终文案
+  润色层；它不参与语义路由、权限、工具执行、事实选择或人工转接，只能改写已通过上游边界的
+  客服正文。同步、流式和持久响应共用 `polish_status / polish_applied / polish_model /
+  polish_latency_ms`，测试页可直接显示调用、采用、未变、拒绝和回退状态。事实换序反例先
+  `1 failed`，修复后润色聚焦 `22 passed`、相关回归 `43 passed`、全量
+  `1059 passed, 24 warnings`；真实 4090 API 与页面均观察到模型名和延迟。当前只形成
+  本地开发候选，不代表 M8-R WP1～WP5、独立 WP5、真实渠道、容量/长稳或生产放行。见
+  E-20260821-001。
 - 2026-08-19：收口 M7-R WP4 独立复验反馈。用户转交的报告记录聚焦/全量与候选声称一致、
   47/47 门禁外探针通过，仅留纯空白 `store_id` 返回 200 的非阻断 nit。开发方在原实现上先
   复现 `1 failed`，再让六个 readonly-data GET 共用单一 Query 约束并统一返回 422；当前候选

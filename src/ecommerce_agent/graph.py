@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import time
 import uuid
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from langgraph.graph import END, START, StateGraph
@@ -23,6 +24,7 @@ from .policy import (
     review_output,
     sanitize_context,
 )
+from .polish import PolishGateway, PolishResult
 from .prompts import (
     DECISION_SYSTEM_PROMPT,
     SYSTEM_PROMPT,
@@ -86,9 +88,14 @@ def _bounded_product_context_ready(state: AgentState) -> bool:
     return isinstance(candidates, list) and len(candidates) == 1 and bool(candidates[0])
 
 
-def verify_response(state: AgentState) -> dict[str, Any]:
+def _response_evidence(state: AgentState) -> str:
     evidence = " ".join(document["answer"] for document in state["retrieved"])
     evidence += " " + json.dumps(state["context_bundle"], ensure_ascii=False)
+    return evidence
+
+
+def verify_response(state: AgentState) -> dict[str, Any]:
+    evidence = _response_evidence(state)
     passed, reason = review_output(state["draft"], evidence)
     verified_result = state.get("tool_result", {}).get("postcondition_met") is True
     if state.get("model_retry_advised") and not verified_result:
@@ -119,6 +126,132 @@ def verify_response(state: AgentState) -> dict[str, Any]:
         "review_route": "pass",
         "trace": [*state["trace"], "verify:passed", "postcondition:answer"],
     }
+
+
+def finalize_response(
+    state: AgentState,
+    *,
+    polisher: PolishGateway,
+    db: Database,
+) -> dict[str, Any]:
+    verified = verify_response(state)
+    model_name = polisher.settings.polish_model_name or None
+    if not getattr(polisher.settings, "polish_enabled", True):
+        return {
+            **verified,
+            "polish_status": "disabled",
+            "polish_applied": False,
+            "polish_model": None,
+            "polish_latency_ms": None,
+        }
+    if verified.get("review_route") != "pass":
+        return {
+            **verified,
+            "polish_status": "skipped_review",
+            "polish_applied": False,
+            "polish_model": model_name,
+            "polish_latency_ms": None,
+        }
+    if state.get("draft_origin") != "model":
+        return {
+            **verified,
+            "polish_status": "skipped_non_model",
+            "polish_applied": False,
+            "polish_model": model_name,
+            "polish_latency_ms": None,
+        }
+    if state.get("model_fallback"):
+        return {
+            **verified,
+            "polish_status": "skipped_model_fallback",
+            "polish_applied": False,
+            "polish_model": model_name,
+            "polish_latency_ms": None,
+        }
+
+    try:
+        result = polisher.polish(
+            raw_answer=verified["answer"],
+            user_message=state["normalized_input"],
+            facts=_response_evidence(state),
+            recent_history=(state.get("context_bundle") or {}).get(
+                "recent_history", []
+            ),
+        )
+    except Exception as exc:
+        result = PolishResult(
+            answer=verified["answer"],
+            status="error",
+            applied=False,
+            latency_ms=0,
+            model=polisher.settings.polish_model_name,
+            error_type=type(exc).__name__,
+        )
+
+    if result.applied:
+        passed, reason = review_output(result.answer, _response_evidence(state))
+        if not passed:
+            result = replace(
+                result,
+                answer=verified["answer"],
+                status=f"rejected_{reason}",
+                applied=False,
+                error_type="OutputPolicyError",
+            )
+
+    db.audit(
+        "response.polish",
+        "system",
+        state["trace_id"],
+        result.audit_detail(),
+        state["tenant_id"],
+    )
+    return {
+        **verified,
+        "answer": result.answer if result.applied else verified["answer"],
+        "polish_status": result.status,
+        "polish_applied": result.applied,
+        "polish_model": result.model or model_name,
+        "polish_latency_ms": result.latency_ms,
+        "trace": [*verified["trace"], f"polish:{result.status}"],
+    }
+
+
+def _decision_intent(state: AgentState) -> str:
+    return str(
+        state.get("decision", {}).get("intent")
+        or state.get("intent")
+        or "general"
+    )
+
+
+def select_handoff_answer(state: AgentState) -> str:
+    reason = state["route_reason"]
+    if _decision_intent(state) == "complaint":
+        return state.get("decision", {}).get("response") or (
+            "很抱歉给您带来困扰。我已将当前问题和必要上下文标记为投诉，"
+            "并转交人工客服优先跟进。"
+        )
+    if reason == "customer_requested_human":
+        return "好的，我会将当前问题和必要上下文转给人工客服。请勿发送密码、验证码或银行卡信息。"
+    if reason == "authorized_order_context_missing":
+        return "这个问题需要核对您的订单信息。我会转人工处理，请只提供平台订单编号，不要发送密码或验证码。"
+    if reason == "tool_not_registered":
+        return "我已经理解您要办理的业务，但当前环境尚未接入对应的执行工具，我会转人工继续处理。"
+    if reason.startswith("tool_policy_denied"):
+        return "当前操作未通过已配置的权限或业务规则校验，我会转人工进一步核对。"
+    if reason == "knowledge_unavailable":
+        return (
+            "知识检索服务暂时不可用，当前无法引用知识库；"
+            "我会把对话历史和已有信息转给人工客服继续核对。"
+        )
+    if reason in {"model_unavailable", "react_step_limit_reached"}:
+        return MODEL_UNAVAILABLE_HANDOFF_ANSWER
+    return (
+        state.get("decision", {}).get("response")
+        or state.get("answer")
+        or "当前问题存在无法自动消除的不确定性，我会为您转接人工客服。"
+    )
 
 
 def persist_response(
@@ -206,6 +339,10 @@ def persist_response(
                 "reason": state["route_reason"],
                 "sources": sources,
                 "model_fallback": state["model_fallback"],
+                "polish_status": state.get("polish_status", "not_applicable"),
+                "polish_applied": bool(state.get("polish_applied")),
+                "polish_model": state.get("polish_model"),
+                "polish_latency_ms": state.get("polish_latency_ms"),
                 "handoff_id": state.get("handoff_id"),
                 "handoff_status": state.get("handoff_status"),
                 "sop_id": (state.get("active_sop") or {}).get("id"),
@@ -274,6 +411,7 @@ def build_graph(
     tools: ToolRegistry,
     sops: SopService,
     contexts: ContextBuilder,
+    polisher: PolishGateway,
     memory: KnowledgeMemoryService | None = None,
 ) -> StateGraph:
     builder = StateGraph(AgentState)
@@ -335,6 +473,15 @@ def build_graph(
             "route_reason": "pending",
             "retrieved": [],
             "draft": "",
+            "draft_origin": "none",
+            "polish_status": (
+                "not_applicable" if settings.polish_enabled else "disabled"
+            ),
+            "polish_applied": False,
+            "polish_model": (
+                settings.polish_model_name if settings.polish_enabled else None
+            ),
+            "polish_latency_ms": None,
             "answer": "",
             "citations": [],
             "requires_human": False,
@@ -1114,6 +1261,7 @@ def build_graph(
         if not state["retrieved"] and not verified_result:
             return {
                 "draft": "当前知识库中没有足够信息，我会为您转人工客服进一步核对。",
+                "draft_origin": "fallback",
                 "model_fallback": True,
                 "trace": [*state["trace"], "generate:no_evidence"],
             }
@@ -1128,6 +1276,7 @@ def build_graph(
         ):
             return {
                 "draft": top_document["answer"],
+                "draft_origin": "approved_knowledge",
                 "model_fallback": False,
                 "trace": [*state["trace"], "generate:approved_knowledge"],
             }
@@ -1169,10 +1318,12 @@ def build_graph(
         )
         try:
             draft = model.generate(messages)
+            draft_origin = "model"
             fallback = False
             trace_step = "generate:model"
             retry_advised = False
         except ModelError as exc:
+            draft_origin = "fallback"
             retry_advised = False
             if verified_result:
                 draft = "操作已完成，业务系统已经确认处理结果。"
@@ -1194,13 +1345,14 @@ def build_graph(
             )
         return {
             "draft": draft,
+            "draft_origin": draft_origin,
             "model_fallback": fallback,
             "model_retry_advised": retry_advised,
             "trace": [*state["trace"], budget_trace, trace_step],
         }
 
     def verify(state: AgentState) -> dict[str, Any]:
-        return verify_response(state)
+        return finalize_response(state, polisher=polisher, db=db)
 
     def retry_later(state: AgentState) -> dict[str, Any]:
         return {
@@ -1234,36 +1386,9 @@ def build_graph(
 
     def handoff(state: AgentState) -> dict[str, Any]:
         reason = state["route_reason"]
-        decision_intent = str(
-            state.get("decision", {}).get("intent")
-            or state.get("intent")
-            or "general"
-        )
+        decision_intent = _decision_intent(state)
         model_confirmed_complaint = decision_intent == "complaint"
-        if model_confirmed_complaint:
-            # 投诉专属文案（对齐 origin/main：此前 merge 丢失，投诉无"抱歉"前缀）
-            answer = state.get("decision", {}).get("response") or (
-                "很抱歉给您带来困扰。我已将当前问题和必要上下文标记为投诉，"
-                "并转交人工客服优先跟进。"
-            )
-        elif reason == "customer_requested_human":
-            answer = "好的，我会将当前问题和必要上下文转给人工客服。请勿发送密码、验证码或银行卡信息。"
-        elif reason == "authorized_order_context_missing":
-            answer = "这个问题需要核对您的订单信息。我会转人工处理，请只提供平台订单编号，不要发送密码或验证码。"
-        elif reason == "tool_not_registered":
-            answer = "我已经理解您要办理的业务，但当前环境尚未接入对应的执行工具，我会转人工继续处理。"
-        elif reason.startswith("tool_policy_denied"):
-            answer = "当前操作未通过已配置的权限或业务规则校验，我会转人工进一步核对。"
-        elif reason == "knowledge_unavailable":
-            answer = (
-                "知识检索服务暂时不可用，当前无法引用知识库；"
-                "我会把对话历史和已有信息转给人工客服继续核对。"
-            )
-        elif reason in {"model_unavailable", "react_step_limit_reached"}:
-            answer = MODEL_UNAVAILABLE_HANDOFF_ANSWER
-        else:
-            decision_response = state.get("decision", {}).get("response")
-            answer = decision_response or state.get("answer") or "当前问题存在无法自动消除的不确定性，我会为您转接人工客服。"
+        answer = select_handoff_answer(state)
         if state.get("execution_mode") == "shadow":
             return {
                 "answer": answer,

@@ -6,6 +6,9 @@ from typing import Any, Literal, TypedDict
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
+DraftOrigin = Literal["none", "model", "approved_knowledge", "fallback"]
+
+
 class RetrievedDocument(TypedDict):
     id: str
     knowledge_key: str
@@ -48,6 +51,11 @@ class AgentState(TypedDict, total=False):
     retrieved: list[RetrievedDocument]
     knowledge_error: str | None
     draft: str
+    draft_origin: DraftOrigin
+    polish_status: str
+    polish_applied: bool
+    polish_model: str | None
+    polish_latency_ms: int | None
     answer: str
     citations: list[str]
     requires_human: bool
@@ -104,6 +112,10 @@ class ChatResponse(BaseModel):
     reason: str
     sources: list[SourceItem]
     model_fallback: bool = False
+    polish_status: str = "not_applicable"
+    polish_applied: bool = False
+    polish_model: str | None = None
+    polish_latency_ms: int | None = None
     handoff_id: str | None = None
     handoff_status: str | None = None
     sop_id: str | None = None

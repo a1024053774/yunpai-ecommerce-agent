@@ -5,6 +5,20 @@
 
 ## 当前验收结论
 
+- 结论：2026-08-21 F-324 的可选 Qwen 最终文案润色已形成本机开发候选，证据 ID 为
+  E-20260821-001。分支 `codex/m8r-qwen-polish` 基于
+  `ece61e14fb9c326b38dcde084513494147c508e8` 的当前未提交工作树，以默认关闭的
+  `POLISH_ENABLED` 接入 OpenAI-compatible 推理接口；只润色已允许直接回复的模型正文，
+  同步、流式和持久响应复用同一实现。保护校验要求显式 `<keep>` 片段逐字保留，并防止
+  事实、数字/单位、否定、条件、建议和保修语义漂移；失败或漂移时安全回退原文，不改变语义
+  路由、权限、工具执行或人工转接。事实换序反例先为 `1 failed`，修复后
+  `tests/test_polish.py` 为 `22 passed`，相关回归 `43 passed`，全量
+  `1059 passed, 24 warnings`，compileall 与 whitespace 均退出 0；24 条均为既有
+  Traffic Lab FastAPI 重复 Operation ID warning。经本机 SSH 隧道真实调用 4090 服务，API
+  分别观察到 `rejected_content_drift / 14965ms` 与 `unchanged / 4684ms`，测试页
+  观察到 `unchanged / qwen3-14b-rag-polish / 6504ms`；这些状态证明模型已被调用，
+  但候选未替换原文。实测延迟说明本地联调的 3 秒超时不足，当前用 15 秒完成验收。该结论
+  只覆盖本地开发候选，不代表 M8-R WP1～WP5、独立 WP5、真实渠道、容量/长稳或生产放行。
 - 结论：2026-08-19 M7-R WP4 数据准备度 API、只读工作台与端到端 Demo 已形成开发者本机
   候选 `fe828a0`，初始证据 E-20260819-001、独立反馈收口 E-20260819-002。
   `readonly-readiness-v1` 从 WP1 manifest /
@@ -484,6 +498,13 @@
 
 ## 证据索引
 
+- E-20260821-001：F-324 Qwen 最终文案润色本机开发候选。新增默认关闭的独立配置、
+  OpenAI-compatible 客户端、内容漂移保护、同步/流式/持久响应元数据和测试页状态展示；事实
+  换序反例先红后绿，聚焦 `22 passed`、相关回归 `43 passed`、全量
+  `1059 passed, 24 warnings`。通过本机隧道对 4090 服务的 API 与浏览器请求均回显
+  `qwen3-14b-rag-polish` 和真实延迟；`unchanged` 或 `rejected_*` 表示已经
+  调用但未采用候选。无密钥、原始顾客对话或未脱敏输出写入台账；不扩张为完整 M8-R、独立
+  WP5、真实渠道、容量/长稳或生产 Gate。
 - E-20260813-025：F-322 main 合入与 post-merge 复验。PR #14 将 head `298eede` clean merge 为 main `ee5e443`；PR #11 留言固定 v31 并要求后续保留 v31/v32。精确 main detached worktree 的导入路径核对通过，交叉 `51 passed`，全量 `770 passed, 1 xfailed`（282.54 秒），静态与台账门禁通过。首次 cwd 错误运行已作废，不计入证据；不关闭 PR #10 v33 改号或尚未完成的 PR #11 实际集成 Gate。
 - E-20260813-024：v31 占号先行合入与 F-322 v32 合并回归。PR #13（单文件 2+/1-、无 CI、mergeable clean）转 Ready 后以 `60c8052` 合入 origin/main；当前分支以 `76c2c85` 合入该 main，只解析 `CONTRIBUTING.md` 为 v31/v32/v33 顺序，4 个既有未提交文件未进入 merge commit。日历/身份/迁移/灾备 `51 passed`，全量 `770 passed, 1 xfailed`（282.56 秒），compileall、JS、AST migration 唯一性、diff 与台账校验通过。该证据只覆盖 PR #13 的占号通知 + F-322；main 尚无 PR #11 的 `_apply_v31` 代码，也不关闭 PR #10 改号或 E-023 的实际 v31/v32 页面整合待办。
 - E-20260813-023：F-322 远端与 v31/v32 合成核验。HTTP/1.1 fetch 成功刷新两远端及 origin PR refs；最新 `origin/main=dbf2027`，F-322 合并树干净且 v32 在全部 refs 中唯一。发现开放 PR #10 的知识唯一索引与 PR #11 的 workspace 会话表分别使用同名 `_apply_v31`；F-322 不改该既有冲突。PR #11 + F-322 临时合成树保留 v31/v32 后，交叉聚焦 `62 passed`，全量 `805 passed, 1 xfailed, 2 failed`。PR #11 单独可复现其中 workspace 旧 URL 断言失败；另一项是合成后 Forecasting 测试仍访问 `/admin` 而高级控制台已移至 `/admin/advanced`。临时仅对齐两条断言后 `2 passed`；未写回当前分支，故不声称合成全量 Gate 已通过。
@@ -519,6 +540,7 @@
 
 | 证据 ID | 时间 | 方法或命令 | 退出状态 | 版本或文件哈希 | 结果摘要 | 证据位置 | 有效期 |
 |---|---|---|---|---|---|---|---|
+| E-20260821-001 | 2026-08-21 | 为事实换序保护建立 red-first 回归；运行 `.venv/bin/python -m pytest tests/test_polish.py`、润色相关 API/stream 回归和仓库全量 pytest；运行 `.venv/bin/python -m compileall -q src` 与 `git diff --check`；经 `127.0.0.1:58080` SSH 隧道调用 4090 OpenAI-compatible 服务，并从 `/customer-test` 实际发送新消息核对状态 | 红态事实换序单例退出 1（`1 failed`）；修复后聚焦、相关、全量、compileall、whitespace、真实 API 与页面请求均退出 0 / HTTP 200 | base `ece61e14fb9c326b38dcde084513494147c508e8` + 当前未提交 worktree；分支 `codex/m8r-qwen-polish`；模型 `qwen3-14b-rag-polish`；schema v35 不变 | `tests/test_polish.py` 为 `22 passed`，相关回归 `43 passed`，全量 `1059 passed, 24 warnings`；24 条为既有 Traffic Lab FastAPI 重复 Operation ID warning。真实 API 得到 `rejected_content_drift / 14965ms` 与 `unchanged / 4684ms`，页面得到 `unchanged / 6504ms` 并显示模型名；证明 Qwen 被调用，候选因无变化或保护拒绝而未替换原文。3 秒超时不足，本地验收使用 15 秒 | `src/ecommerce_agent/{config,graph,polish,schemas,service}.py`；`docs/customer-test.html`；`tests/test_{polish,service_stream,api}.py`；本机 8080 服务日志与测试页瞬时证据 | 润色实现/保护契约/API 元数据、配置、模型资产、SSH 隧道或服务状态变化前；仅本机开发候选，不代表 M8-R WP1～WP5、独立 WP5、真实渠道、容量/长稳或生产 Gate |
 | E-20260819-002 | 2026-08-19 | 读取用户转交的 WP4 独立复验报告，保留其聚焦/全量及 47/47 门禁外探针为外部报告证据；由开发方在原候选上新增六个 GET 共用的空白 `store_id` 回归，先运行单例复现，再以单一 `Annotated` Query 契约修复；重跑同一单例、WP4 聚焦、WP1～WP4 关联集、隔离代理环境下仓库全量、compileall、后台 JS syntax、whitespace 和 project-to-act validate | 修复前单例稳定 `1 failed`，实际为 readiness 返回 200；修复后单例、聚焦、关联、全量和静态门禁均退出 0。独立报告的探针由用户转交，不冒充开发方运行；报告注明未重复浏览器实测 | base `9670aa1`；修复候选 `fe828a0`；schema v35、`readonly-readiness-v1`、Demo fixture 和页面不变 | 六个带 `store_id` 的 readonly-data GET 现在共用同一约束，纯空白请求均返回 422，不泄露数据且不产生写入。聚焦 `10 passed`、关联 `109 passed`、全量 `1035 passed, 24 warnings`（335.51 秒），无 failed/skipped/xfailed；24 条均为既有 Traffic Lab 重复 Operation ID warning。无 schema、依赖、Agent/模型、Demo、页面或平台动作变化；E-20260819-001 浏览器证据仍对应未变页面 | `fe828a0`；`src/ecommerce_agent/readonly_data_api.py`；`tests/test_m7r_wp4_readiness.py`；`docs/tasks/M7R_WP4_READINESS_HANDOFF.md`；用户在本会话转交的独立复验摘要 | 上述查询契约、WP4 代码/测试、基准提交或独立报告来源变化前；只关闭开发候选 nit，不替代合入 main、缪海南正式 WP5、真实平台样本、真实经营结论、M7-R/生产 Gate |
 | E-20260819-001 | 2026-08-19 | 读取 M7-R WP4 验收标准及 WP1～WP3/F-310 契约；先运行缺实现测试；实现单点准备度策略、八域只读投影、管理员下钻 API、后台 view 和固定脱敏 Demo；以同数据时点冲突、缺 Demo 写审计、撤销后旧确认误标 active 建立先红后绿反例；运行聚焦、WP1～WP4 关联集、compileall、后台 JS syntax、whitespace 和隔离代理环境下仓库全量；使用本机浏览器对空页面、显式装载、重放、桌面和 390px 窄屏做实际核验 | 初始缺实现收集退出 2；fixture 同时点触发预期外 D-014 冲突；缺审计与历史 active 反例均稳定 `1 failed`；修复后聚焦、关联、静态、浏览器和全量均退出 0 | base `1936a2f`；代码候选 `7d8bf47`；schema v35；readiness policy `readonly-readiness-v1`；Demo `m7r-readonly-demo-v1` | operational 默认排除 Demo；actual/manual/demo/missing 保持可区分，缺失不转零。每个域状态和数值保留 manifest ID，四项缺口保留 field evidence/import，映射保留 run/source import。顺序及线程并发重放只有 8 manifest、1 product、1 mapping、1 reconciliation；管理员 Demo POST 逐次审计，所有 GET 零事实变更。浏览器首次打开前后事实计数均 0；显式 Demo 后 8 manifest、66 evidence、1 product、1 mapping、1 run、3 reconciliation rows，重放不变；1280×720 无页面横向溢出，390×844 仅 panel 内表格滚动，console 0 error/warning。聚焦 `9 passed`、关联 `108 passed`、全量 `1034 passed, 24 warnings`（687.63 秒），无 failed/skipped/xfailed；24 条均为既有 Traffic Lab 重复 Operation ID warning | `src/ecommerce_agent/readonly_readiness/`；`src/ecommerce_agent/readonly_data_api.py`；`src/ecommerce_agent/product_identity/service.py`；`docs/admin-console.html`；`tests/test_m7r_wp4_readiness.py`；`docs/tasks/M7R_WP4_READINESS_HANDOFF.md` | WP4 代码/测试、WP1～WP3 来源/映射契约、准备度策略、Demo fixture、后台页面或基准提交变化前；仅开发者本机候选，不替代合入 main、真实平台样本、缪海南正式 WP5、真实经营结论、M7-R/生产 Gate |
 | E-20260818-002 | 2026-08-18 | 读取 M7-R WP3 验收标准、WP1/WP2 契约和 catalog/inventory/order 公开服务；先运行缺实现契约测试；实现 v35 四张只追加表、canonical 商品、映射裁决/撤销/历史和逐行对账；为 `expected_version`、逐行 `evidence_keys` 与 Demo 领域来源混入分别建立红测后修复；运行聚焦、WP1～WP3、关联领域/迁移/灾备、compileall、迁移唯一性、whitespace 和仓库全量 pytest | 初始缺实现收集退出 2；审计列补强 `3 failed, 12 passed`；Demo 来源反证退出 1；修复后所有聚焦、关联、静态和干净环境全量均退出 0。首次全量因桌面会话畸形 `NO_PROXY` 触发 `httpx.InvalidURL`，中止后隔离 proxy/bypass 环境变量复跑通过 | base `0815cf8`；本地 main v35 预留 `d35bfe1`；代码候选 `6f0b116`；schema v35；policy `product-identity-v1` | tenant/store/internal part 稳定唯一；平台 SKU 映射确认、显式改判和撤销只追加，完整载荷幂等且旧 `expected_version` 不能覆盖新裁决。标题/商家编码/唯一候选只给证据，不自动绑定；每个输入行恰为 matched/ambiguous/unmapped/rejected，旧 run/history 在新映射后仍可读。WP2 source ID 经 WP1 manifest 隔离 operational/demo，未知 readonly 来源 fail closed。聚焦 `17 passed`、WP1～WP3 `93 passed`、关联 `184 passed`、最终全量 `1025 passed, 24 warnings`（391.62 秒），无 failed/skipped/xfailed；24 条为既有 FastAPI Operation ID warning | `src/ecommerce_agent/product_identity/`；`src/ecommerce_agent/database.py`；`src/ecommerce_agent/readonly_data/{__init__,ingestion}.py`；`tests/test_product_identity.py`；`docs/tasks/M7R_WP3_PRODUCT_IDENTITY_HANDOFF.md` | WP3 代码/测试、schema v35、映射/对账策略、WP1/WP2 来源契约或基准提交变化前；仅开发者本机候选，不替代合入 main、真实平台样本、WP4、缪海南正式 WP5、M7-R/生产 Gate |

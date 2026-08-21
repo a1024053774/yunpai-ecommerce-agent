@@ -32,7 +32,12 @@ from .context_builder import ContextBuilder
 from .database import Database, SessionScopeError, utc_now
 from .disaster_recovery import DataDirectoryLock
 from .evaluation import EvaluationRunRequest, EvaluationService
-from .graph import MODEL_UNAVAILABLE_HANDOFF_ANSWER, build_graph, verify_response
+from .graph import (
+    MODEL_UNAVAILABLE_HANDOFF_ANSWER,
+    build_graph,
+    finalize_response,
+    select_handoff_answer,
+)
 from .handoff import HandoffService
 from .handoff_dispatch import HandoffDispatchService
 from .handoff_staffing import HandoffStaffingService
@@ -41,6 +46,7 @@ from .knowledge_seed import seed_records
 from .llm import ModelGateway
 from .maintenance import MaintenanceService
 from .policy import sanitize_context
+from .polish import PolishGateway
 from .prompts import SYSTEM_PROMPT, build_messages
 from .rag import KnowledgeBase
 from .quality import QualityService
@@ -48,7 +54,7 @@ from .releases import ReleaseReplayRequest, ReleaseService
 from .readonly_data import ReadonlyDataService, ReadonlyReportIngestionService
 from .readonly_readiness import ReadonlyDemoService, ReadonlyReadinessService
 from .product_identity import ProductIdentityService
-from .schemas import ChatResponse, SourceItem
+from .schemas import ChatResponse, DraftOrigin, SourceItem
 from .text_utils import normalize_text, redact_sensitive
 from .taobao import TaobaoIntegrationService
 from .sops import SopService
@@ -96,6 +102,7 @@ class AgentService:
             # 现在 kg-* 知识进入 RAG 检索，222 节点知识图谱真正服务客服。
             self.kg_import_stats = self._import_knowledge_assets()
             self.model = ModelGateway(self.settings)
+            self.polisher = PolishGateway(self.settings)
             self.handoff_staffing = HandoffStaffingService(self.db)
             self.handoffs = HandoffService(self.db, self.handoff_staffing)
             self.handoffs.ensure_default_queues(self.settings.bootstrap_tenant_id)
@@ -208,6 +215,7 @@ class AgentService:
                 tools=self.tools,
                 sops=self.sops,
                 contexts=self.contexts,
+                polisher=self.polisher,
                 memory=self.memory,
             )
             self.graph = builder.compile(checkpointer=self.checkpointer)
@@ -439,24 +447,34 @@ class AgentService:
         }
 
         if "generate" in self.graph.get_state(config).next:
-            deltas, model_fallback, trace_step = self._generation_deltas(state)
-            parts: list[str] = []
-            for delta in deltas:
-                parts.append(delta)
-                yield {"event": "delta", "text": delta}
-            draft = "".join(parts).strip()
+            deltas, model_fallback, trace_step, draft_origin = (
+                self._generation_deltas(state)
+            )
+            draft = "".join(deltas).strip()
             generation_state = {
                 **state,
                 "draft": draft,
+                "draft_origin": draft_origin,
                 "model_fallback": model_fallback,
                 "model_retry_advised": False,
                 "trace": [*state["trace"], trace_step],
             }
-            verified = verify_response(generation_state)
+            verified = finalize_response(
+                generation_state,
+                polisher=self.polisher,
+                db=self.db,
+            )
+            preview_state = {**generation_state, **verified}
+            if verified.get("review_route") == "handoff":
+                preview_state["answer"] = select_handoff_answer(preview_state)
+            final_answer = preview_state["answer"]
+            for start in range(0, len(final_answer), 16):
+                yield {"event": "delta", "text": final_answer[start : start + 16]}
             self.graph.update_state(
                 config,
                 {
                     "draft": draft,
+                    "draft_origin": draft_origin,
                     "model_fallback": model_fallback,
                     "model_retry_advised": False,
                     "trace": generation_state["trace"],
@@ -484,7 +502,7 @@ class AgentService:
     def _generation_deltas(
         self,
         state: dict[str, Any],
-    ) -> tuple[Iterator[str], bool, str]:
+    ) -> tuple[Iterator[str], bool, str, DraftOrigin]:
         verified_result = (
             state.get("tool_result")
             if state.get("tool_result", {}).get("postcondition_met")
@@ -495,6 +513,7 @@ class AgentService:
                 iter((MODEL_UNAVAILABLE_HANDOFF_ANSWER,)),
                 True,
                 "generate:no_evidence",
+                "fallback",
             )
 
         top_document = state["retrieved"][0] if state.get("retrieved") else None
@@ -507,7 +526,12 @@ class AgentService:
             and normalize_text(top_document["question"])
             == normalize_text(state["normalized_input"])
         ):
-            return iter((top_document["answer"],)), False, "generate:approved_knowledge"
+            return (
+                iter((top_document["answer"],)),
+                False,
+                "generate:approved_knowledge",
+                "approved_knowledge",
+            )
 
         total = int(
             self.settings.model_context_limit_tokens
@@ -528,7 +552,7 @@ class AgentService:
             knowledge_budget_tokens=available * 6 // 10,
             prompt_variant=(state.get("intent_routing") or {}).get("prompt_variant"),
         )
-        return self.model.stream_generate(messages), False, "generate:stream"
+        return self.model.stream_generate(messages), False, "generate:stream", "model"
 
     @staticmethod
     def _response_from_state(
@@ -556,6 +580,10 @@ class AgentService:
             reason=state["route_reason"],
             sources=sources,
             model_fallback=state["model_fallback"],
+            polish_status=state.get("polish_status", "not_applicable"),
+            polish_applied=bool(state.get("polish_applied")),
+            polish_model=state.get("polish_model"),
+            polish_latency_ms=state.get("polish_latency_ms"),
             handoff_id=state.get("handoff_id"),
             handoff_status=state.get("handoff_status"),
             sop_id=(state.get("active_sop") or {}).get("id"),
@@ -1437,6 +1465,7 @@ class AgentService:
             self.stop_competitive_monitor_worker()
             self.channel_agents.close()
             self.taobao.close()
+            self.polisher.close()
             self.model.close()
             self.tools.close()
             self._checkpoint_connection.close()

@@ -109,6 +109,8 @@ def test_loopback_customer_test_page_and_chat_are_isolated(tmp_path) -> None:
         assert page.status_code == 200
         assert "顾客对话测试" in page.text
         assert "/v1/test/customer-chat" in page.text
+        assert "Qwen 润色：已采用" in page.text
+        assert "Qwen 润色：调用失败，已回退原文" in page.text
 
         response = client.post(
             "/v1/test/customer-chat",
@@ -126,6 +128,10 @@ def test_loopback_customer_test_page_and_chat_are_isolated(tmp_path) -> None:
         assert payload["test_mode"] == "local_customer_simulation"
         assert payload["source_type"] == "simulation"
         assert payload["source_reference"] == "local-customer-test"
+        assert payload["polish_status"] == "disabled"
+        assert payload["polish_applied"] is False
+        assert payload["polish_model"] is None
+        assert payload["polish_latency_ms"] is None
         assert payload["sources"]
 
         operational = client.get(
