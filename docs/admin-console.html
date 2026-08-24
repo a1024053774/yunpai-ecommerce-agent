@@ -2707,7 +2707,7 @@ const titles = { overview: '经营总览', service: '智能客服', commerce: '�
           ['经营利润', projection.operating],
           ['财务最终净利润', projection.final],
         ];
-        $('m10ProfitRows').innerHTML = layerMeta.map(([name, layer]) => `<tr><td>${escapeHtml(name)}</td><td><span class="status ${layer.restricted ? 'warn' : (layer.status === 'available' ? 'ok' : 'warn')}">${layer.restricted ? '受限' : (layer.status === 'available' ? '可用' : '缺失')}</span></td><td>${escapeHtml(layer.amount ?? '-')}</td><td>${layer.missing_fields.length ? layer.missing_fields.map(escapeHtml).join('、') : '-'}</td></tr>`).join('');
+        $('m10ProfitRows').innerHTML = layerMeta.map(([name, layer]) => `<tr><td>${escapeHtml(name)}</td><td><span class="status ${layer.restricted || layer.status === 'blocked' ? 'warn' : (layer.status === 'available' ? 'ok' : 'warn')}">${layer.restricted ? '受限' : (layer.status === 'blocked' ? '对账异常' : (layer.status === 'available' ? '可用' : '缺失'))}</span></td><td>${escapeHtml(layer.amount ?? '-')}</td><td>${layer.missing_fields.length ? layer.missing_fields.map(escapeHtml).join('、') : '-'}</td></tr>`).join('');
         $('m10Reconcile').innerHTML = reconcile.double_count_ok
           ? `<div class="notice">对账通过：${reconcile.entry_count} 条 ledger 无重复/漏算问题</div>`
           : `<div class="notice"><strong>对账未通过</strong>${reconcile.issues.map((issue) => `<div>${escapeHtml(issue.message)}</div>`).join('')}</div>`;
@@ -2730,9 +2730,9 @@ const titles = { overview: '经营总览', service: '智能客服', commerce: '�
         $('m10Suggestions').innerHTML = `<div class="notice">模型建议不可用（${escapeHtml(decisionResp ? decisionResp.reason || '模型未启用或未配置密钥' : '接口未就绪')}）。页面不生成未经模型解释的经营建议。</div>`;
       }
       $('m10Kpis').innerHTML = [
-        ['销售利润', projection?.sales.amount ?? '-', projection?.sales.status === 'available' ? '可用' : '缺失'],
-        ['经营利润', projection?.operating.amount ?? '-', projection?.operating.status === 'available' ? '可用' : '缺失'],
-        ['财务最终净利润', projection?.final.amount ?? '-', projection?.final.restricted ? '受限' : (projection?.final.status === 'available' ? '可用' : '缺失')],
+        ['销售利润', projection?.sales.amount ?? '-', projection?.sales.status === 'blocked' ? '对账异常' : (projection?.sales.status === 'available' ? '可用' : '缺失')],
+        ['经营利润', projection?.operating.amount ?? '-', projection?.operating.status === 'blocked' ? '对账异常' : (projection?.operating.status === 'available' ? '可用' : '缺失')],
+        ['财务最终净利润', projection?.final.amount ?? '-', projection?.final.restricted ? '受限' : (projection?.final.status === 'blocked' ? '对账异常' : (projection?.final.status === 'available' ? '可用' : '缺失'))],
         ['订购单', String(drafts.length), `${unsent.length} 张待确认`],
         ['对账', reconcile?.double_count_ok ? '通过' : '未通过', `${reconcile?.entry_count ?? 0} 条 ledger`],
       ].map(([label, value, meta]) => `<div class="kpi"><span class="label">${escapeHtml(label)}</span><span class="value">${escapeHtml(String(value))}</span><span class="meta">${escapeHtml(meta)}</span></div>`).join('');

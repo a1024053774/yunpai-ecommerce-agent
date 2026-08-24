@@ -33,6 +33,7 @@ class SignalGateResult:
     signal_usage: str
     comparisons: tuple[dict[str, Any], ...]
     data_as_of: str | None
+    final_signal_factor: float | None = None
 
     def to_evidence(self) -> dict[str, Any]:
         return {
@@ -41,6 +42,7 @@ class SignalGateResult:
             "operational_champion": self.operational_champion,
             "signal_usage": self.signal_usage,
             "data_as_of": self.data_as_of,
+            "final_signal_factor": self.final_signal_factor,
             "comparisons": list(self.comparisons),
         }
 
@@ -79,6 +81,7 @@ class SignalGate:
         *,
         baseline_rows: Sequence[dict[str, Any]],
         signal_by_date: Mapping[date, float],
+        signal_as_of: Mapping[date, date] | None = None,
         source_kind: SourceKind,
         data_as_of: date | None,
     ) -> SignalGateResult:
@@ -117,7 +120,13 @@ class SignalGate:
             visible_values = [
                 value
                 for signal_date, value in sorted(signal_by_date.items())
-                if signal_date <= training_end and value is not None
+                if signal_date <= training_end
+                and value is not None
+                and (
+                    signal_as_of is None
+                    or signal_as_of.get(signal_date) is None
+                    or signal_as_of.get(signal_date) <= training_end
+                )
             ]
             if not visible_values:
                 return SignalGateResult(
@@ -175,6 +184,13 @@ class SignalGate:
 
         operational_champion = source_kind is SourceKind.ACTUAL
         signal_usage = "signal_used" if operational_champion else "evaluation_only"
+        final_visible = [
+            value
+            for signal_date, value in sorted(signal_by_date.items())
+            if value is not None
+            and (visible_cutoff is None or signal_date <= visible_cutoff)
+        ]
+        final_signal_factor = _signal_factor(final_visible) if final_visible else None
         return SignalGateResult(
             admission=SignalAdmission.ADMITTED,
             reason="signal_improves_baseline_no_leakage",
@@ -182,4 +198,5 @@ class SignalGate:
             signal_usage=signal_usage,
             comparisons=tuple(comparisons),
             data_as_of=visible_cutoff.isoformat() if visible_cutoff else None,
+            final_signal_factor=final_signal_factor,
         )

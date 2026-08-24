@@ -14,6 +14,7 @@ from .profit import (
     ProfitPolicyInput,
     ProfitScope,
     ProfitService,
+    category_is_final,
 )
 
 
@@ -63,7 +64,10 @@ def build_profit_router(
                 "period": payload.period,
                 "category": payload.category.value,
                 "scope": payload.scope.value,
-                "amount": payload.amount,
+                # 财务最终层金额不进审计，避免无权限管理员从审计详情读回（#11/P0-1）。
+                "amount": (
+                    None if category_is_final(payload.category) else payload.amount
+                ),
                 "entry_key": payload.entry_key,
             },
             admin.tenant_id,
@@ -102,7 +106,22 @@ def build_profit_router(
         scope: ProfitScope = Query(default=ProfitScope.FORMAL),
         admin: AdminPrincipal = Depends(require_admin),
     ):
-        return call(profit.reconcile, admin.tenant_id, store_id, period, scope)
+        result = call(profit.reconcile, admin.tenant_id, store_id, period, scope)
+        if "finance:final_profit:read" not in admin.capabilities:
+            masked = False
+            for issue in result.issues:
+                if issue.is_final and issue.amount is not None:
+                    issue.amount = None
+                    masked = True
+            if masked:
+                service.db.audit(
+                    "profit.reconciliation.final_denied",
+                    admin.admin_id,
+                    store_id,
+                    {"period": period, "scope": scope.value},
+                    admin.tenant_id,
+                )
+        return result
 
     @router.get("/ledger/entries")
     def ledger_entries(

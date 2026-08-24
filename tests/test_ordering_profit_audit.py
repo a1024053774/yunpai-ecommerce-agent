@@ -181,3 +181,160 @@ def test_ledger_entries_api_shows_final_with_capability(monkeypatch, tmp_path) -
         row for row in response.json() if row["category"] == "tax_cost"
     )
     assert tax["amount"] == "-20.00"
+
+
+def _seed_duplicate_final(app) -> None:
+    with app.state.agent.db.connect() as conn:
+        conn.execute(
+            """INSERT INTO commerce_orders (
+                id, tenant_id, connector_id, store_id, external_order_id,
+                order_status, payment_status, currency, total_amount, placed_at,
+                source_updated_at, payload_hash, version, created_at, updated_at
+            ) VALUES ('order-dup', 'tenant-test', 'conn-1', 'store-x', 'O-DUP',
+                      'delivered', 'paid', 'CNY', '100.00',
+                      '2026-08-01T00:00:00+00:00', '2026-08-01T00:00:00+00:00',
+                      'z' * 64, 1, '2026-08-01T00:00:00+00:00',
+                      '2026-08-01T00:00:00+00:00')"""
+        )
+        for entry_id, entry_key in (("dup-rev", "rev-dup"), ("dup-tax-1", "tax-dup-1"), ("dup-tax-2", "tax-dup-2")):
+            category = "signed_receipt_revenue" if entry_id == "dup-rev" else "tax_cost"
+            amount = "1000.00" if entry_id == "dup-rev" else "-20.00"
+            conn.execute(
+                """INSERT INTO profit_ledger_entries (
+                    entry_id, tenant_id, store_id, period, category, scope, amount,
+                    currency, source_kind, sku_id, order_id, mapping_version,
+                    entry_key, payload_hash, source_reference, granularity,
+                    is_estimated, reconciliation_status, created_at
+                ) VALUES (?, 'tenant-test', 'store-x', '2026-08', ?, 'formal', ?,
+                          'CNY', 'manual', 'SKU-1', ?, 'v1', ?, ?, NULL, 'store',
+                          0, 'pending', '2026-08-24T00:00:00+00:00')""",
+                (entry_id, category, amount, "O-DUP" if entry_id == "dup-rev" else None, entry_key, "c" * 64),
+            )
+
+
+def test_reconciliation_api_masks_final_amount_without_capability(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.delenv("FINAL_PROFIT_READ_ADMIN_IDS", raising=False)
+    app = create_app(make_settings(tmp_path))
+    _seed_duplicate_final(app)
+    with TestClient(app) as client:
+        response = client.get(
+            "/v1/profit/reconciliation?store_id=store-x&period=2026-08&scope=formal",
+            headers=ADMIN_HEADERS,
+        )
+    assert response.status_code == 200
+    final_issues = [i for i in response.json()["issues"] if i.get("is_final")]
+    assert final_issues
+    assert all(i["amount"] is None for i in final_issues)
+    assert _audit_rows(app, "profit.reconciliation.final_denied")
+
+
+def test_ledger_entry_audit_does_not_log_final_amount(tmp_path) -> None:
+    app = create_app(make_settings(tmp_path))
+    _seed_delivered_order_and_entries(app)
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/profit/ledger/entries",
+            headers=ADMIN_HEADERS,
+            json={
+                "store_id": "store-x",
+                "period": "2026-08",
+                "category": "tax_cost",
+                "scope": "formal",
+                "amount": "-5.00",
+                "source_kind": "manual",
+                "sku_id": "SKU-1",
+                "entry_key": "tax-audit",
+            },
+        )
+    assert response.status_code == 200
+    import json as _json
+    with app.state.agent.db.connect() as conn:
+        row = conn.execute(
+            """SELECT detail_json FROM audit_log
+               WHERE event_type='profit.ledger.entry_recorded'
+                 AND subject_id=?""",
+            (response.json()["entry_id"],),
+        ).fetchone()
+    detail = _json.loads(row["detail_json"])
+    assert detail["category"] == "tax_cost"
+    assert detail["amount"] is None
+
+
+def _seed_minimal_profit(app) -> None:
+    with app.state.agent.db.connect() as conn:
+        conn.execute(
+            """INSERT INTO commerce_orders (
+                id, tenant_id, connector_id, store_id, external_order_id,
+                order_status, payment_status, currency, total_amount, placed_at,
+                source_updated_at, payload_hash, version, created_at, updated_at
+            ) VALUES ('order-min', 'tenant-test', 'conn-1', 'store-x', 'O-MIN',
+                      'delivered', 'paid', 'CNY', '100.00',
+                      '2026-08-01T00:00:00+00:00', '2026-08-01T00:00:00+00:00',
+                      'm' * 64, 1, '2026-08-01T00:00:00+00:00',
+                      '2026-08-01T00:00:00+00:00')"""
+        )
+        for entry_id, category, amount in (
+            ("min-rev", "signed_receipt_revenue", "1000.00"),
+            ("min-tax", "tax_cost", "-20.00"),
+        ):
+            conn.execute(
+                """INSERT INTO profit_ledger_entries (
+                    entry_id, tenant_id, store_id, period, category, scope, amount,
+                    currency, source_kind, sku_id, order_id, mapping_version,
+                    entry_key, payload_hash, source_reference, granularity,
+                    is_estimated, reconciliation_status, created_at
+                ) VALUES (?, 'tenant-test', 'store-x', '2026-08', ?, 'formal', ?,
+                          'CNY', 'actual', 'SKU-1', 'O-MIN', 'v1', ?, ?, NULL,
+                          NULL, 0, 'pending', '2026-08-24T00:00:00+00:00')""",
+                (entry_id, category, amount, entry_id + "-key", "n" * 64),
+            )
+
+
+class _FakeAdvisor:
+    def __init__(self) -> None:
+        self.facts = None
+
+    def suggest(self, facts):
+        self.facts = facts
+        return type(
+            "R",
+            (),
+            {
+                "available": False,
+                "reason": "model_unavailable",
+                "suggestions": [],
+                "facts_digest": "x" * 64,
+            },
+        )()
+
+
+def test_decision_api_masks_final_amount_in_model_facts(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("FINAL_PROFIT_READ_ADMIN_IDS", raising=False)
+    app = create_app(make_settings(tmp_path))
+    _seed_minimal_profit(app)
+    fake = _FakeAdvisor()
+    app.state.agent.decision_advisor = fake
+    with TestClient(app) as client:
+        client.post(
+            "/v1/profit/policies",
+            headers=ADMIN_HEADERS,
+            json={
+                "policy_version": "v-min",
+                "required_categories": {
+                    "sales": ["signed_receipt_revenue"],
+                    "operating": ["signed_receipt_revenue"],
+                    "final": ["signed_receipt_revenue", "tax_cost"],
+                },
+            },
+        )
+        response = client.post(
+            "/v1/decision/suggestions",
+            headers=ADMIN_HEADERS,
+            json={"store_id": "store-x", "period": "2026-08", "scope": "formal"},
+        )
+    assert response.status_code == 200
+    assert fake.facts is not None
+    assert fake.facts["profit_projection"]["final"]["amount"] is None
+    assert fake.facts["profit_projection"]["final"]["restricted"] is True

@@ -12,6 +12,7 @@ from .models import (
     ReconciliationIssue,
     ReconciliationView,
     RevenueRecognitionBasis,
+    category_is_final,
     layer_required_categories,
 )
 from .service import ProfitError, ProfitService
@@ -32,5 +33,6 @@ __all__ = [
     "ReconciliationIssue",
     "ReconciliationView",
     "RevenueRecognitionBasis",
+    "category_is_final",
     "layer_required_categories",
 ]

@@ -341,10 +341,20 @@ class ProfitService:
             demo_label="净利润试算（演示参数）",
             formal_label="财务最终净利润",
         )
+        reconciliation_ok = True
+        reconciliation_issue_codes: list[str] = []
         if scope is ProfitScope.FORMAL:
-            # 正式口径财务最终净利润仅授权视图展示：投影层通过 label 区分，
-            # 服务层不对外输出隐藏能力；页面授权由路由层控制。
-            pass
+            reconciliation = self.reconcile(tenant_id, store_id, period, scope)
+            reconciliation_ok = reconciliation.double_count_ok
+            reconciliation_issue_codes = [
+                issue.code for issue in reconciliation.issues
+            ]
+            if not reconciliation_ok:
+                # 对账不通过：正式精确利润 blocked，不对外展示精确值（P0-2）。
+                for layer in (sales, operating, final):
+                    if layer.status == "available":
+                        layer.status = "blocked"
+                        layer.amount = None
         return ProfitProjectionView(
             tenant_id=tenant_id,
             store_id=store_id,
@@ -355,6 +365,8 @@ class ProfitService:
             operating=operating,
             final=final,
             demo_labels=demo_labels,
+            reconciliation_ok=reconciliation_ok,
+            reconciliation_issue_codes=reconciliation_issue_codes,
         )
 
     # ---------- 对账 ----------
@@ -391,19 +403,23 @@ class ProfitService:
                             code="duplicate_order_category_entry",
                             entry_key=entry["entry_key"],
                             message=f"订单 {entry['order_id']} 的 {category.value} 重复入账",
+                            is_final=(CATEGORY_LAYER[category] is ProfitLayer.FINAL),
                         )
                     )
                 seen_order_category.add(key)
         for identity, entry_keys in ledger_identity.items():
             if len(entry_keys) > 1:
+                dup_category = ExpenseCategory(identity[0])
                 issues.append(
                     ReconciliationIssue(
                         code="duplicate_ledger_entry",
                         entry_key=sorted(entry_keys)[0],
                         message=(
                             f"费用 {identity[0]} 重复入账 "
-                            f"(store={store_id}, period={period}, amount={identity[3]})"
+                            f"(store={store_id}, period={period})"
                         ),
+                        amount=identity[3],
+                        is_final=(CATEGORY_LAYER[dup_category] is ProfitLayer.FINAL),
                     )
                 )
         for entry in entries:
@@ -430,6 +446,7 @@ class ProfitService:
                             code="refund_without_signed_revenue",
                             entry_key=entry["entry_key"],
                             message=f"退款冲减 {entry['order_id']} 缺少对应签收确认收入",
+                            is_final=False,
                         )
                     )
         return ReconciliationView(

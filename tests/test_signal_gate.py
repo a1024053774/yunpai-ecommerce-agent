@@ -44,6 +44,25 @@ def test_signal_worse_than_baseline_is_rejected() -> None:
         data_as_of=date(2026, 8, 16),
     )
     assert result.admission is SignalAdmission.REJECTED_NOT_BETTER
+
+
+def test_late_signal_not_visible_at_origin_is_excluded() -> None:
+    gate = SignalGate(minimum_origins=2)
+    result = gate.evaluate(
+        baseline_rows=[
+            _row("2026-01-02", "2026-01-01", [10.0], [10.0]),
+            _row("2026-01-09", "2026-01-08", [10.0], [10.0]),
+        ],
+        signal_by_date={date(2026, 1, 1): 1.5, date(2026, 1, 8): 1.5},
+        signal_as_of={
+            date(2026, 1, 1): date(2026, 1, 10),
+            date(2026, 1, 8): date(2026, 1, 10),
+        },
+        source_kind=SourceKind.ACTUAL,
+        data_as_of=date(2026, 1, 10),
+    )
+    assert result.admission is SignalAdmission.INSUFFICIENT_EVIDENCE
+    assert result.reason == "signal_missing_for_origin"
     assert result.operational_champion is False
 
 

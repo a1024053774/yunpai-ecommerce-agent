@@ -4191,7 +4191,7 @@ class Database:
                 created_at, message_id = raw_cursor.rsplit("|", 1)
                 datetime.fromisoformat(created_at)
                 if created_at and message_id:
-                    decoded_cursor = (created_at, message_id)
+                    decoded_cursor = (created_at, int(message_id))
             except (binascii.Error, TypeError, UnicodeDecodeError, ValueError):
                 decoded_cursor = None
 
@@ -4204,7 +4204,7 @@ class Database:
         params: list[Any] = [session_id, tenant_id, subject_hash]
         if decoded_cursor is not None:
             conditions.append(
-                "(m.created_at > ? OR (m.created_at = ? AND m.id > ?))"
+                "(m.created_at > ? OR (m.created_at = ? AND m.rowid > ?))"
             )
             params.extend(
                 [
@@ -4220,11 +4220,11 @@ class Database:
                        m.risk_level, m.route_reason, m.sources_json,
                        m.model_fallback, m.redacted, m.context_snapshot_id,
                        m.customer_intent, m.intent_confidence, m.intent_method,
-                       m.created_at
+                       m.created_at, m.rowid AS _rowid
                 FROM messages m
                 JOIN sessions s ON s.id=m.session_id
                 WHERE {' AND '.join(conditions)}
-                ORDER BY m.created_at, m.id
+                ORDER BY m.created_at, m.rowid
                 LIMIT ?
                 """,
                 (*params, page_limit + 1),
@@ -4233,9 +4233,11 @@ class Database:
         has_more = len(rows) > page_limit
         page_rows = rows[:page_limit]
         items = [dict(row) for row in page_rows]
+        for item in items:
+            item.pop("_rowid", None)
         next_cursor = None
         if has_more and page_rows:
-            raw_cursor = f"{page_rows[-1]['created_at']}|{page_rows[-1]['id']}"
+            raw_cursor = f"{page_rows[-1]['created_at']}|{page_rows[-1]['_rowid']}"
             next_cursor = base64.urlsafe_b64encode(raw_cursor.encode("utf-8")).decode(
                 "ascii"
             ).rstrip("=")

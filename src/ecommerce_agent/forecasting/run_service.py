@@ -163,9 +163,22 @@ class ForecastRunService:
                 signal_gate_result = SignalGate().evaluate(
                     baseline_rows=evaluation["backtests"],
                     signal_by_date=signal_input.signal_by_date,
+                    signal_as_of=signal_input.signal_as_of,
                     source_kind=signal_input.source_kind,
                     data_as_of=signal_input.data_as_of,
                 )
+        if (
+            signal_gate_result.operational_champion
+            and signal_gate_result.signal_usage == "signal_used"
+            and signal_gate_result.final_signal_factor is not None
+        ):
+            factor = signal_gate_result.final_signal_factor
+            for point in evaluation["points"]:
+                for quantile in ("p50", "p80", "p95"):
+                    point[quantile] = round(float(point[quantile]) * factor, 9)
+            for horizon, quantiles in evaluation["horizon_totals"].items():
+                for quantile, value in quantiles.items():
+                    quantiles[quantile] = round(float(value) * factor, 9)
         anomalies = self._anomalies(input_issues, evaluation, model_failures)
         status = (
             "degraded"
@@ -188,7 +201,14 @@ class ForecastRunService:
             candidate_evidence["signal_candidates"] = signal_evidence["comparisons"]
             candidate_evidence["signal_champion_reason"] = {
                 key: signal_evidence[key]
-                for key in ("admission", "reason", "operational_champion", "signal_usage", "data_as_of")
+                for key in (
+                    "admission",
+                    "reason",
+                    "operational_champion",
+                    "signal_usage",
+                    "data_as_of",
+                    "final_signal_factor",
+                )
             }
         try:
             candidate_evidence["source_provenance"] = merge_source_provenance(

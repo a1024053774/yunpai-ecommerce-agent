@@ -144,6 +144,11 @@ def layer_required_categories(layer: ProfitLayer) -> frozenset[ExpenseCategory]:
     return REQUIRED_CATEGORIES_BY_LAYER[ProfitLayer(layer)]
 
 
+def category_is_final(category: ExpenseCategory) -> bool:
+    """财务最终层类别（需 `finance:final_profit:read` 才可读金额）。"""
+    return CATEGORY_LAYER[ExpenseCategory(category)] is ProfitLayer.FINAL
+
+
 def _require_code(value: str, *, error: str, max_length: int = 128) -> str:
     if (
         not value
@@ -255,7 +260,7 @@ class LayerProjection(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     layer: ProfitLayer
-    status: Literal["available", "missing"]
+    status: Literal["available", "missing", "blocked"]
     amount: str | None = None
     label: str
     missing_fields: list[str] = Field(default_factory=list)
@@ -274,6 +279,8 @@ class ProfitProjectionView(BaseModel):
     operating: LayerProjection
     final: LayerProjection
     demo_labels: bool
+    reconciliation_ok: bool = True
+    reconciliation_issue_codes: list[str] = Field(default_factory=list)
 
 
 class ReconciliationIssue(BaseModel):
@@ -282,6 +289,8 @@ class ReconciliationIssue(BaseModel):
     code: str
     entry_key: str | None = None
     message: str
+    amount: str | None = None
+    is_final: bool = False
 
 
 class ReconciliationView(BaseModel):

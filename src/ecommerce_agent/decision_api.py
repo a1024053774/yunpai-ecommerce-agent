@@ -41,19 +41,31 @@ def build_decision_router(
             "period": payload.period,
             "scope": payload.scope.value,
         }
+        can_read_final = "finance:final_profit:read" in admin.capabilities
         try:
-            facts["profit_projection"] = service.profit.projection(
+            projection = service.profit.projection(
                 admin.tenant_id, payload.store_id, payload.period, payload.scope
-            ).model_dump()
+            )
+            projection_dict = projection.model_dump()
+            if not can_read_final:
+                projection_dict["final"]["amount"] = None
+                projection_dict["final"]["restricted"] = True
+            facts["profit_projection"] = projection_dict
         except ProfitError as exc:
             facts["profit_projection"] = {
                 "status": "unavailable",
                 "reason": str(exc),
             }
         try:
-            facts["profit_reconciliation"] = service.profit.reconcile(
+            reconciliation = service.profit.reconcile(
                 admin.tenant_id, payload.store_id, payload.period, payload.scope
-            ).model_dump()
+            )
+            reconciliation_dict = reconciliation.model_dump()
+            if not can_read_final:
+                for issue in reconciliation_dict.get("issues", []):
+                    if issue.get("is_final"):
+                        issue["amount"] = None
+            facts["profit_reconciliation"] = reconciliation_dict
         except ProfitError as exc:
             facts["profit_reconciliation"] = {
                 "status": "unavailable",

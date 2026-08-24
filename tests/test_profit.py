@@ -485,3 +485,19 @@ def test_ledger_list_entries_filters_by_sku_and_period(tmp_path) -> None:
     assert rows[0]["sku_id"] == "SKU-1"
     assert rows[0]["category"] == ExpenseCategory.PURCHASE_COST.value
     assert rows[0]["granularity"] == "order"
+
+
+def test_reconciliation_failure_blocks_formal_profit(tmp_path) -> None:
+    service = make_service(tmp_path)
+    seed_full_formal(service)
+    service.record_entry(
+        TENANT, entry(ExpenseCategory.PURCHASE_COST, "-300.00", entry_key="pc-dup")
+    )
+    view = service.projection(TENANT, STORE, PERIOD, ProfitScope.FORMAL)
+    assert view.reconciliation_ok is False
+    assert view.sales.status == "blocked"
+    assert view.operating.status == "blocked"
+    assert view.final.status == "blocked"
+    assert view.sales.amount is None
+    assert view.operating.amount is None
+    assert view.final.amount is None

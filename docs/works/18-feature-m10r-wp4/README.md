@@ -116,6 +116,27 @@ git diff --check
 - `python -m pytest -q`（单进程）：**1115 passed / 0 failed**，24 warnings（均为
   `traffic_lab_api.py` 重复 Operation ID 的既有告警，与本分支无关），耗时 1:33:12。
 
+## 2026-08-24 晚间：修复 WP5 复核 4 个 P0 阻断
+
+胡磊第二轮 WP5 复核（head `f2f5627`）指出 4 个 P0 生产阻断，已修复并固化为
+red-first 反例：
+
+1. **final 财务金额统一按权限脱敏（P0-1）**：模型建议输入、对账接口、审计日志
+   三条旁路全部改为——无 `finance:final_profit:read` 时金额置 None/脱敏。对账问题的
+   金额从 `message` 文案移到结构化 `amount` 字段并按 final 层脱敏；审计不再落 final
+   层金额。
+2. **对账失败阻断正式利润（P0-2）**：`projection` 在正式口径下先跑对账，
+   `double_count_ok=false` 时三层利润 `status=blocked`、`amount=None`，不显示精确值。
+3. **信号真正影响预测（P0-3）**：信号 admitted（actual）时，对最终预测点 p50/p80/p95
+   与 horizon_totals 应用 `final_signal_factor`，并写入 `signal_champion_reason`。
+4. **迟到信号不进回测（P0-4）**：`SignalInput` 增加 `signal_as_of`（每条信号的可见
+   时间），Gate 按每个 origin 的 `training_end` 过滤“当时尚未可见”的信号。
+
+- 顺带修复 `chat_sessions` 消息排序竞态：分页排序的 tiebreak 由随机 UUID 改为
+  `rowid`（插入顺序），消除 `test_messages_endpoint_returns_default_page` 偶发失败。
+- 新增 6 个反例测试；全量回归 **1121 passed / 0 failed**（24 warnings 均为既有
+  `traffic_lab_api` Operation ID 告警），耗时 27 分钟。
+
 ## 2026-08-24 下午：决策台销量/预测面板、单品下钻与粒度守卫（补 WP4 验收）
 
 对照任务书 WP4 验收标准补齐，证据随 2026-08-24 截图更新：
@@ -133,7 +154,7 @@ git diff --check
   forecast、inventory snapshot、广告/竞品、费用和单据版本」）：
   需求历史（近 14 天）、最新预测（champion + 7/14/30 P50）、回测（最近 4 origin
   WAPE）、库存计划、相关订购单草稿（含未发送标签）、竞品分析、费用条目。
-- 新增只读接口 `GET /v1/profit/ledger/entries`（`profit_api.py` + 
+- 新增只读接口 `GET /v1/profit/ledger/entries`（`profit_api.py` +
   `ProfitService.list_entries`）：财务最终层金额对无 `finance:final_profit:read`
   权限的管理员脱敏（amount=null、restricted=true）并审计
   `profit.ledger.entries.final_denied`（#11 边界保持一致）。

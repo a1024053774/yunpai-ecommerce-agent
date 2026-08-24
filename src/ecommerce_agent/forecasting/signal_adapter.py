@@ -15,7 +15,7 @@ missing/not_used 处理，禁止补零或伪造信号。
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from statistics import fmean
 from typing import Any, Mapping
@@ -31,6 +31,7 @@ class SignalInput:
     source_kind: SourceKind
     data_as_of: date | None
     source_reference: str | None = None
+    signal_as_of: Mapping[date, date] = field(default_factory=dict)
 
 
 def _as_date(value: str | None) -> date | None:
@@ -100,7 +101,7 @@ class TrafficSignalAdapter:
         if not rows:
             return None
 
-        best_by_day: dict[date, tuple[date, int]] = {}
+        best_by_day: dict[date, tuple[date, int, date | None]] = {}
         latest_as_of: date | None = None
         for row in rows:
             start = _as_date(str(row["metric_start"]))
@@ -113,8 +114,10 @@ class TrafficSignalAdapter:
                 continue
             current = best_by_day.get(start)
             if current is None:
-                best_by_day[start] = (start, int(row["impressions"]))
-            as_of = as_of_dt.date() if as_of_dt is not None else None
+                as_of = as_of_dt.date() if as_of_dt is not None else None
+                best_by_day[start] = (start, int(row["impressions"]), as_of)
+            else:
+                as_of = current[2]
             if latest_as_of is None or (as_of is not None and as_of > latest_as_of):
                 latest_as_of = as_of
 
@@ -123,15 +126,19 @@ class TrafficSignalAdapter:
 
         ordered_days = sorted(best_by_day)
         signal_by_date: dict[date, float] = {}
+        signal_as_of: dict[date, date] = {}
         previous_impressions: list[int] = []
         for day in ordered_days:
             impressions = best_by_day[day][1]
+            day_as_of = best_by_day[day][2]
             if previous_impressions:
                 mean_previous = fmean(previous_impressions)
                 value = round(impressions / max(mean_previous, 1.0), 6)
             else:
                 value = 1.0
             signal_by_date[day] = value
+            if day_as_of is not None:
+                signal_as_of[day] = day_as_of
             previous_impressions.append(impressions)
 
         state = self._field_evidence_state(tenant_id=tenant_id, store_id=store_id)
@@ -146,4 +153,5 @@ class TrafficSignalAdapter:
             source_kind=source_kind,
             data_as_of=latest_as_of,
             source_reference=f"traffic_metric_buckets/{tenant_id}/{store_id}/{sku_id}",
+            signal_as_of=signal_as_of,
         )
