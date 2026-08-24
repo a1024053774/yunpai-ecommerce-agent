@@ -198,6 +198,42 @@ class ProfitService:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def list_entries(
+        self,
+        tenant_id: str,
+        store_id: str,
+        *,
+        sku_id: str | None = None,
+        period: str | None = None,
+        scope: ProfitScope | None = None,
+    ) -> list[dict[str, Any]]:
+        """只读返回 ledger 条目（供决策台单品下钻，D-035 单一账本）。"""
+        clauses = ["tenant_id=?", "store_id=?"]
+        params: list[Any] = [tenant_id, store_id]
+        if sku_id is not None:
+            clauses.append("sku_id=?")
+            params.append(sku_id)
+        if period is not None:
+            clauses.append("period=?")
+            params.append(period)
+        if scope is not None:
+            clauses.append("scope=?")
+            params.append(scope.value)
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT entry_id, period, category, scope, amount, currency,
+                       source_kind, sku_id, order_id, mapping_version,
+                       source_reference, granularity, is_estimated,
+                       reconciliation_status, created_at
+                FROM profit_ledger_entries
+                WHERE {' AND '.join(clauses)}
+                ORDER BY created_at ASC
+                """,
+                tuple(params),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     # ---------- 投影 ----------
 
     def projection(
@@ -222,6 +258,14 @@ class ProfitService:
             return layer_required_categories(layer)
 
         entries = self._entries(tenant_id, store_id, period, scope)
+        declared_granularities = sorted(
+            {str(entry["granularity"]) for entry in entries if entry["granularity"]}
+        )
+        if len(declared_granularities) > 1:
+            # 店铺级/订单级/日/月金额未按批准分摊政策汇总前，禁止静默混粒度。
+            raise ProfitError(
+                "mixed_granularity_projection:" + ",".join(declared_granularities)
+            )
         currencies = {str(entry["currency"]) for entry in entries}
         if len(currencies) > 1:
             raise ProfitError("mixed_currency_projection")

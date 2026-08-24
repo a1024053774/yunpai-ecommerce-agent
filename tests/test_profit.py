@@ -403,3 +403,85 @@ def test_custom_policy_required_categories_respected(tmp_path) -> None:
     assert view.operating.amount == "920.00"
     assert view.final.status == "available"
     assert view.final.amount == "900.00"
+
+
+def _entry_with_granularity(
+    category: ExpenseCategory,
+    amount: str,
+    *,
+    granularity: str | None,
+    sku_id: str | None = None,
+    entry_key: str,
+) -> LedgerEntryInput:
+    return LedgerEntryInput(
+        store_id=STORE,
+        period=PERIOD,
+        category=category,
+        scope=ProfitScope.FORMAL,
+        amount=amount,
+        source_kind="manual",
+        granularity=granularity,
+        sku_id=sku_id,
+        entry_key=entry_key,
+    )
+
+
+def test_mixed_granularity_projection_rejected(tmp_path) -> None:
+    service = make_service(tmp_path)
+    register_default_policy(service)
+    seed_delivered_order(service, "O1")
+    service.record_entry(
+        TENANT, entry(ExpenseCategory.SIGNED_REVENUE, "1000.00", order_id="O1")
+    )
+    service.record_entry(
+        TENANT,
+        _entry_with_granularity(
+            ExpenseCategory.PLATFORM_FEE,
+            "-80.00",
+            granularity="store",
+            entry_key="pf-store",
+        ),
+    )
+    service.record_entry(
+        TENANT,
+        _entry_with_granularity(
+            ExpenseCategory.PLATFORM_FEE,
+            "-10.00",
+            granularity="order",
+            entry_key="pf-order",
+        ),
+    )
+    with pytest.raises(ProfitError) as exc:
+        service.projection(TENANT, STORE, PERIOD, ProfitScope.FORMAL)
+    assert "mixed_granularity_projection" in str(exc.value)
+
+
+def test_ledger_list_entries_filters_by_sku_and_period(tmp_path) -> None:
+    service = make_service(tmp_path)
+    register_default_policy(service)
+    service.record_entry(
+        TENANT,
+        _entry_with_granularity(
+            ExpenseCategory.ADVERTISING_COST,
+            "-50.00",
+            granularity="store",
+            entry_key="ad-1",
+        ),
+    )
+    service.record_entry(
+        TENANT,
+        _entry_with_granularity(
+            ExpenseCategory.PURCHASE_COST,
+            "-30.00",
+            granularity="order",
+            sku_id="SKU-1",
+            entry_key="pc-1",
+        ),
+    )
+    rows = service.list_entries(
+        TENANT, STORE, sku_id="SKU-1", period=PERIOD, scope=ProfitScope.FORMAL
+    )
+    assert len(rows) == 1
+    assert rows[0]["sku_id"] == "SKU-1"
+    assert rows[0]["category"] == ExpenseCategory.PURCHASE_COST.value
+    assert rows[0]["granularity"] == "order"

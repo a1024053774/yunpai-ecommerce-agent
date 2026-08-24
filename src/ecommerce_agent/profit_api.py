@@ -6,8 +6,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from .auth import AdminPrincipal
 from .profit import (
+    CATEGORY_LAYER,
+    ExpenseCategory,
     LedgerEntryInput,
     ProfitError,
+    ProfitLayer,
     ProfitPolicyInput,
     ProfitScope,
     ProfitService,
@@ -100,5 +103,40 @@ def build_profit_router(
         admin: AdminPrincipal = Depends(require_admin),
     ):
         return call(profit.reconcile, admin.tenant_id, store_id, period, scope)
+
+    @router.get("/ledger/entries")
+    def ledger_entries(
+        store_id: str = Query(min_length=1, max_length=128),
+        sku_id: str | None = Query(default=None, min_length=1, max_length=128),
+        period: str | None = Query(default=None, min_length=7, max_length=7),
+        scope: ProfitScope | None = Query(default=None),
+        admin: AdminPrincipal = Depends(require_admin),
+    ) -> list[dict[str, Any]]:
+        """只读单品费用下钻；财务最终层金额对无权限管理员脱敏（#11）。"""
+        can_read_final = "finance:final_profit:read" in admin.capabilities
+        rows = profit.list_entries(
+            admin.tenant_id,
+            store_id,
+            sku_id=sku_id,
+            period=period,
+            scope=scope,
+        )
+        masked = False
+        for row in rows:
+            category = row["category"]
+            layer = CATEGORY_LAYER.get(ExpenseCategory(category))
+            if layer is ProfitLayer.FINAL and not can_read_final:
+                row["amount"] = None
+                row["restricted"] = True
+                masked = True
+        if masked:
+            service.db.audit(
+                "profit.ledger.entries.final_denied",
+                admin.admin_id,
+                store_id,
+                {"sku_id": sku_id, "period": period, "scope": scope.value if scope else None},
+                admin.tenant_id,
+            )
+        return rows
 
     return router

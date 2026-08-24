@@ -414,8 +414,10 @@
           <article class="panel"><div class="panel-head"><h3>利润对账</h3><span class="muted">双算/漏算检查</span></div><div class="panel-body stack" id="m10Reconcile"></div></article>
           <article class="panel"><div class="panel-head"><h3>订购单</h3><span class="muted">V1 未发送边界</span></div><div class="table-wrap"><table><thead><tr><th>单据</th><th>状态</th><th>建议/确认数量</th><th>料号</th><th>标签</th></tr></thead><tbody id="m10OrderRows"></tbody></table></div></article>
           <article class="panel"><div class="panel-head"><h3>库存风险</h3><span class="muted">来自固化库存计划</span></div><div class="table-wrap"><table><thead><tr><th>SKU</th><th>级别</th><th>说明</th></tr></thead><tbody id="m10RiskRows"></tbody></table></div></article>
+          <article class="panel"><div class="panel-head"><h3>销量趋势与预测</h3><span class="muted">来自需求事实与固化预测，只读；点击 SKU 行可下钻</span></div><div class="table-wrap"><table><thead><tr><th>SKU</th><th>近7日需求</th><th>近30日需求</th><th>预测 7/14/30 日</th><th>状态</th></tr></thead><tbody id="m10TrendRows"></tbody></table></div></article>
           <article class="panel"><div class="panel-head"><h3>广告 ROI 可用性</h3></div><div class="panel-body" id="m10Marketing"></div></article>
           <article class="panel"><div class="panel-head"><h3>经营建议（只读，需人工确认）</h3><span class="muted">建议由固化事实推导，页面无执行按钮</span></div><div class="panel-body stack" id="m10Suggestions"></div></article>
+          <article class="panel" id="m10SkuPanel" style="display:none;margin-top:14px"><div class="panel-head"><h3>单品下钻<span id="m10SkuTitle"></span></h3><span class="muted">需求 / 预测 / 回测 / 库存计划 / 订购单 / 竞品 / 费用（同一账本，只读）</span></div><div class="panel-body stack" id="m10SkuDetail"></div></article>
         </section>
 
         <section class="view" id="view-orders">
@@ -2734,6 +2736,7 @@ const titles = { overview: '经营总览', service: '智能客服', commerce: '�
         ['订购单', String(drafts.length), `${unsent.length} 张待确认`],
         ['对账', reconcile?.double_count_ok ? '通过' : '未通过', `${reconcile?.entry_count ?? 0} 条 ledger`],
       ].map(([label, value, meta]) => `<div class="kpi"><span class="label">${escapeHtml(label)}</span><span class="value">${escapeHtml(String(value))}</span><span class="meta">${escapeHtml(meta)}</span></div>`).join('');
+      loadM10Trend(store);
     }
 
     document.querySelectorAll('.nav button').forEach((node) => node.addEventListener('click', () => switchView(node.dataset.view)));
@@ -3477,5 +3480,122 @@ const titles = { overview: '经营总览', service: '智能客服', commerce: '�
     }
     bootstrapConsole();
   </script>
-</body>
+
+  <script>
+    async function loadM10Trend(store) {
+      const rowsEl = $('m10TrendRows');
+      if (!rowsEl) return;
+      rowsEl.innerHTML = '<tr><td colspan="5"><div class="muted">正在加载销量与预测…</div></td></tr>';
+      const q2 = (name, value) => `${name}=${encodeURIComponent(value)}`;
+      try {
+        const [drafts, risks] = await Promise.all([
+          api(`/v1/ordering/drafts?${q2('store_id', store)}&limit=50`).catch(() => []),
+          api(`/v1/forecasting/risks?${q2('store_id', store)}&limit=20`).catch(() => []),
+        ]);
+        const skuSet = new Set();
+        (drafts || []).forEach((d) => d.sku_id && skuSet.add(d.sku_id));
+        (risks || []).forEach((r) => (r.sku_id || r.sku) && skuSet.add(r.sku_id || r.sku));
+        const skus = Array.from(skuSet).slice(0, 6);
+        if (!skus.length) {
+          rowsEl.innerHTML = '<tr><td colspan="5"><div class="empty">暂无 SKU 数据；先运行预测或生成订购草稿</div></td></tr>';
+          return;
+        }
+        const today = new Date();
+        const fmt = (d) => d.toISOString().slice(0, 10);
+        const start7 = new Date(today); start7.setDate(today.getDate() - 7);
+        const start30 = new Date(today); start30.setDate(today.getDate() - 30);
+        const rows = [];
+        for (const sku of skus) {
+          const [demand, forecast] = await Promise.all([
+            api(`/v1/forecasting/demand?${q2('store_id', store)}&${q2('sku_id', sku)}&${q2('start_date', fmt(start30))}`).catch(() => null),
+            api(`/v1/forecasting/skus/${encodeURIComponent(sku)}/forecast?${q2('store_id', store)}`).catch(() => null),
+          ]);
+          const facts = demand && demand.facts ? demand.facts : [];
+          const cutoff = (days) => fmt(days);
+          const sum = (days) => facts.filter((f) => f.business_date >= cutoff(days)).reduce((s, f) => s + (Number(f.eligible_units) || 0), 0);
+          const d7 = sum(start7), d30 = sum(start30);
+          const ht = forecast && forecast.horizon_totals ? forecast.horizon_totals : {};
+          const pred = (ht && (ht['7'] != null || ht['14'] != null || ht['30'] != null))
+            ? `${ht['7'] ? Math.round(ht['7'].p50 ?? 0) : '-'}/${ht['14'] ? Math.round(ht['14'].p50 ?? 0) : '-'}/${ht['30'] ? Math.round(ht['30'].p50 ?? 0) : '-'}`
+            : (forecast ? '已出预测' : '未运行');
+          const status = forecast ? (forecast.status || 'completed') : '未运行';
+          rows.push(`<tr data-sku="${escapeHtml(sku)}" style="cursor:pointer"><td>${escapeHtml(sku)}</td><td>${d7}</td><td>${d30}</td><td>${escapeHtml(String(pred))}</td><td><span class="status ${status === 'completed' ? 'ok' : 'warn'}">${escapeHtml(status)}</span></td></tr>`);
+        }
+        rowsEl.innerHTML = rows.join('') + '<tr><td colspan="5"><div class="muted">点击任意 SKU 行可下钻明细</div></td></tr>';
+      } catch (err) {
+        rowsEl.innerHTML = '<tr><td colspan="5"><div class="notice">销量/预测加载失败：' + escapeHtml(err.message || '接口错误') + '</div></td></tr>';
+      }
+    }
+
+    async function openM10Sku(sku) {
+      const panel = $('m10SkuPanel');
+      const detail = $('m10SkuDetail');
+      if (!panel || !detail) return;
+      const store = $('m10Store').value.trim();
+      const q2 = (name, value) => `${name}=${encodeURIComponent(value)}`;
+      panel.style.display = '';
+      $('m10SkuTitle').textContent = `：${sku}`;
+      detail.innerHTML = '<div class="muted">正在加载明细…</div>';
+      const [demand, forecast, backtest, plan, drafts, comp, ledger] = await Promise.all([
+        api(`/v1/forecasting/demand?${q2('store_id', store)}&${q2('sku_id', sku)}&include_history=true`).catch(() => null),
+        api(`/v1/forecasting/skus/${encodeURIComponent(sku)}/forecast?${q2('store_id', store)}`).catch(() => null),
+        api(`/v1/forecasting/skus/${encodeURIComponent(sku)}/backtest?${q2('store_id', store)}`).catch(() => null),
+        api(`/v1/forecasting/skus/${encodeURIComponent(sku)}/inventory-plan?${q2('store_id', store)}`).catch(() => null),
+        api(`/v1/ordering/drafts?${q2('store_id', store)}&limit=50`).catch(() => []),
+        api(`/v1/competitive/analysis?${q2('subject_sku', sku)}&${q2('store_id', store)}`).catch(() => null),
+        api(`/v1/profit/ledger/entries?${q2('store_id', store)}&${q2('sku_id', sku)}&scope=formal`).catch(() => null),
+      ]);
+      const facts = demand && demand.facts ? demand.facts.slice(-14) : [];
+      const demandHtml = facts.length
+        ? '<table class="mini"><thead><tr><th>日期</th><th>需求</th><th>缺货</th></tr></thead><tbody>' +
+          facts.map((f) => `<tr><td>${escapeHtml(f.business_date)}</td><td>${escapeHtml(String(f.eligible_units ?? '-'))}</td><td>${escapeHtml(f.stockout_flag || '')}</td></tr>`).join('') +
+          '</tbody></table>'
+        : '<div class="empty">无需求事实</div>';
+      const ht = forecast && forecast.horizon_totals ? forecast.horizon_totals : {};
+      const forecastHtml = forecast
+        ? `<div>状态：${escapeHtml(forecast.status || '')} · champion：${escapeHtml(forecast.champion_model || '-')} · 预测 7/14/30（P50）：${escapeHtml(String(ht['7'] ? Math.round(ht['7'].p50 ?? 0) : '-') + '/' + String(ht['14'] ? Math.round(ht['14'].p50 ?? 0) : '-') + '/' + String(ht['30'] ? Math.round(ht['30'].p50 ?? 0) : '-'))}</div>`
+        : '<div class="empty">未运行预测</div>';
+      const backtests = Array.isArray(backtest) ? backtest : (backtest && backtest.backtests ? backtest.backtests : []);
+      const backtestHtml = backtests.length
+        ? backtests.slice(0, 4).map((b) => `<div>${escapeHtml(b.origin_date || '')} · ${escapeHtml(b.model_name || '')} · WAPE ${escapeHtml(b.metrics && b.metrics.wape != null ? b.metrics.wape : '-')}</div>`).join('')
+        : '<div class="empty">暂无回测</div>';
+      const planHtml = plan
+        ? `<div>建议补货 ${escapeHtml(String(plan.recommended_order_qty ?? '-'))} · 状态 ${escapeHtml(plan.quantity_status || '')} · 模式 ${escapeHtml(plan.action_mode || '')}</div>`
+        : '<div class="empty">暂无库存计划</div>';
+      const draftRows = (Array.isArray(drafts) ? drafts : []).filter((d) => d.sku_id === sku);
+      const draftHtml = draftRows.length
+        ? draftRows.map((d) => `<div>${escapeHtml(String(d.order_draft_id || '').slice(0, 12))} · ${escapeHtml(d.status)} · 建议 ${escapeHtml(String(d.recommended_qty))} · ${escapeHtml(d.unsent_label || '')}</div>`).join('')
+        : '<div class="empty">无订购单草稿</div>';
+      const compHtml = comp
+        ? `<div>竞品分析可用（${escapeHtml(String((comp.prices && comp.prices.length) || 0))} 条价格对比）</div>`
+        : '<div class="empty">暂无竞品分析</div>';
+      const ledgerRows = Array.isArray(ledger) ? ledger : [];
+      const ledgerHtml = ledgerRows.length
+        ? '<table class="mini"><thead><tr><th>类别</th><th>金额</th><th>粒度</th><th>状态</th></tr></thead><tbody>' +
+          ledgerRows.map((e) => `<tr><td>${escapeHtml(e.category)}</td><td>${escapeHtml(String(e.amount ?? '受限'))}</td><td>${escapeHtml(e.granularity || '未声明')}</td><td>${escapeHtml(e.reconciliation_status || '')}</td></tr>`).join('') +
+          '</tbody></table>'
+        : '<div class="empty">无费用条目</div>';
+      const totalDemand = facts.reduce((s, f) => s + (Number(f.eligible_units) || 0), 0);
+      detail.innerHTML = `<div class="grid kpis" style="margin:0 0 10px">` +
+        `<div class="kpi"><span class="label">近14日需求</span><span class="value">${totalDemand}</span></div>` +
+        `<div class="kpi"><span class="label">预测状态</span><span class="value">${forecast ? (forecast.status || 'completed') : '未运行'}</span></div>` +
+        `<div class="kpi"><span class="label">订购单</span><span class="value">${draftRows.length}</span></div>` +
+        `<div class="kpi"><span class="label">费用条目</span><span class="value">${ledgerRows.length}</span></div></div>` +
+        `<div class="stack"><h4>需求历史（近 14 天）</h4>${demandHtml}</div>` +
+        `<div class="stack"><h4>最新预测</h4>${forecastHtml}</div>` +
+        `<div class="stack"><h4>回测（最近 4 个 origin）</h4>${backtestHtml}</div>` +
+        `<div class="stack"><h4>库存计划</h4>${planHtml}</div>` +
+        `<div class="stack"><h4>相关订购单</h4>${draftHtml}</div>` +
+        `<div class="stack"><h4>竞品分析</h4>${compHtml}</div>` +
+        `<div class="stack"><h4>费用条目（同一账本）</h4>${ledgerHtml}</div>`;
+      detail.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    document.addEventListener('click', (e) => {
+      const row = e.target.closest('[data-sku]');
+      if (row) openM10Sku(row.getAttribute('data-sku'));
+    });
+
+  </script>
+  </body>
 </html>

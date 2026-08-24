@@ -109,5 +109,53 @@ git diff --check
 
 ### 未完成（记录在案）
 
-- WP4 决策台仍缺“店铺/单品销量趋势 + 预测”面板与点击单品下钻（后续 WP）。
-- 利润投影的粒度混用守卫（店铺级/订单级金额不静默混算）未实现。
+- 全量回归未重跑（需 30–60 分钟）；WP5 独立验收未执行；两者完成前不构成
+  M10-R 签署或生产放行。
+
+## 2026-08-24 下午：决策台销量/预测面板、单品下钻与粒度守卫（补 WP4 验收）
+
+对照任务书 WP4 验收标准补齐，证据随 2026-08-24 截图更新：
+
+### 销量趋势与预测面板
+
+- 经营决策台新增「销量趋势与预测」面板（任务书「展示店铺与单品销量趋势、预测、
+  库存健康、广告 ROI、三层利润和订购单」）：按 SKU 展示近 7/30 日需求事实合计与
+  最新预测 7/14/30 日 P50，预测状态（completed/degraded/未运行）；数据全部来自
+  需求事实与固化 forecast run，只读、不隐式重跑。
+
+### 点击单品下钻
+
+- 点击趋势面板任意 SKU 行打开「单品下钻」面板（任务书「点击单品可追到订单/需求、
+  forecast、inventory snapshot、广告/竞品、费用和单据版本」）：
+  需求历史（近 14 天）、最新预测（champion + 7/14/30 P50）、回测（最近 4 origin
+  WAPE）、库存计划、相关订购单草稿（含未发送标签）、竞品分析、费用条目。
+- 新增只读接口 `GET /v1/profit/ledger/entries`（`profit_api.py` + 
+  `ProfitService.list_entries`）：财务最终层金额对无 `finance:final_profit:read`
+  权限的管理员脱敏（amount=null、restricted=true）并审计
+  `profit.ledger.entries.final_denied`（#11 边界保持一致）。
+
+### 利润粒度混用守卫
+
+- `ProfitService.projection` 新增确定性守卫：同一投影内存在 ≥2 种已声明粒度
+  （store/order/day/month 等）时抛 `mixed_granularity_projection`，拒绝静默
+  混算（任务书「单品、订单、日/月和店铺级金额只能按明确分摊政策汇总，不能静默
+  混粒度」）；等批准的分摊政策落地后再放行。
+
+### 验证
+
+- 新增测试：`test_mixed_granularity_projection_rejected`、
+  `test_ledger_list_entries_filters_by_sku_and_period`，
+  `test_ledger_entries_api_masks_final_without_capability`、
+  `test_ledger_entries_api_shows_final_with_capability`。
+- M10 定向回归 10 个文件：**88 passed**；compileall / git diff --check 通过。
+- 本地演示数据（不入库）：为 e2e-store/E2E-SKU 补 60 天需求事实并通过正式 API
+  `POST /v1/forecasting/runs` 生成 forecast（champion=croston，7/14/30 P50=
+  87/174/372，信号 admission=insufficient_evidence/not_used —— 生产无信号路径
+  正常）；截图覆盖正式口径、单品下钻、演示口径。
+
+### 浏览器证据
+
+- `screenshots/m10-decision-formal-20260824.png`：三层利润 + 销量趋势与预测面板。
+- `screenshots/m10-decision-drilldown-20260824.png`：点击 E2E-SKU 后的单品下钻
+  （需求历史/预测/回测/订购单/竞品/费用）。
+- `screenshots/m10-decision-demo-20260824.png`：演示口径全链标签。

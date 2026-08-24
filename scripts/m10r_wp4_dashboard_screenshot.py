@@ -53,6 +53,17 @@ def main() -> int:
             path=str(OUT_DIR / "m10-decision-formal-20260824.png"),
             full_page=True,
         )
+        page.click("#m10TrendRows tr[data-sku]")
+        page.wait_for_function(
+            "document.getElementById('m10SkuPanel').style.display !== 'none' "
+            "&& document.querySelectorAll('#m10SkuDetail h4').length >= 4",
+            timeout=30000,
+        )
+        page.wait_for_timeout(800)
+        page.screenshot(
+            path=str(OUT_DIR / "m10-decision-drilldown-20260824.png"),
+            full_page=True,
+        )
         page.select_option("#m10Scope", "demo")
         page.click("#loadM10Decision")
         page.wait_for_timeout(1000)
