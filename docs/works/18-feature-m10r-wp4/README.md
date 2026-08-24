@@ -159,3 +159,17 @@ git diff --check
 - `screenshots/m10-decision-drilldown-20260824.png`：点击 E2E-SKU 后的单品下钻
   （需求历史/预测/回测/订购单/竞品/费用）。
 - `screenshots/m10-decision-demo-20260824.png`：演示口径全链标签。
+
+### 反例 / 变异测试（mutation 红→绿，WP5 验收要求）
+
+破坏关键边界时应失败、还原后恢复通过。2026-08-24 复核 5 项，均满足：
+
+| 边界 | 破坏方式 | 破坏后测试 | 还原后 |
+|---|---|---|---|
+| 信号门禁未来泄漏 | 把“未来日期拦截”改成恒不拦截 | `test_future_signal_is_rejected_as_leakage` 失败（返回 insufficient_evidence） | 通过 |
+| 信号适配器 SKU 隔离 | 把 `r.sku_id=?` 改成恒真 | `test_cross_store_and_sku_isolated` 失败（跨 SKU 串数据） | 通过 |
+| 利润粒度混用守卫 | 把守卫改成恒不触发 | `test_mixed_granularity_projection_rejected` 失败（不再抛错） | 通过 |
+| final 净利润服务端脱敏 | 把权限判断改成恒假 | `test_final_profit_capability_default_denies` 失败（restricted 变 False） | 通过 |
+| 模型建议“未启用即不可用” | 把禁用判断改成恒假 | `test_model_disabled_returns_unavailable_without_calling_model` 失败（available 变 True） | 通过 |
+
+全部还原后，相关 5 个测试文件 42 passed。
