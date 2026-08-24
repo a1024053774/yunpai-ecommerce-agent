@@ -30,6 +30,7 @@ from .channel_sdk.taobao_adapter import TaobaoChannelAdapter
 from .config import Settings
 from .context_builder import ContextBuilder
 from .database import Database, SessionScopeError, utc_now
+from .decision_advisor import DecisionAdvisorService
 from .disaster_recovery import DataDirectoryLock
 from .evaluation import EvaluationRunRequest, EvaluationService
 from .graph import MODEL_UNAVAILABLE_HANDOFF_ANSWER, build_graph, verify_response
@@ -98,6 +99,7 @@ class AgentService:
             # 现在 kg-* 知识进入 RAG 检索，222 节点知识图谱真正服务客服。
             self.kg_import_stats = self._import_knowledge_assets()
             self.model = ModelGateway(self.settings)
+            self.decision_advisor = DecisionAdvisorService(self.model)
             self.handoff_staffing = HandoffStaffingService(self.db)
             self.handoffs = HandoffService(self.db, self.handoff_staffing)
             self.handoffs.ensure_default_queues(self.settings.bootstrap_tenant_id)

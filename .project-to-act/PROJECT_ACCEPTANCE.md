@@ -5,6 +5,17 @@
 
 ## 当前验收结论
 
+- 结论：2026-08-24 M10-R WP1～WP4 代码候选在 PR #24 分支
+  `feature/m10r-wp4-profit-ledger` 上补齐闫睿涵最终门禁 #9/#10：真实外生信号
+  生产接线（`signal_adapter.py` 按 tenant/store/SKU/date 隔离接入 SignalGate，
+  无信号显式 missing/not_used）与结构化经营建议入口（`/v1/decision/suggestions`
+  复用 ModelGateway，禁用/失败显式“模型建议不可用”，移除浏览器 if/else 语义
+  建议）；#11 final 净利润最小 capability 已在前序 head 完成。证据 ID
+  E-20260824-001（`docs/works/18-feature-m10r-wp4/README.md` + 截图）。M10 定向
+  回归 84 passed、compileall/diff-check 通过；真实模型 smoke（DeepSeek 测试 key，
+  仅环境变量注入）返回 3 条中文结构化建议。未完成：WP5 独立验收、全量回归重跑、
+  决策台销量/预测面板与单品下钻、利润粒度混用守卫；不构成正式签署或生产放行。
+
 - 结论：2026-08-20 M7-R WP1～WP4 已在固定代码对象上通过 WP5 代码级、本机技术 Gate，
   PR #20 已合入 `main`，证据 ID 为 E-20260820-001。WP1 因是 M8-R～M10-R 共用基建而
   先行合入，PR base `48013b1` 已包含 WP1；缪海南独立验收的 WP2～WP4 head 为

@@ -58,3 +58,56 @@ git diff --check
   （Playwright + Edge headless）产出 `screenshots/m10-decision-formal-20260821.png`
   与 `m10-decision-demo-20260821.png`，DOM 校验 KPI/三层利润/对账/建议卡片均已渲染。
 - 剩余：经营建议卡片的模型解释接入（模型 key 配置后）。
+
+## 2026-08-24 门禁 #9/#10 补交付（PR #24 最终门禁）
+
+按闫睿涵最终门禁方案补齐生产消费入口，证据日期 2026-08-24：
+
+### #9 真实外生信号接生产 Gate
+
+- 新增 `src/ecommerce_agent/forecasting/signal_adapter.py`：
+  `TrafficSignalAdapter` 把 M7-R 已落库的日级流量事实投影为候选信号序列，
+  严格按 tenant/store/SKU/date 隔离（经 `listing_revisions` 绑定 SKU）；
+  信号值=当日曝光/此前曝光均值（只依赖过去，构造上无未来泄漏）；
+  只使用 `data_as_of >= metric_end` 的行；无字段证据按行存在推断 actual，
+  字段证据为 manual/demo 时对应降级。
+- `ForecastRunService.run()` 生产路径不再硬编码空信号：无真实信号时返回
+  missing/not_used（baseline 照跑），有信号时送 `SignalGate` 无泄漏准入，
+  结果写入 run 的 `signal_candidates` / `signal_champion_reason`。
+- 反例测试 `tests/test_signal_adapter.py`（8 个）：空数据→None、跨店/SKU 错配
+  隔离、陈旧 as-of 丢弃、demo 证据降级、未来泄漏拒绝、劣于 baseline 拒绝等。
+
+### #10 结构化经营建议接模型
+
+- 新增 `src/ecommerce_agent/decision_advisor.py`：复用 `ModelGateway.generate_json`，
+  输入为固化事实（利润投影/对账/订购单/库存风险/营销可用性），输出
+  “建议/依据/数据缺口/确认人/下一步”结构化卡片；模型只解释、绝不修改任何数值。
+- 新增 `POST /v1/decision/suggestions`（`decision_api.py`，审计 `decision.suggestions.requested`）。
+- MODEL_ENABLED=false、无模型、超时或输出不合法时显式返回
+  `available=false` + 机器可读 reason（“模型建议不可用”），并移除浏览器
+  `if/else` 语义建议（D-034/门禁 #10-3）。
+- 测试 `tests/test_decision_advisor.py`（6 个）：禁用/无模型/错误/非法输出反例、
+  固定模型替身成功路径、事实不可变、API 降级与审计。
+- 真实模型 smoke（DeepSeek 测试 key，仅环境变量注入、未提交未落盘）：
+  `POST /v1/decision/suggestions` 返回 3 条中文结构化建议，依据/缺口/确认人
+  与页面事实一致。
+
+### 浏览器证据（重出）
+
+- 截图 `screenshots/m10-decision-formal-20260824.png` /
+  `m10-decision-demo-20260824.png`（Playwright + Edge headless）：
+  正式口径三层利润 500.00 / 330.00 / 310.00 可用、对账双算检测、订购单
+  “未发送（演示参数）”标签、3 条真实模型建议；demo 口径全链“试算（演示参数）”。
+- 管理台 final 净利润“受限”展示修复：无 `finance:final_profit:read` 时显示
+  “受限”而非“缺失”；本机截图通过 `FINAL_PROFIT_READ_ADMIN_IDS=local-admin`
+  显式开发配置授予后展示完整三层利润（#11 边界不变，默认仍拒绝）。
+
+### 验证
+
+- 定向回归（9 个测试文件，含本次新增）：`84 passed`；`compileall` 退出 0；
+  `git diff --check` 无输出。
+
+### 未完成（记录在案）
+
+- WP4 决策台仍缺“店铺/单品销量趋势 + 预测”面板与点击单品下钻（后续 WP）。
+- 利润投影的粒度混用守卫（店铺级/订单级金额不静默混算）未实现。

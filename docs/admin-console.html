@@ -2705,7 +2705,7 @@ const titles = { overview: '经营总览', service: '智能客服', commerce: '�
           ['经营利润', projection.operating],
           ['财务最终净利润', projection.final],
         ];
-        $('m10ProfitRows').innerHTML = layerMeta.map(([name, layer]) => `<tr><td>${escapeHtml(name)}</td><td><span class="status ${layer.status === 'available' ? 'ok' : 'warn'}">${layer.status === 'available' ? '可用' : '缺失'}</span></td><td>${escapeHtml(layer.amount ?? '-')}</td><td>${layer.missing_fields.length ? layer.missing_fields.map(escapeHtml).join('、') : '-'}</td></tr>`).join('');
+        $('m10ProfitRows').innerHTML = layerMeta.map(([name, layer]) => `<tr><td>${escapeHtml(name)}</td><td><span class="status ${layer.restricted ? 'warn' : (layer.status === 'available' ? 'ok' : 'warn')}">${layer.restricted ? '受限' : (layer.status === 'available' ? '可用' : '缺失')}</span></td><td>${escapeHtml(layer.amount ?? '-')}</td><td>${layer.missing_fields.length ? layer.missing_fields.map(escapeHtml).join('、') : '-'}</td></tr>`).join('');
         $('m10Reconcile').innerHTML = reconcile.double_count_ok
           ? `<div class="notice">对账通过：${reconcile.entry_count} 条 ledger 无重复/漏算问题</div>`
           : `<div class="notice"><strong>对账未通过</strong>${reconcile.issues.map((issue) => `<div>${escapeHtml(issue.message)}</div>`).join('')}</div>`;
@@ -2721,66 +2721,16 @@ const titles = { overview: '经营总览', service: '智能客服', commerce: '�
         : '<div class="notice">广告 ROI 暂不可核算：无营销数据或接口未就绪（M9-R 数据接入后可用）</div>';
       const unsent = drafts.filter((draft) => draft.status === 'draft' || draft.status === 'awaiting_confirmation');
       const criticalRisks = risks.filter((risk) => ['high', 'critical'].includes(risk.risk_level || risk.severity || ''));
-      const suggestions = [];
-      const missingLayer = projection ? [projection.sales, projection.operating, projection.final].find((layer) => layer.status === 'missing') : null;
-      if (!projection) {
-        suggestions.push({
-          title: '利润暂不可核算',
-          body: '利润政策未登记或投影不可用；请先通过 /v1/profit/policies 登记政策。',
-          basis: '利润接口',
-          gap: '利润政策登记',
-          owner: '管理员人工确认',
-        });
-      } else if (missingLayer) {
-        suggestions.push({
-          title: '利润暂不可核算',
-          body: `缺少：${missingLayer.missing_fields.join('、')}。缺失费用不得按 0 处理。`,
-          basis: projection.scope === 'demo' ? '演示参数' : '正式 ledger',
-          gap: missingLayer.missing_fields.join('、'),
-          owner: '管理员人工确认',
-        });
+      const decisionResp = await api(`/v1/decision/suggestions`, { method: 'POST', body: JSON.stringify({ store_id: store, period, scope }) }).catch(() => null);
+      if (decisionResp && decisionResp.available && decisionResp.suggestions.length) {
+        $('m10Suggestions').innerHTML = decisionResp.suggestions.map((s) => `<div class="panel" style="margin:0 0 10px"><div class="panel-head"><strong>${escapeHtml(s.suggestion)}</strong></div><div class="panel-body stack"><div>${escapeHtml(s.basis)}</div><div class="muted">数据缺口：${(s.data_gaps || []).map(escapeHtml).join('、') || '无'} · 需确认：${escapeHtml(s.owner)} · 下一步：${escapeHtml(s.next_step)}</div></div></div>`).join('');
+      } else {
+        $('m10Suggestions').innerHTML = `<div class="notice">模型建议不可用（${escapeHtml(decisionResp ? decisionResp.reason || '模型未启用或未配置密钥' : '接口未就绪')}）。页面不生成未经模型解释的经营建议。</div>`;
       }
-      if (unsent.length) {
-        suggestions.push({
-          title: `${unsent.length} 张订购单待人工确认`,
-          body: '系统只生成草稿，绝不自动下单；请人工核对数量与交期。',
-          basis: `/v1/ordering/drafts（${store}）`,
-          gap: '人工确认后进入 confirmed',
-          owner: '管理员人工确认',
-        });
-      }
-      if (criticalRisks.length) {
-        suggestions.push({
-          title: `${criticalRisks.length} 项库存风险需关注`,
-          body: '来自固化库存计划的缺货/滞销风险，建议结合预测与订购单复核。',
-          basis: `/v1/forecasting/risks（${store}）`,
-          gap: '真实库存快照完整性',
-          owner: '管理员人工确认',
-        });
-      }
-      if (!marketing || !marketing.length) {
-        suggestions.push({
-          title: '广告 ROI 不可核算',
-          body: '缺少营销数据，无法评估投放效率；数据接入前不猜测。',
-          basis: '营销接口',
-          gap: 'M9-R 营销数据接入',
-          owner: '管理员人工确认',
-        });
-      }
-      if (!suggestions.length) {
-        suggestions.push({
-          title: '当前无待处理建议',
-          body: '利润可核算、订购单无待确认、无高危库存风险。',
-          basis: '决策台只读事实',
-          gap: '无',
-          owner: '管理员',
-        });
-      }
-      $('m10Suggestions').innerHTML = suggestions.map((suggestion) => `<div class="panel" style="margin:0 0 10px"><div class="panel-head"><strong>${escapeHtml(suggestion.title)}</strong></div><div class="panel-body stack"><div>${escapeHtml(suggestion.body)}</div><div class="muted">依据：${escapeHtml(suggestion.basis)} · 缺口：${escapeHtml(suggestion.gap)} · 需确认：${escapeHtml(suggestion.owner)}</div></div></div>`).join('');
       $('m10Kpis').innerHTML = [
         ['销售利润', projection?.sales.amount ?? '-', projection?.sales.status === 'available' ? '可用' : '缺失'],
         ['经营利润', projection?.operating.amount ?? '-', projection?.operating.status === 'available' ? '可用' : '缺失'],
-        ['财务最终净利润', projection?.final.amount ?? '-', projection?.final.status === 'available' ? '可用' : '缺失'],
+        ['财务最终净利润', projection?.final.amount ?? '-', projection?.final.restricted ? '受限' : (projection?.final.status === 'available' ? '可用' : '缺失')],
         ['订购单', String(drafts.length), `${unsent.length} 张待确认`],
         ['对账', reconcile?.double_count_ok ? '通过' : '未通过', `${reconcile?.entry_count ?? 0} 条 ledger`],
       ].map(([label, value, meta]) => `<div class="kpi"><span class="label">${escapeHtml(label)}</span><span class="value">${escapeHtml(String(value))}</span><span class="meta">${escapeHtml(meta)}</span></div>`).join('');

@@ -37,20 +37,27 @@ def main() -> int:
             page.click('#loginForm button[type="submit"]')
             page.wait_for_timeout(600)
         page.click('button[data-view="m10-decision"]')
+        page.fill("#m10Store", "e2e-store")
+        page.fill("#m10Period", "2026-08")
+        page.click("#loadM10Decision")
+        page.wait_for_function(
+            "document.querySelectorAll('#m10Suggestions .panel, #m10Suggestions .notice').length >= 1",
+            timeout=45000,
+        )
         page.wait_for_function(
             "document.querySelectorAll('#m10Kpis .kpi').length >= 5",
             timeout=20000,
         )
         page.wait_for_timeout(600)
         page.screenshot(
-            path=str(OUT_DIR / "m10-decision-formal-20260821.png"),
+            path=str(OUT_DIR / "m10-decision-formal-20260824.png"),
             full_page=True,
         )
         page.select_option("#m10Scope", "demo")
         page.click("#loadM10Decision")
         page.wait_for_timeout(1000)
         page.screenshot(
-            path=str(OUT_DIR / "m10-decision-demo-20260821.png"),
+            path=str(OUT_DIR / "m10-decision-demo-20260824.png"),
             full_page=True,
         )
         browser.close()

@@ -16,6 +16,7 @@ from ..database import Database, utc_now
 from ..evidence_freshness import evidence_freshness
 from .engine import ForecastEngine, ForecastPolicy
 from .models import DEMAND_V1
+from .signal_adapter import SignalInput, TrafficSignalAdapter
 from .signal_gate import SignalGate, SignalGateResult
 from ..readonly_data.contracts import SourceKind
 
@@ -60,10 +61,14 @@ class ForecastRunService:
         *,
         facts: DemandFactReader,
         engine: ForecastEngine | None = None,
+        signal_adapter: Any | None = None,
     ) -> None:
         self.db = db
         self.facts = facts
         self.engine = engine or ForecastEngine()
+        self._signal_adapter = (
+            signal_adapter if signal_adapter is not None else TrafficSignalAdapter(db)
+        )
 
     def resolve_policy(
         self, tenant_id: str, *, store_id: str, sku_id: str
@@ -143,12 +148,24 @@ class ForecastRunService:
             or item.get("final_forecast_failure_reason") is not None
         ]
         if signal_gate_result is None:
-            signal_gate_result = SignalGate().evaluate(
-                baseline_rows=evaluation["backtests"],
-                signal_by_date={},
-                source_kind=SourceKind.MANUAL,
-                data_as_of=None,
+            signal_input: SignalInput | None = self._signal_adapter.load(
+                tenant_id=tenant_id, store_id=store_id, sku_id=sku_id
             )
+            if signal_input is None or not signal_input.signal_by_date:
+                # 无真实候选信号：保持 missing/not_used，baseline 照跑，禁止补零或伪造。
+                signal_gate_result = SignalGate().evaluate(
+                    baseline_rows=evaluation["backtests"],
+                    signal_by_date={},
+                    source_kind=SourceKind.MANUAL,
+                    data_as_of=None,
+                )
+            else:
+                signal_gate_result = SignalGate().evaluate(
+                    baseline_rows=evaluation["backtests"],
+                    signal_by_date=signal_input.signal_by_date,
+                    source_kind=signal_input.source_kind,
+                    data_as_of=signal_input.data_as_of,
+                )
         anomalies = self._anomalies(input_issues, evaluation, model_failures)
         status = (
             "degraded"
