@@ -15,7 +15,8 @@
   与事实精确比对；简化 SYSTEM_PROMPT 后真实模型稳定返回 3 条建议。
 - **验证**：`tests/test_decision_advisor.py` 10 passed（含引用不在 catalog、
   数值不匹配、格式非法反例）；真实模型 smoke 返回 3 条建议且引用全部合法。
-- **复核截图**：见 `screenshots/m10-fix-suggestions-evidence-20260825.png`。
+- **修复前截图**：`screenshots/m10-bug1-before-20260825.png`（模型建议不可用 model_error）。
+- **修复后截图**：`screenshots/m10-fix-suggestions-evidence-20260825.png`（3 条建议、含“证据：”引用行）。
 
 ## BUG-2：决策台切换店铺/期间后旧经营建议残留
 
@@ -25,7 +26,8 @@
 - **修复方式**：`admin-console.html` 改为每次刷新决策台都无条件把建议面板重置为
   “点击‘生成经营建议’…”提示；切换店铺/期间不再串显示旧建议。
 - **验证**：Playwright 注入标记后切换店铺 → 标记消失、面板回到提示。
-- **复核截图**：见 `screenshots/m10-fix-suggestions-reset-20260825.png`。
+- **修复前截图**：`screenshots/m10-bug2-before-20260825.png`（切换店铺后旧建议残留）。
+- **修复后截图**：`screenshots/m10-fix-suggestions-reset-20260825.png`（切换店铺后已重置为提示）。
 
 ## BUG-3：交期证据 source_reference 纯空白可绕过
 
@@ -36,7 +38,8 @@
   `test_formal_gate_blocks_blank_source_transport_evidence`（空白来源 → Gate 阻断）。
 - **验证**：`tests/test_purchase_order.py` 22 passed；全量回归
   **1130 passed / 0 failed**（29:46），compileall / git diff --check 通过。
-- **复核截图**：见 `screenshots/m10-fix-verification-20260825.png`。
+- **修复前截图**：`screenshots/m10-bug3-before-20260825.png`（反例测试红：空白来源未阻断）。
+- **修复后截图**：`screenshots/m10-bug3-after-20260825.png`（反例测试绿：空白来源被阻断）。
 
 ## 总验证
 
