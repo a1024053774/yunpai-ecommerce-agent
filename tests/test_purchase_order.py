@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -304,6 +305,32 @@ def test_formal_gate_blocks_blank_source_transport_evidence(tmp_path) -> None:
     with pytest.raises(OrderingError) as exc:
         service.create_draft(TENANT, STORE, ACTOR, make_payload(material_no="MNO-001"))
     assert "delivery_constraint" in str(exc.value)
+
+
+def test_formal_gate_accepts_mixed_timezone_transport_evidence(tmp_path) -> None:
+    # data_as_of 实际在 30 天窗口内（UTC），但用 -05:00 表达后，
+    # ISO 字符串字典序会误判为“早于 cutoff”；datetime 解析后应放行。
+    now = datetime.now(UTC)
+    cutoff = now - timedelta(days=30)
+    valid_utc = cutoff + timedelta(hours=1)
+    data_as_of = valid_utc.astimezone(timezone(-timedelta(hours=5))).isoformat()
+    db = make_db(tmp_path)
+    seed_gate_ready(db, transport_data_as_of=data_as_of)
+    service = service_for(db)
+    draft = service.create_draft(TENANT, STORE, ACTOR, make_payload(material_no="MNO-001"))
+    assert draft.status is PurchaseOrderStatus.DRAFT
+
+
+def test_formal_gate_accepts_mixed_timezone_policy(tmp_path) -> None:
+    now = datetime.now(UTC)
+    cutoff = now - timedelta(days=90)
+    valid_utc = cutoff + timedelta(hours=1)
+    policy_created_at = valid_utc.astimezone(timezone(-timedelta(hours=5))).isoformat()
+    db = make_db(tmp_path)
+    seed_gate_ready(db, policy_created_at=policy_created_at)
+    service = service_for(db)
+    draft = service.create_draft(TENANT, STORE, ACTOR, make_payload(material_no="MNO-001"))
+    assert draft.status is PurchaseOrderStatus.DRAFT
 
 
 def test_formal_gate_blocks_stale_policy(tmp_path) -> None:

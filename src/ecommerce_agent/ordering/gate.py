@@ -112,54 +112,85 @@ class OrderDraftGate:
     ) -> bool:
         # 供货约束只认 per-SKU 补货策略（已绑定 SKU/料号），并校验生效期与新鲜度；
         # 不再接受无 SKU 绑定的店铺级 field evidence 兜底（P1 收口）。
-        now = datetime.now(UTC).isoformat()
-        cutoff = (datetime.now(UTC) - timedelta(days=90)).isoformat()
+        # 时间统一解析为 aware UTC 再比较，避免混时区 ISO 字符串字典序误判。
+        now = datetime.now(UTC)
+        cutoff = now - timedelta(days=90)
         with self.db.connect() as conn:
             if policy_ref is not None:
-                row = conn.execute(
+                rows = conn.execute(
                     """
-                    SELECT 1 FROM inventory_planning_policies
+                    SELECT active_from, created_at FROM inventory_planning_policies
                     WHERE tenant_id = ? AND store_id = ? AND sku_id = ?
                       AND policy_id = ? AND supplier_lead_days >= 0
-                      AND active_from <= ? AND created_at >= ?
                     """,
-                    (tenant_id, store_id, sku_id, policy_ref, now, cutoff),
-                ).fetchone()
-                if row is not None:
-                    return True
-            row = conn.execute(
+                    (tenant_id, store_id, sku_id, policy_ref),
+                ).fetchall()
+                for row in rows:
+                    active = self._parse_dt(row["active_from"])
+                    created = self._parse_dt(row["created_at"])
+                    if (
+                        active is not None and active <= now
+                        and created is not None and created >= cutoff
+                    ):
+                        return True
+            rows = conn.execute(
                 """
-                SELECT 1 FROM inventory_planning_policies
+                SELECT active_from, created_at FROM inventory_planning_policies
                 WHERE tenant_id = ? AND store_id = ?
                   AND sku_id = ? AND supplier_lead_days >= 0
-                  AND active_from <= ? AND created_at >= ?
-                ORDER BY created_at DESC, rowid DESC LIMIT 1
+                ORDER BY created_at DESC, rowid DESC LIMIT 5
                 """,
-                (tenant_id, store_id, sku_id, now, cutoff),
-            ).fetchone()
-        return row is not None
+                (tenant_id, store_id, sku_id),
+            ).fetchall()
+        for row in rows:
+            active = self._parse_dt(row["active_from"])
+            created = self._parse_dt(row["created_at"])
+            if (
+                active is not None and active <= now
+                and created is not None and created >= cutoff
+            ):
+                return True
+        return False
 
     def _delivery_constraint_evidence(
         self, tenant_id: str, store_id: str
     ) -> bool:
         # 交期暂无 SKU 级数据源：保持店铺级 field evidence，但强制新鲜度
         # （data_as_of 不晚于 now 且 ≤30 天）与来源引用（P1 收口）。
-        now = datetime.now(UTC).isoformat()
-        cutoff = (datetime.now(UTC) - timedelta(days=30)).isoformat()
+        # 时间统一解析为 aware UTC 再比较，避免混时区 ISO 字符串字典序误判。
+        now = datetime.now(UTC)
+        cutoff = now - timedelta(days=30)
         with self.db.connect() as conn:
-            evidence = conn.execute(
+            rows = conn.execute(
                 """
-                SELECT 1 FROM readonly_field_evidence
+                SELECT data_as_of, source_reference FROM readonly_field_evidence
                 WHERE tenant_id = ? AND store_id = ?
                   AND field_key = 'readiness:transport_lead_days'
                   AND evidence_state IN ('actual', 'manual')
-                  AND data_as_of IS NOT NULL AND data_as_of <= ? AND data_as_of >= ?
-                  AND source_reference IS NOT NULL AND length(trim(source_reference)) > 0
-                LIMIT 1
                 """,
-                (tenant_id, store_id, now, cutoff),
-            ).fetchone()
-        return evidence is not None
+                (tenant_id, store_id),
+            ).fetchall()
+        for row in rows:
+            if not row["source_reference"] or not str(row["source_reference"]).strip():
+                continue
+            data_as_of = self._parse_dt(row["data_as_of"])
+            if data_as_of is not None and data_as_of <= now and data_as_of >= cutoff:
+                return True
+        return False
+
+    @staticmethod
+    def _parse_dt(value: Any) -> datetime | None:
+        """把 ISO 字符串解析为 aware UTC；naive 按代码库约定视为 UTC。"""
+
+        if value is None:
+            return None
+        try:
+            parsed = datetime.fromisoformat(str(value))
+        except (ValueError, TypeError):
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
 
     def evaluate(
         self,
