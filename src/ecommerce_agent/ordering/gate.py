@@ -154,7 +154,7 @@ class OrderDraftGate:
                   AND field_key = 'readiness:transport_lead_days'
                   AND evidence_state IN ('actual', 'manual')
                   AND data_as_of IS NOT NULL AND data_as_of <= ? AND data_as_of >= ?
-                  AND source_reference IS NOT NULL AND source_reference != ''
+                  AND source_reference IS NOT NULL AND length(trim(source_reference)) > 0
                 LIMIT 1
                 """,
                 (tenant_id, store_id, now, cutoff),

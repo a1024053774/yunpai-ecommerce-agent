@@ -297,6 +297,15 @@ def test_formal_gate_blocks_stale_transport_lead(tmp_path) -> None:
     assert "delivery_constraint" in str(exc.value)
 
 
+def test_formal_gate_blocks_blank_source_transport_evidence(tmp_path) -> None:
+    db = make_db(tmp_path)
+    seed_gate_ready(db, transport_source_ref="   ")
+    service = service_for(db)
+    with pytest.raises(OrderingError) as exc:
+        service.create_draft(TENANT, STORE, ACTOR, make_payload(material_no="MNO-001"))
+    assert "delivery_constraint" in str(exc.value)
+
+
 def test_formal_gate_blocks_stale_policy(tmp_path) -> None:
     db = make_db(tmp_path)
     seed_gate_ready(db, policy_created_at="2026-01-01T00:00:00+00:00")

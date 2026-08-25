@@ -2723,9 +2723,7 @@ const titles = { overview: '经营总览', service: '智能客服', commerce: '�
         : '<div class="notice">广告 ROI 暂不可核算：无营销数据或接口未就绪（M9-R 数据接入后可用）</div>';
       const unsent = drafts.filter((draft) => draft.status === 'draft' || draft.status === 'awaiting_confirmation');
       const criticalRisks = risks.filter((risk) => ['high', 'critical'].includes(risk.risk_level || risk.severity || ''));
-      if (!$('m10Suggestions').innerHTML.trim()) {
-        $('m10Suggestions').innerHTML = '<div class="notice">点击“生成经营建议”按钮后由模型生成（会调用模型，不会自动触发）。</div>';
-      }
+      $('m10Suggestions').innerHTML = '<div class="notice">点击“生成经营建议”按钮后由模型生成（会调用模型，不会自动触发）。</div>';
       $('m10Kpis').innerHTML = [
         ['销售利润', projection?.sales.amount ?? '-', projection?.sales.status === 'blocked' ? '对账异常' : (projection?.sales.status === 'available' ? '可用' : '缺失')],
         ['经营利润', projection?.operating.amount ?? '-', projection?.operating.status === 'blocked' ? '对账异常' : (projection?.operating.status === 'available' ? '可用' : '缺失')],
