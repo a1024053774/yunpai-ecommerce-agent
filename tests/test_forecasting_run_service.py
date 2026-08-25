@@ -108,6 +108,18 @@ def test_admitted_signal_scales_forecast_points(tmp_path) -> None:
     assert reason["final_signal_factor"] == 1.5
 
 
+def test_data_hash_changes_when_signal_changes_forecast(tmp_path) -> None:
+    db, service = _service(tmp_path, _facts([10] * 56))
+    baseline = service.run(TENANT, store_id=STORE, sku_id=SKU)
+    admitted = service.run(
+        TENANT,
+        store_id=STORE,
+        sku_id=SKU,
+        signal_gate_result=_admitted_signal(1.5),
+    )
+    assert baseline["data_hash"] != admitted["data_hash"]
+
+
 def test_run_persists_replayable_policy_backtests_and_quantiles(tmp_path) -> None:
     db, service = _service(tmp_path, _facts([10] * 56))
 

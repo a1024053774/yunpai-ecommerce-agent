@@ -215,6 +215,67 @@ def test_empty_evidence_refs_allowed() -> None:
     assert result.suggestions[0].evidence_refs == []
 
 
+def test_basis_fabricated_amount_rejected() -> None:
+    model = _FakeModel(
+        payload={
+            "suggestions": [
+                {
+                    "suggestion": "虚构金额",
+                    "basis": "根据经营状况，预计利润为 999999.00",
+                    "data_gaps": [],
+                    "owner": "管理员",
+                    "next_step": "无",
+                    "evidence_refs": [],
+                    "amount_refs": [],
+                }
+            ]
+        }
+    )
+    result = DecisionAdvisorService(model).suggest(_facts())
+    assert result.available is False
+    assert result.reason == "model_output_invalid"
+
+
+def test_basis_legit_amount_allowed() -> None:
+    model = _FakeModel(
+        payload={
+            "suggestions": [
+                {
+                    "suggestion": "正常建议",
+                    "basis": "销售利润 600.00 已可核算",
+                    "data_gaps": [],
+                    "owner": "管理员",
+                    "next_step": "无",
+                    "evidence_refs": ["profit:sales:amount"],
+                    "amount_refs": ["profit.sales.amount=600"],
+                }
+            ]
+        }
+    )
+    result = DecisionAdvisorService(model).suggest(_facts())
+    assert result.available is True
+
+
+def test_basis_integer_horizon_allowed() -> None:
+    model = _FakeModel(
+        payload={
+            "suggestions": [
+                {
+                    "suggestion": "预测建议",
+                    "basis": "按 7/14/30 天预测口径复核",
+                    "data_gaps": [],
+                    "owner": "管理员",
+                    "next_step": "无",
+                    "evidence_refs": [],
+                    "amount_refs": [],
+                }
+            ]
+        }
+    )
+    result = DecisionAdvisorService(model).suggest(_facts())
+    assert result.available is True
+
+
 ADMIN_HEADERS = {
     "X-Admin-Id": "admin-test",
     "X-Admin-Key": "test-admin-key-123456",

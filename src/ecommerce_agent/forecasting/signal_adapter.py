@@ -94,7 +94,7 @@ class TrafficSignalAdapter:
                   ON r.tenant_id = b.tenant_id AND r.id = b.listing_revision_id
                 WHERE b.tenant_id=? AND r.store_id=? AND r.sku_id=?
                   AND b.bucket_granularity='day'
-                ORDER BY b.metric_start ASC, b.data_as_of DESC, b.impressions DESC
+                ORDER BY b.metric_start ASC, b.data_as_of ASC, b.impressions DESC
                 """,
                 (tenant_id, store_id, sku_id),
             ).fetchall()

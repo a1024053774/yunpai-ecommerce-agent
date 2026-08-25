@@ -2691,6 +2691,7 @@ const titles = { overview: '经营总览', service: '智能客服', commerce: '�
       const store = $('m10Store').value.trim();
       const period = $('m10Period').value.trim();
       const scope = $('m10Scope').value;
+      const mySeq = ++m10Seq;
       const q = (name, value) => `${name}=${encodeURIComponent(value)}`;
       const orderTone = { draft: 'warn', awaiting_confirmation: 'warn', confirmed: 'info', in_transit: 'info', received: 'ok', cancelled: 'bad', overdue: 'bad' };
       const [projection, reconcile, drafts, risks, marketing] = await Promise.all([
@@ -2724,6 +2725,7 @@ const titles = { overview: '经营总览', service: '智能客服', commerce: '�
       const unsent = drafts.filter((draft) => draft.status === 'draft' || draft.status === 'awaiting_confirmation');
       const criticalRisks = risks.filter((risk) => ['high', 'critical'].includes(risk.risk_level || risk.severity || ''));
       $('m10Suggestions').innerHTML = '<div class="notice">点击“生成经营建议”按钮后由模型生成（会调用模型，不会自动触发）。</div>';
+      if (mySeq !== m10Seq || store !== $('m10Store').value.trim()) return;
       $('m10Kpis').innerHTML = [
         ['销售利润', projection?.sales.amount ?? '-', projection?.sales.status === 'blocked' ? '对账异常' : (projection?.sales.status === 'available' ? '可用' : '缺失')],
         ['经营利润', projection?.operating.amount ?? '-', projection?.operating.status === 'blocked' ? '对账异常' : (projection?.operating.status === 'available' ? '可用' : '缺失')],
@@ -3477,11 +3479,13 @@ const titles = { overview: '经营总览', service: '智能客服', commerce: '�
   </script>
 
   <script>
+    var m10Seq = 0;
     async function loadM10Trend(store) {
       const rowsEl = $('m10TrendRows');
       if (!rowsEl) return;
       rowsEl.innerHTML = '<tr><td colspan="5"><div class="muted">正在加载销量与预测…</div></td></tr>';
       const q2 = (name, value) => `${name}=${encodeURIComponent(value)}`;
+      const mySeq = ++m10Seq;
       try {
         const [drafts, risks, catalog] = await Promise.all([
           api(`/v1/ordering/drafts?${q2('store_id', store)}&limit=50`).catch(() => []),
@@ -3518,8 +3522,10 @@ const titles = { overview: '经营总览', service: '智能客服', commerce: '�
           const status = forecast ? (forecast.status || 'completed') : '未运行';
           rows.push(`<tr data-sku="${escapeHtml(sku)}" style="cursor:pointer"><td>${escapeHtml(sku)}</td><td>${d7}</td><td>${d30}</td><td>${escapeHtml(String(pred))}</td><td><span class="status ${status === 'completed' ? 'ok' : 'warn'}">${escapeHtml(status)}</span></td></tr>`);
         }
+        if (mySeq !== m10Seq) return;
         rowsEl.innerHTML = rows.join('') + '<tr><td colspan="5"><div class="muted">点击任意 SKU 行可下钻明细</div></td></tr>';
       } catch (err) {
+        if (mySeq !== m10Seq) return;
         rowsEl.innerHTML = '<tr><td colspan="5"><div class="notice">销量/预测加载失败：' + escapeHtml(err.message || '接口错误') + '</div></td></tr>';
       }
     }
@@ -3530,6 +3536,7 @@ const titles = { overview: '经营总览', service: '智能客服', commerce: '�
       if (!panel || !detail) return;
       const store = $('m10Store').value.trim();
       const q2 = (name, value) => `${name}=${encodeURIComponent(value)}`;
+      const mySeq = ++m10Seq;
       panel.style.display = '';
       $('m10SkuTitle').textContent = `：${sku}`;
       detail.innerHTML = '<div class="muted">正在加载明细…</div>';
@@ -3594,6 +3601,7 @@ const titles = { overview: '经营总览', service: '智能客服', commerce: '�
           '</tbody></table>'
         : '<div class="empty">无广告数据</div>';
       const totalDemand = facts.reduce((s, f) => s + (Number(f.eligible_units) || 0), 0);
+      if (mySeq !== m10Seq || store !== $('m10Store').value.trim()) return;
       detail.innerHTML = `<div class="grid kpis" style="margin:0 0 10px">` +
         `<div class="kpi"><span class="label">近14日需求</span><span class="value">${totalDemand}</span></div>` +
         `<div class="kpi"><span class="label">预测状态</span><span class="value">${forecast ? (forecast.status || 'completed') : '未运行'}</span></div>` +
@@ -3616,8 +3624,10 @@ const titles = { overview: '经营总览', service: '智能客服', commerce: '�
       const store = $('m10Store').value.trim();
       const period = $('m10Period').value.trim();
       const scope = $('m10Scope').value;
+      const mySeq = ++m10Seq;
       $('m10Suggestions').innerHTML = '<div class="muted">正在生成经营建议…</div>';
       const decisionResp = await api(`/v1/decision/suggestions`, { method: 'POST', body: JSON.stringify({ store_id: store, period, scope }) }).catch(() => null);
+      if (mySeq !== m10Seq || store !== $('m10Store').value.trim()) return;
       if (decisionResp && decisionResp.available && decisionResp.suggestions.length) {
         $('m10Suggestions').innerHTML = decisionResp.suggestions.map((s) => `<div class="panel" style="margin:0 0 10px"><div class="panel-head"><strong>${escapeHtml(s.suggestion)}</strong></div><div class="panel-body stack"><div>${escapeHtml(s.basis)}</div><div class="muted">数据缺口：${(s.data_gaps || []).map(escapeHtml).join('、') || '无'} · 需确认：${escapeHtml(s.owner)} · 下一步：${escapeHtml(s.next_step)}${(s.evidence_refs && s.evidence_refs.length) ? ' · 证据：' + s.evidence_refs.map(escapeHtml).join('、') : ''}</div></div></div>`).join('');
       } else {

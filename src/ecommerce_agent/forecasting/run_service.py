@@ -186,7 +186,11 @@ class ForecastRunService:
             else "completed"
         )
         policy_evidence = self._policy_evidence(engine.policy)
-        data_hash = self._input_data_hash(facts, policy_evidence)
+        data_hash = self._input_data_hash(
+            facts,
+            policy_evidence,
+            signal_evidence=signal_gate_result.to_evidence(),
+        )
         run_id = f"forecast-run-{uuid.uuid4().hex}"
         created_at = utc_now()
         candidate_evidence = {
@@ -447,7 +451,10 @@ class ForecastRunService:
 
     @staticmethod
     def _input_data_hash(
-        facts: list[dict[str, Any]], policy_evidence: dict[str, Any]
+        facts: list[dict[str, Any]],
+        policy_evidence: dict[str, Any],
+        *,
+        signal_evidence: dict[str, Any] | None = None,
     ) -> str:
         return hashlib.sha256(
             _json(
@@ -465,6 +472,7 @@ class ForecastRunService:
                         for item in facts
                     ],
                     "forecast_policy": policy_evidence,
+                    "signal_evidence": signal_evidence,
                 }
             ).encode("utf-8")
         ).hexdigest()
@@ -493,7 +501,18 @@ class ForecastRunService:
             key=lambda item: str(item["business_date"]),
         )
         try:
-            current_data_hash = self._input_data_hash(facts, policy_evidence)
+            signal_reason = candidate_evidence.get("signal_champion_reason") or {}
+            signal_candidates = candidate_evidence.get("signal_candidates") or []
+            signal_evidence = (
+                {**dict(signal_reason), "comparisons": list(signal_candidates)}
+                if signal_reason
+                else None
+            )
+            current_data_hash = self._input_data_hash(
+                facts,
+                policy_evidence,
+                signal_evidence=signal_evidence,
+            )
         except (KeyError, TypeError, ValueError):
             return evidence_freshness(
                 status="stale",

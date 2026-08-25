@@ -14,12 +14,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TARGETED_TESTS = [
     "tests/test_readiness.py",
+    "tests/test_signal_adapter.py",
     "tests/test_signal_gate.py",
     "tests/test_forecasting_run_service.py",
     "tests/test_product.py",
     "tests/test_purchase_order.py",
     "tests/test_profit.py",
     "tests/test_ordering_profit_audit.py",
+    "tests/test_decision_advisor.py",
 ]
 
 

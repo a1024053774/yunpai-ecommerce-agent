@@ -333,6 +333,15 @@ def test_formal_gate_accepts_mixed_timezone_policy(tmp_path) -> None:
     assert draft.status is PurchaseOrderStatus.DRAFT
 
 
+def test_formal_gate_blocks_future_policy_created_at(tmp_path) -> None:
+    db = make_db(tmp_path)
+    seed_gate_ready(db, policy_created_at="2099-01-01T00:00:00+00:00")
+    service = service_for(db)
+    with pytest.raises(OrderingError) as exc:
+        service.create_draft(TENANT, STORE, ACTOR, make_payload(material_no="MNO-001"))
+    assert "supply_constraint" in str(exc.value)
+
+
 def test_formal_gate_blocks_stale_policy(tmp_path) -> None:
     db = make_db(tmp_path)
     seed_gate_ready(db, policy_created_at="2026-01-01T00:00:00+00:00")

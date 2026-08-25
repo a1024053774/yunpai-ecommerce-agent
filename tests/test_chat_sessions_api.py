@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+
 from fastapi.testclient import TestClient
 
 from ecommerce_agent.api import create_app
@@ -172,6 +174,61 @@ def test_messages_composite_cursor_pages_55_rows_without_gaps(tmp_path) -> None:
         assert page_sizes == [20, 20, 15]
         assert ids == [f"page-{index:03d}" for index in range(55)]
         assert len(ids) == len(set(ids))
+
+
+def test_legacy_uuid_cursor_is_compatible(tmp_path) -> None:
+    app = create_app(make_settings(tmp_path))
+    with TestClient(app) as client:
+        client.post(
+            "/v1/chat/sessions",
+            headers=CLIENT_HEADERS,
+            json={"session_id": "legacy-cursor"},
+        )
+        service = app.state.agent
+        with service.db._write_lock, service.db.connect() as conn:
+            session_id = conn.execute(
+                """
+                SELECT id FROM sessions
+                WHERE tenant_id=? AND external_session_id=?
+                """,
+                ("tenant-test", "legacy-cursor"),
+            ).fetchone()[0]
+            for index in range(5):
+                conn.execute(
+                    """INSERT INTO messages(
+                        id, trace_id, session_id, role, content, created_at,
+                        tenant_id, client_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        f"legacy-msg-{index:03d}",
+                        f"trace-legacy-{index:03d}",
+                        session_id,
+                        "user" if index % 2 == 0 else "assistant",
+                        f"legacy message {index}",
+                        f"2026-07-30T00:00:{index:02d}+00:00",
+                        "tenant-test",
+                        "client-test",
+                    ),
+                )
+        with service.db.connect() as conn:
+            first = conn.execute(
+                "SELECT created_at, id FROM messages WHERE session_id=? "
+                "ORDER BY created_at, rowid LIMIT 1",
+                (session_id,),
+            ).fetchone()
+        raw_cursor = f"{first['created_at']}|{first['id']}"
+        legacy_cursor = base64.urlsafe_b64encode(
+            raw_cursor.encode("utf-8")
+        ).decode("ascii").rstrip("=")
+        response = client.get(
+            "/v1/chat/sessions/legacy-cursor/messages",
+            headers=CLIENT_HEADERS,
+            params={"cursor": legacy_cursor, "limit": 20},
+        )
+        assert response.status_code == 200
+        ids = [item["id"] for item in response.json()["items"]]
+        assert first["id"] not in ids  # 旧游标应继续，而不是重复返回第一页
+        assert ids == [f"legacy-msg-{index:03d}" for index in range(1, 5)]
 
 
 def test_invalid_cursor_is_ignored_and_open_handoff_blocks_delete(tmp_path) -> None:

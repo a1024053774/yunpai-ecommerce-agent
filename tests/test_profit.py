@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from ecommerce_agent.database import Database
 from ecommerce_agent.profit import (
@@ -46,6 +47,7 @@ def entry(
     order_id: str | None = None,
     scope: ProfitScope = ProfitScope.FORMAL,
     entry_key: str | None = None,
+    granularity: str | None = "store",
 ) -> LedgerEntryInput:
     return LedgerEntryInput(
         store_id=STORE,
@@ -62,6 +64,7 @@ def entry(
         ),
         order_id=order_id,
         entry_key=entry_key or f"{category.value}:{order_id or 'store'}",
+        granularity=granularity,
     )
 
 
@@ -250,6 +253,7 @@ def test_cross_period_refund_is_not_false_positive(tmp_path) -> None:
             source_kind="actual",
             order_id="O-CROSS",
             entry_key="rev-cross",
+            granularity="store",
         ),
     )
     service.record_entry(
@@ -295,6 +299,7 @@ def test_formal_revenue_requires_actual_source(tmp_path) -> None:
                 source_kind="manual",
                 order_id="O1",
                 entry_key="manual-revenue",
+                granularity="store",
             ),
         )
     assert "formal_revenue_requires_actual_source" in str(exc.value)
@@ -467,7 +472,22 @@ def test_mixed_granularity_projection_rejected(tmp_path) -> None:
     assert "mixed_granularity_projection" in str(exc.value)
 
 
-def test_undeclared_granularity_mixing_blocked(tmp_path) -> None:
+def test_formal_entry_requires_granularity() -> None:
+    with pytest.raises(ValidationError) as exc:
+        LedgerEntryInput(
+            store_id=STORE,
+            period=PERIOD,
+            category=ExpenseCategory.PURCHASE_COST,
+            scope=ProfitScope.FORMAL,
+            amount="-100.00",
+            source_kind="manual",
+            entry_key="no-gran",
+            granularity=None,
+        )
+    assert "formal_granularity_required" in str(exc.value)
+
+
+def test_legacy_undeclared_formal_entry_blocks_projection(tmp_path) -> None:
     service = make_service(tmp_path)
     register_default_policy(service)
     seed_delivered_order(service, "O1")
@@ -483,19 +503,36 @@ def test_undeclared_granularity_mixing_blocked(tmp_path) -> None:
             entry_key="pf-store",
         ),
     )
-    service.record_entry(
-        TENANT,
-        _entry_with_granularity(
-            ExpenseCategory.ADVERTISING_COST,
-            "-50.00",
-            granularity=None,
-            entry_key="ad-undeclared",
-        ),
-    )
+    # 历史/直插数据：正式条目缺 granularity（绕过写校验的兜底场景）
+    with service.db.connect() as conn:
+        conn.execute(
+            """INSERT INTO profit_ledger_entries (
+                entry_id, tenant_id, store_id, period, category, scope, amount,
+                currency, source_kind, sku_id, order_id, mapping_version,
+                entry_key, payload_hash, source_reference, granularity,
+                is_estimated, reconciliation_status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL,
+                      0, 'pending', '2026-08-24T00:00:00+00:00')""",
+            (
+                "legacy-undeclared",
+                TENANT,
+                STORE,
+                PERIOD,
+                ExpenseCategory.ADVERTISING_COST.value,
+                ProfitScope.FORMAL.value,
+                "-50.00",
+                "CNY",
+                "manual",
+                None,
+                None,
+                "v1",
+                "ad-undeclared",
+                "a" * 64,
+            ),
+        )
     with pytest.raises(ProfitError) as exc:
         service.projection(TENANT, STORE, PERIOD, ProfitScope.FORMAL)
-    assert "mixed_granularity_projection" in str(exc.value)
-    assert "undeclared" in str(exc.value)
+    assert "granularity_undeclared" in str(exc.value)
 
 
 def test_uniform_declared_granularity_passes(tmp_path) -> None:

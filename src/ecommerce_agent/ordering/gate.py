@@ -130,7 +130,7 @@ class OrderDraftGate:
                     created = self._parse_dt(row["created_at"])
                     if (
                         active is not None and active <= now
-                        and created is not None and created >= cutoff
+                        and created is not None and cutoff <= created <= now
                     ):
                         return True
             rows = conn.execute(
@@ -147,7 +147,7 @@ class OrderDraftGate:
             created = self._parse_dt(row["created_at"])
             if (
                 active is not None and active <= now
-                and created is not None and created >= cutoff
+                and created is not None and cutoff <= created <= now
             ):
                 return True
         return False

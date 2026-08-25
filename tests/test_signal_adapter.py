@@ -128,6 +128,53 @@ def _signal(tmp_path, *, store_id=STORE, sku_id=SKU, days=None) -> TrafficSignal
     return TrafficSignalAdapter(db)
 
 
+def _insert_bucket(
+    conn,
+    *,
+    bucket_id: str,
+    revision: str,
+    day: str,
+    impressions: int,
+    as_of: str,
+    source_id: str,
+) -> None:
+    conn.execute(
+        """INSERT INTO traffic_metric_buckets (
+            id, tenant_id, connector_id, listing_revision_id,
+            metric_start, metric_end, bucket_granularity, traffic_source,
+            impressions, clicks, visitors, favorites, cart_adds, orders,
+            sales_amount, ad_spend, search_impressions, recommend_impressions,
+            data_as_of, source_id, payload_hash, version, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            bucket_id,
+            TENANT,
+            "connector-1",
+            revision,
+            f"{day}T00:00:00+00:00",
+            f"{day}T23:59:59+00:00",
+            "day",
+            "search",
+            impressions,
+            0,
+            0,
+            0,
+            0,
+            0,
+            "0.00",
+            "0.00",
+            0,
+            0,
+            as_of,
+            source_id,
+            "d" * 64,
+            1,
+            as_of,
+            as_of,
+        ),
+    )
+
+
 def test_no_traffic_returns_none(tmp_path) -> None:
     adapter = _signal(tmp_path)
     assert adapter.load(tenant_id=TENANT, store_id=STORE, sku_id=SKU) is None
@@ -178,6 +225,36 @@ def test_cross_store_and_sku_isolated(tmp_path) -> None:
     # 同店不同 SKU / 跨店 SKU 错配 → 无信号（不串数据）
     assert adapter.load(tenant_id=TENANT, store_id="store-a", sku_id="sku-b") is None
     assert adapter.load(tenant_id=TENANT, store_id="store-b", sku_id="sku-a") is None
+
+
+def test_revision_as_of_uses_value_visible_at_day_time(tmp_path) -> None:
+    db = _make_db(tmp_path / "revision.sqlite3")
+    with db.connect() as conn:
+        _seed_revision_and_buckets(
+            conn,
+            days=[
+                ("2026-08-10", 100, "2026-08-11T00:00:00+00:00"),
+                ("2026-08-11", 200, "2026-08-13T00:00:00+00:00"),
+            ],
+        )
+        # 业务日 08-10 的迟到修订：data_as_of=08-14，晚于 08-11 的可见时间，
+        # 不应回改历史因子（否则 200/1000=0.2 泄漏未来信息）。
+        _insert_bucket(
+            conn,
+            bucket_id="bucket-rev",
+            revision="rev-store-signal-sku-signal",
+            day="2026-08-10",
+            impressions=1000,
+            as_of="2026-08-14T00:00:00+00:00",
+            source_id="src-rev",
+        )
+    result = TrafficSignalAdapter(db).load(
+        tenant_id=TENANT, store_id=STORE, sku_id=SKU
+    )
+    assert result is not None
+    assert result.signal_by_date[date(2026, 8, 10)] == 1.0
+    assert result.signal_by_date[date(2026, 8, 11)] == 2.0
+    assert result.signal_as_of[date(2026, 8, 10)] == date(2026, 8, 11)
 
 
 def test_stale_as_of_row_excluded(tmp_path) -> None:

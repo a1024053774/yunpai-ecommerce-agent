@@ -12,9 +12,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+
+_AMOUNT_PATTERN = re.compile(r"\d+\.\d{2}")
 
 
 class DecisionSuggestion(BaseModel):
@@ -169,6 +174,37 @@ def _resolve_path(facts: dict[str, Any], field: str) -> Any:
     return node
 
 
+def _amount_key(value: Any) -> str | None:
+    try:
+        amount = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    if not amount.is_finite():
+        return None
+    return format(amount.normalize(), "f")
+
+
+def _fact_amount_keys(facts: dict[str, Any]) -> set[str]:
+    """收集压缩事实中所有可解析为金额的值（归一化）。"""
+
+    keys: set[str] = set()
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+        elif node is not None and not isinstance(node, bool):
+            key = _amount_key(node)
+            if key is not None:
+                keys.add(key)
+
+    walk(facts)
+    return keys
+
+
 def _validate_suggestion(
     suggestion: DecisionSuggestion,
     *,
@@ -187,6 +223,13 @@ def _validate_suggestion(
         actual = _resolve_path(facts, field)
         if actual is None or str(actual) != value:
             raise ValueError("amount_ref_mismatch")
+    # 数值声称绑定：basis 中带两位小数的金额类数字必须与事实金额一致，
+    # 防止模型在 basis 里编造未绑定金额（胡磊 P1-2）。
+    legit_amounts = _fact_amount_keys(facts)
+    for raw in _AMOUNT_PATTERN.findall(suggestion.basis):
+        key = _amount_key(raw)
+        if key is None or key not in legit_amounts:
+            raise ValueError("basis_amount_not_bound")
 
 
 class DecisionAdvisorService:

@@ -4170,7 +4170,7 @@ class Database:
         tenant_id: str,
         subject_hash: str,
     ) -> dict[str, Any]:
-        decoded_cursor: tuple[str, str] | None = None
+        decoded_cursor: tuple[str, str | int] | None = None
         if cursor:
             try:
                 if "|" in cursor:
@@ -4191,7 +4191,19 @@ class Database:
                 created_at, message_id = raw_cursor.rsplit("|", 1)
                 datetime.fromisoformat(created_at)
                 if created_at and message_id:
-                    decoded_cursor = (created_at, int(message_id))
+                    try:
+                        decoded_cursor = (created_at, int(message_id))
+                    except ValueError:
+                        # 旧版游标：created_at|message_uuid → 兼容迁移到 rowid，
+                        # 避免静默从第一页重复返回。
+                        with self.connect() as conn:
+                            row = conn.execute(
+                                "SELECT rowid FROM messages WHERE id=?",
+                                (message_id,),
+                            ).fetchone()
+                        decoded_cursor = (
+                            (created_at, int(row["rowid"])) if row else None
+                        )
             except (binascii.Error, TypeError, UnicodeDecodeError, ValueError):
                 decoded_cursor = None
 

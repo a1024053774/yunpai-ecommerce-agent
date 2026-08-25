@@ -46,3 +46,39 @@
 - 定向：101 passed（修复后相关文件 22+10 passed）。
 - 全量回归：1130 passed / 0 failed，24 warnings（既有 traffic_lab 告警）。
 - 分支：`feature/m10r-wp4-profit-ledger`（PR #24），本次修复已推送。
+
+## 追加（2026-08-25 第三轮 WP5 复核 P0/P1 修复）
+
+胡磊第三轮复核（head `4313557`）提出 P0/P1，本轮修复 8 项，均按“修复前截图 → 修复 →
+修复后截图”留证：
+
+1. **P0-1 历史审计 final 金额读侧脱敏**：`admin.py` 审计读取时对 `category` 为财务最终
+   层的 `detail.amount` 按 `finance:final_profit:read` 权限置 None；新增有/无权限两类
+   测试。截图 `m10-p01-before/after-20260825.png`（红/绿）。
+2. **P0-2 信号迟到修订按当时可见值重建**：`signal_adapter.py` 每日取最早可见修订
+   （`data_as_of ASC`）构造相邻因子，迟到修订不再回改历史窗口。复现 200/100=2.0 vs
+   bug 0.2。截图 `m10-p02-before/after-20260825.png`。
+3. **P1-1 正式利润未知粒度必须 blocked**：入账校验要求 formal 条目必填 `granularity`
+   （`formal_granularity_required`）；投影对历史/直插的未声明条目兜底抛
+   `granularity_undeclared`。截图 `m10-p11-before/after-20260825.png`。
+4. **P1-2 模型建议数值声称必须绑定合法事实**：`basis` 中带两位小数的金额类数字必须与
+   事实金额一致，否则 `basis_amount_not_bound` → `model_output_invalid`。截图
+   `m10-p12-before/after-20260825.png`。
+5. **P1-3 供货政策未来时间通过**：`created_at` 补上界 `<= now`（原只查下界）。截图
+   `m10-p13-before/after-20260825.png`。
+6. **P1-4 data_hash 未含信号门禁结果**：`data_hash` 加入 `signal_gate_result.to_evidence()`
+   （freshness 重算用存储的 signal_champion_reason+candidates 还原）。截图
+   `m10-p14-before/after-20260825.png`。
+7. **P1-5 旧 UUID 游标兼容**：`paginated_messages` 对旧 `created_at|message_uuid` 游标
+   兼容迁移到 rowid，不再静默重复第一页。截图 `m10-p15-before/after-20260825.png`。
+8. **P1-6 决策台跨店请求竞态**：`m10Seq` generation token + 渲染前 scope 复核，
+   A 慢响应不再覆盖 B。截图 `m10-p16-before/after-20260825.png`（修复前 A 覆盖 B 为
+   “-”，修复后 B=600 保留）。
+
+另：`scripts/verify_m10r.py` 补入漏收的 `tests/test_signal_adapter.py` 与
+`tests/test_decision_advisor.py`（17 个测试进发布门禁）。
+
+### 验证
+
+- 受影响定向：104 passed（利润/订购/信号/建议/chat 会话）。
+- 全量回归：见本文件「总验证」更新（新增测试后全量计数随提交更新）。

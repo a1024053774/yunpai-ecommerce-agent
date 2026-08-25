@@ -246,6 +246,7 @@ def test_ledger_entry_audit_does_not_log_final_amount(tmp_path) -> None:
                 "source_kind": "manual",
                 "sku_id": "SKU-1",
                 "entry_key": "tax-audit",
+                "granularity": "store",
             },
         )
     assert response.status_code == 200
@@ -287,7 +288,7 @@ def _seed_minimal_profit(app) -> None:
                     is_estimated, reconciliation_status, created_at
                 ) VALUES (?, 'tenant-test', 'store-x', '2026-08', ?, 'formal', ?,
                           'CNY', 'actual', 'SKU-1', 'O-MIN', 'v1', ?, ?, NULL,
-                          NULL, 0, 'pending', '2026-08-24T00:00:00+00:00')""",
+                          'store', 0, 'pending', '2026-08-24T00:00:00+00:00')""",
                 (entry_id, category, amount, entry_id + "-key", "n" * 64),
             )
 
@@ -338,3 +339,54 @@ def test_decision_api_masks_final_amount_in_model_facts(monkeypatch, tmp_path) -
     assert fake.facts is not None
     assert fake.facts["profit_projection"]["final"]["amount"] is None
     assert fake.facts["profit_projection"]["final"]["restricted"] is True
+
+
+def _seed_legacy_audit_with_final_amount(app) -> None:
+    with app.state.agent.db.connect() as conn:
+        conn.execute(
+            """INSERT INTO audit_log (
+                id, event_type, actor, subject_id, detail_json, tenant_id, created_at
+            ) VALUES (?, 'profit.ledger.entry_recorded', 'legacy-admin', 'entry-legacy',
+                      ?, 'tenant-test', '2026-08-20T00:00:00+00:00')""",
+            (
+                "audit-legacy-final",
+                '{"category": "tax_cost", "amount": "-4321.09", "entry_key": "tax-old"}',
+            ),
+        )
+
+
+def test_legacy_audit_final_amount_masked_without_capability(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.delenv("FINAL_PROFIT_READ_ADMIN_IDS", raising=False)
+    app = create_app(make_settings(tmp_path))
+    _seed_legacy_audit_with_final_amount(app)
+    with TestClient(app) as client:
+        response = client.get(
+            "/v1/admin/audit?event_type=profit.ledger.entry_recorded",
+            headers=ADMIN_HEADERS,
+        )
+    assert response.status_code == 200
+    events = [e for e in response.json() if e["event_type"] == "profit.ledger.entry_recorded"]
+    assert events
+    legacy = next(e for e in events if e["subject_id"] == "entry-legacy")
+    assert legacy["detail"]["amount"] is None
+
+
+def test_legacy_audit_final_amount_shown_with_capability(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("FINAL_PROFIT_READ_ADMIN_IDS", "admin-test")
+    app = create_app(make_settings(tmp_path))
+    _seed_legacy_audit_with_final_amount(app)
+    with TestClient(app) as client:
+        response = client.get(
+            "/v1/admin/audit?event_type=profit.ledger.entry_recorded",
+            headers=ADMIN_HEADERS,
+        )
+    assert response.status_code == 200
+    legacy = next(
+        e
+        for e in response.json()
+        if e["event_type"] == "profit.ledger.entry_recorded"
+        and e["subject_id"] == "entry-legacy"
+    )
+    assert legacy["detail"]["amount"] == "-4321.09"

@@ -230,6 +230,8 @@ class LedgerEntryInput(BaseModel):
             raise ValueError("revenue_entry_requires_order")
         if self.scope is ProfitScope.FORMAL and self.source_kind == "demo":
             raise ValueError("demo_source_cannot_enter_formal_scope")
+        if self.scope is ProfitScope.FORMAL and not self.granularity:
+            raise ValueError("formal_granularity_required")
         if self.scope is ProfitScope.DEMO and self.source_kind != "demo":
             raise ValueError("formal_source_cannot_enter_demo_scope")
         if (

@@ -258,6 +258,13 @@ class ProfitService:
             return layer_required_categories(layer)
 
         entries = self._entries(tenant_id, store_id, period, scope)
+        if scope is ProfitScope.FORMAL:
+            undeclared = [entry for entry in entries if not entry["granularity"]]
+            if undeclared:
+                # 正式口径未知粒度必须 blocked（历史/直插数据兜底，P1 收口）。
+                raise ProfitError(
+                    "granularity_undeclared:formal_requires_declared_granularity"
+                )
         declared_granularities = sorted(
             {str(entry["granularity"] or "undeclared") for entry in entries}
         )
