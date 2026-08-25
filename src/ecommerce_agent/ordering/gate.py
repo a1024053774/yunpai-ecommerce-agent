@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -109,6 +110,10 @@ class OrderDraftGate:
     def _supply_constraint_evidence(
         self, tenant_id: str, store_id: str, sku_id: str, policy_ref: str | None
     ) -> bool:
+        # 供货约束只认 per-SKU 补货策略（已绑定 SKU/料号），并校验生效期与新鲜度；
+        # 不再接受无 SKU 绑定的店铺级 field evidence 兜底（P1 收口）。
+        now = datetime.now(UTC).isoformat()
+        cutoff = (datetime.now(UTC) - timedelta(days=90)).isoformat()
         with self.db.connect() as conn:
             if policy_ref is not None:
                 row = conn.execute(
@@ -116,26 +121,31 @@ class OrderDraftGate:
                     SELECT 1 FROM inventory_planning_policies
                     WHERE tenant_id = ? AND store_id = ? AND sku_id = ?
                       AND policy_id = ? AND supplier_lead_days >= 0
+                      AND active_from <= ? AND created_at >= ?
                     """,
-                    (tenant_id, store_id, sku_id, policy_ref),
+                    (tenant_id, store_id, sku_id, policy_ref, now, cutoff),
                 ).fetchone()
                 if row is not None:
                     return True
-            evidence = conn.execute(
+            row = conn.execute(
                 """
-                SELECT 1 FROM readonly_field_evidence
+                SELECT 1 FROM inventory_planning_policies
                 WHERE tenant_id = ? AND store_id = ?
-                  AND field_key = 'readiness:supplier_lead_days'
-                  AND evidence_state IN ('actual', 'manual')
-                LIMIT 1
+                  AND sku_id = ? AND supplier_lead_days >= 0
+                  AND active_from <= ? AND created_at >= ?
+                ORDER BY created_at DESC, rowid DESC LIMIT 1
                 """,
-                (tenant_id, store_id),
+                (tenant_id, store_id, sku_id, now, cutoff),
             ).fetchone()
-        return evidence is not None
+        return row is not None
 
     def _delivery_constraint_evidence(
         self, tenant_id: str, store_id: str
     ) -> bool:
+        # 交期暂无 SKU 级数据源：保持店铺级 field evidence，但强制新鲜度
+        # （data_as_of 不晚于 now 且 ≤30 天）与来源引用（P1 收口）。
+        now = datetime.now(UTC).isoformat()
+        cutoff = (datetime.now(UTC) - timedelta(days=30)).isoformat()
         with self.db.connect() as conn:
             evidence = conn.execute(
                 """
@@ -143,9 +153,11 @@ class OrderDraftGate:
                 WHERE tenant_id = ? AND store_id = ?
                   AND field_key = 'readiness:transport_lead_days'
                   AND evidence_state IN ('actual', 'manual')
+                  AND data_as_of IS NOT NULL AND data_as_of <= ? AND data_as_of >= ?
+                  AND source_reference IS NOT NULL AND source_reference != ''
                 LIMIT 1
                 """,
-                (tenant_id, store_id),
+                (tenant_id, store_id, now, cutoff),
             ).fetchone()
         return evidence is not None
 

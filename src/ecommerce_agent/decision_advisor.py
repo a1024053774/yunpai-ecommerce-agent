@@ -25,6 +25,8 @@ class DecisionSuggestion(BaseModel):
     data_gaps: list[str] = Field(default_factory=list, max_length=20)
     owner: str = Field(min_length=1, max_length=120)
     next_step: str = Field(min_length=1, max_length=300)
+    evidence_refs: list[str] = Field(default_factory=list, max_length=20)
+    amount_refs: list[str] = Field(default_factory=list, max_length=20)
 
 
 class DecisionSuggestionResult(BaseModel):
@@ -48,7 +50,11 @@ SYSTEM_PROMPT = (
     "不得编造数值，不得修改任何事实，不得把缺失费用当 0，不得把演示参数当正式口径。"
     "始终使用简体中文输出。"
     '输出严格 JSON：{"suggestions":[{"suggestion":"建议做什么","basis":"依据（引用给定事实）",'
-    '"data_gaps":["缺口"],"owner":"需谁确认","next_step":"下一步"}]}。'
+    '"data_gaps":["缺口"],"owner":"需谁确认","next_step":"下一步",'
+    '"evidence_refs":["只能从 evidence_catalog 中选取的引用"],'
+    '"amount_refs":["字段点路径=数值，如 profit.sales.amount=500.00"]}]}。'
+    "evidence_refs 必须全部来自给定 evidence_catalog；amount_refs 用 字段=数值 格式且"
+    "必须与给定事实精确一致；没有可引用证据时 evidence_refs/amount_refs 可为空数组。"
 )
 
 
@@ -125,6 +131,64 @@ def _compact_facts(facts: dict[str, Any]) -> dict[str, Any]:
     return compact
 
 
+def _evidence_catalog(facts: dict[str, Any]) -> list[str]:
+    """从压缩事实生成可被模型引用的证据 ID 清单（确定性）。"""
+
+    catalog: list[str] = []
+    profit = facts.get("profit")
+    if isinstance(profit, dict):
+        for layer in ("sales", "operating", "final"):
+            layer_facts = profit.get(layer)
+            if isinstance(layer_facts, dict):
+                for field in ("status", "amount", "missing_fields"):
+                    catalog.append(f"profit:{layer}:{field}")
+    reconciliation = facts.get("reconciliation")
+    if isinstance(reconciliation, dict):
+        catalog.append("reconciliation:double_count_ok")
+        catalog.append("reconciliation:entry_count")
+        for code in reconciliation.get("issue_codes", []):
+            catalog.append(f"reconciliation:issue:{code}")
+    for draft in facts.get("ordering_drafts", []):
+        if isinstance(draft, dict) and draft.get("status"):
+            catalog.append(f"draft:{draft.get('status')}:{draft.get('recommended_qty')}")
+    for risk in facts.get("inventory_risks", []):
+        if isinstance(risk, dict) and risk.get("sku_id"):
+            catalog.append(f"risk:{risk.get('sku_id')}:{risk.get('risk_level')}")
+    if "marketing_available" in facts:
+        catalog.append("marketing:available")
+    return sorted(set(catalog))
+
+
+def _resolve_path(facts: dict[str, Any], field: str) -> Any:
+    node: Any = facts
+    for part in str(field).split("."):
+        if isinstance(node, dict) and part in node:
+            node = node[part]
+        else:
+            return None
+    return node
+
+
+def _validate_suggestion(
+    suggestion: DecisionSuggestion,
+    *,
+    catalog: list[str],
+    facts: dict[str, Any],
+) -> None:
+    """硬校验：证据引用必须在 catalog 内，数值引用必须与事实一致。"""
+
+    catalog_set = set(catalog)
+    if any(ref not in catalog_set for ref in suggestion.evidence_refs):
+        raise ValueError("evidence_ref_not_in_catalog")
+    for amount_ref in suggestion.amount_refs:
+        field, separator, value = str(amount_ref).partition("=")
+        if not separator:
+            raise ValueError("amount_ref_format_invalid")
+        actual = _resolve_path(facts, field)
+        if actual is None or str(actual) != value:
+            raise ValueError("amount_ref_mismatch")
+
+
 class DecisionAdvisorService:
     def __init__(self, model: ModelGatewayProtocol | None) -> None:
         self._model = model
@@ -144,6 +208,8 @@ class DecisionAdvisorService:
             return DecisionSuggestionResult(
                 available=False, reason="model_unavailable", facts_digest=digest
             )
+        compact = _compact_facts(facts)
+        catalog = _evidence_catalog(compact)
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {
@@ -151,7 +217,8 @@ class DecisionAdvisorService:
                 "content": json.dumps(
                     {
                         "task_type": "decision_suggestion",
-                        "facts": _compact_facts(facts),
+                        "facts": compact,
+                        "evidence_catalog": catalog,
                     },
                     ensure_ascii=False,
                 ),
@@ -179,6 +246,15 @@ class DecisionAdvisorService:
         try:
             suggestions = [DecisionSuggestion.model_validate(item) for item in items]
         except (ValidationError, TypeError, ValueError):
+            return DecisionSuggestionResult(
+                available=False, reason="model_output_invalid", facts_digest=digest
+            )
+        try:
+            for suggestion in suggestions:
+                _validate_suggestion(
+                    suggestion, catalog=catalog, facts=compact
+                )
+        except ValueError:
             return DecisionSuggestionResult(
                 available=False, reason="model_output_invalid", facts_digest=digest
             )

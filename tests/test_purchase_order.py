@@ -53,6 +53,9 @@ def seed_gate_ready(
     with_policy: bool = True,
     with_transport: bool = True,
     with_evidence: bool = False,
+    transport_data_as_of: str = "2026-08-19T04:00:00+00:00",
+    transport_source_ref: str = "objects/readonly-imports/transport.csv",
+    policy_created_at: str = "2026-08-01T00:00:00+00:00",
 ) -> None:
     with db.connect() as conn:
         conn.execute(
@@ -104,10 +107,18 @@ def seed_gate_ready(
                     evidence_state, reason, data_as_of, source_reference,
                     import_id, payload_hash, created_at
                 ) VALUES (?, ?, ?, 'readiness:transport_lead_days',
-                          'operational', 'actual', 'seed', NULL, NULL,
+                          'operational', 'actual', 'seed', ?, ?,
                           'IMPORT-1', ?, ?)
                 """,
-                ("FE-T", TENANT, STORE, H64, "2026-08-19T04:00:00+00:00"),
+                (
+                    "FE-T",
+                    TENANT,
+                    STORE,
+                    transport_data_as_of,
+                    transport_source_ref,
+                    H64,
+                    "2026-08-19T04:00:00+00:00",
+                ),
             )
         if with_policy:
             conn.execute(
@@ -120,7 +131,7 @@ def seed_gate_ready(
                 ) VALUES (?, ?, ?, ?, NULL, 7, 3, 'p90', '1', '1', '0', 30,
                           'v1', '2026-08-01', ?)
                 """,
-                ("POL-1", TENANT, STORE, SKU, "2026-08-01T00:00:00+00:00"),
+                ("POL-1", TENANT, STORE, SKU, policy_created_at),
             )
             conn.execute(
                 """
@@ -275,6 +286,24 @@ def test_formal_gate_blocks_missing_transport_lead(tmp_path) -> None:
     with pytest.raises(OrderingError) as exc:
         service.create_draft(TENANT, STORE, ACTOR, make_payload(material_no="MNO-001"))
     assert "delivery_constraint" in str(exc.value)
+
+
+def test_formal_gate_blocks_stale_transport_lead(tmp_path) -> None:
+    db = make_db(tmp_path)
+    seed_gate_ready(db, transport_data_as_of="2026-06-01T00:00:00+00:00")
+    service = service_for(db)
+    with pytest.raises(OrderingError) as exc:
+        service.create_draft(TENANT, STORE, ACTOR, make_payload(material_no="MNO-001"))
+    assert "delivery_constraint" in str(exc.value)
+
+
+def test_formal_gate_blocks_stale_policy(tmp_path) -> None:
+    db = make_db(tmp_path)
+    seed_gate_ready(db, policy_created_at="2026-01-01T00:00:00+00:00")
+    service = service_for(db)
+    with pytest.raises(OrderingError) as exc:
+        service.create_draft(TENANT, STORE, ACTOR, make_payload(material_no="MNO-001"))
+    assert "supply_constraint" in str(exc.value)
 
 
 def test_demo_draft_allowed_with_labels_even_without_formal_data(tmp_path) -> None:

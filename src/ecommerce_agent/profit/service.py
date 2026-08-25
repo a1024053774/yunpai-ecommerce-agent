@@ -259,7 +259,7 @@ class ProfitService:
 
         entries = self._entries(tenant_id, store_id, period, scope)
         declared_granularities = sorted(
-            {str(entry["granularity"]) for entry in entries if entry["granularity"]}
+            {str(entry["granularity"] or "undeclared") for entry in entries}
         )
         if len(declared_granularities) > 1:
             # 店铺级/订单级/日/月金额未按批准分摊政策汇总前，禁止静默混粒度。

@@ -40,8 +40,9 @@ def main() -> int:
         page.fill("#m10Store", "e2e-store")
         page.fill("#m10Period", "2026-08")
         page.click("#loadM10Decision")
+        page.click("#m10SuggestionsBtn")
         page.wait_for_function(
-            "document.querySelectorAll('#m10Suggestions .panel, #m10Suggestions .notice').length >= 1",
+            "!document.getElementById('m10Suggestions').innerHTML.includes('点击“生成经营建议”')",
             timeout=45000,
         )
         page.wait_for_function(
@@ -66,6 +67,11 @@ def main() -> int:
         )
         page.select_option("#m10Scope", "demo")
         page.click("#loadM10Decision")
+        page.click("#m10SuggestionsBtn")
+        page.wait_for_function(
+            "!document.getElementById('m10Suggestions').innerHTML.includes('点击“生成经营建议”')",
+            timeout=45000,
+        )
         page.wait_for_timeout(1000)
         page.screenshot(
             path=str(OUT_DIR / "m10-decision-demo-20260824.png"),

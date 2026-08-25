@@ -416,7 +416,7 @@
           <article class="panel"><div class="panel-head"><h3>库存风险</h3><span class="muted">来自固化库存计划</span></div><div class="table-wrap"><table><thead><tr><th>SKU</th><th>级别</th><th>说明</th></tr></thead><tbody id="m10RiskRows"></tbody></table></div></article>
           <article class="panel"><div class="panel-head"><h3>销量趋势与预测</h3><span class="muted">来自需求事实与固化预测，只读；点击 SKU 行可下钻</span></div><div class="table-wrap"><table><thead><tr><th>SKU</th><th>近7日需求</th><th>近30日需求</th><th>预测 7/14/30 日</th><th>状态</th></tr></thead><tbody id="m10TrendRows"></tbody></table></div></article>
           <article class="panel"><div class="panel-head"><h3>广告 ROI 可用性</h3></div><div class="panel-body" id="m10Marketing"></div></article>
-          <article class="panel"><div class="panel-head"><h3>经营建议（只读，需人工确认）</h3><span class="muted">建议由固化事实推导，页面无执行按钮</span></div><div class="panel-body stack" id="m10Suggestions"></div></article>
+          <article class="panel"><div class="panel-head"><h3>经营建议（只读，需人工确认）</h3><span class="muted">建议由固化事实推导，页面无执行按钮</span><button class="button primary" id="m10SuggestionsBtn">生成经营建议</button></div><div class="panel-body stack" id="m10Suggestions"></div></article>
           <article class="panel" id="m10SkuPanel" style="display:none;margin-top:14px"><div class="panel-head"><h3>单品下钻<span id="m10SkuTitle"></span></h3><span class="muted">需求 / 预测 / 回测 / 库存计划 / 订购单 / 竞品 / 费用（同一账本，只读）</span></div><div class="panel-body stack" id="m10SkuDetail"></div></article>
         </section>
 
@@ -2723,11 +2723,8 @@ const titles = { overview: '经营总览', service: '智能客服', commerce: '�
         : '<div class="notice">广告 ROI 暂不可核算：无营销数据或接口未就绪（M9-R 数据接入后可用）</div>';
       const unsent = drafts.filter((draft) => draft.status === 'draft' || draft.status === 'awaiting_confirmation');
       const criticalRisks = risks.filter((risk) => ['high', 'critical'].includes(risk.risk_level || risk.severity || ''));
-      const decisionResp = await api(`/v1/decision/suggestions`, { method: 'POST', body: JSON.stringify({ store_id: store, period, scope }) }).catch(() => null);
-      if (decisionResp && decisionResp.available && decisionResp.suggestions.length) {
-        $('m10Suggestions').innerHTML = decisionResp.suggestions.map((s) => `<div class="panel" style="margin:0 0 10px"><div class="panel-head"><strong>${escapeHtml(s.suggestion)}</strong></div><div class="panel-body stack"><div>${escapeHtml(s.basis)}</div><div class="muted">数据缺口：${(s.data_gaps || []).map(escapeHtml).join('、') || '无'} · 需确认：${escapeHtml(s.owner)} · 下一步：${escapeHtml(s.next_step)}</div></div></div>`).join('');
-      } else {
-        $('m10Suggestions').innerHTML = `<div class="notice">模型建议不可用（${escapeHtml(decisionResp ? decisionResp.reason || '模型未启用或未配置密钥' : '接口未就绪')}）。页面不生成未经模型解释的经营建议。</div>`;
+      if (!$('m10Suggestions').innerHTML.trim()) {
+        $('m10Suggestions').innerHTML = '<div class="notice">点击“生成经营建议”按钮后由模型生成（会调用模型，不会自动触发）。</div>';
       }
       $('m10Kpis').innerHTML = [
         ['销售利润', projection?.sales.amount ?? '-', projection?.sales.status === 'blocked' ? '对账异常' : (projection?.sales.status === 'available' ? '可用' : '缺失')],
@@ -3488,14 +3485,16 @@ const titles = { overview: '经营总览', service: '智能客服', commerce: '�
       rowsEl.innerHTML = '<tr><td colspan="5"><div class="muted">正在加载销量与预测…</div></td></tr>';
       const q2 = (name, value) => `${name}=${encodeURIComponent(value)}`;
       try {
-        const [drafts, risks] = await Promise.all([
+        const [drafts, risks, catalog] = await Promise.all([
           api(`/v1/ordering/drafts?${q2('store_id', store)}&limit=50`).catch(() => []),
           api(`/v1/forecasting/risks?${q2('store_id', store)}&limit=20`).catch(() => []),
+          api(`/v1/catalog/items?${q2('store_id', store)}&status=active&limit=200`).catch(() => []),
         ]);
         const skuSet = new Set();
+        (catalog || []).forEach((c) => c.sku_id && skuSet.add(c.sku_id));
         (drafts || []).forEach((d) => d.sku_id && skuSet.add(d.sku_id));
         (risks || []).forEach((r) => (r.sku_id || r.sku) && skuSet.add(r.sku_id || r.sku));
-        const skus = Array.from(skuSet).slice(0, 6);
+        const skus = Array.from(skuSet).slice(0, 8);
         if (!skus.length) {
           rowsEl.innerHTML = '<tr><td colspan="5"><div class="empty">暂无 SKU 数据；先运行预测或生成订购草稿</div></td></tr>';
           return;
@@ -3536,7 +3535,7 @@ const titles = { overview: '经营总览', service: '智能客服', commerce: '�
       panel.style.display = '';
       $('m10SkuTitle').textContent = `：${sku}`;
       detail.innerHTML = '<div class="muted">正在加载明细…</div>';
-      const [demand, forecast, backtest, plan, drafts, comp, ledger] = await Promise.all([
+      const [demand, forecast, backtest, plan, drafts, comp, ledger, orders, inventory, marketing] = await Promise.all([
         api(`/v1/forecasting/demand?${q2('store_id', store)}&${q2('sku_id', sku)}&include_history=true`).catch(() => null),
         api(`/v1/forecasting/skus/${encodeURIComponent(sku)}/forecast?${q2('store_id', store)}`).catch(() => null),
         api(`/v1/forecasting/skus/${encodeURIComponent(sku)}/backtest?${q2('store_id', store)}`).catch(() => null),
@@ -3544,6 +3543,9 @@ const titles = { overview: '经营总览', service: '智能客服', commerce: '�
         api(`/v1/ordering/drafts?${q2('store_id', store)}&limit=50`).catch(() => []),
         api(`/v1/competitive/analysis?${q2('subject_sku', sku)}&${q2('store_id', store)}`).catch(() => null),
         api(`/v1/profit/ledger/entries?${q2('store_id', store)}&${q2('sku_id', sku)}&scope=formal`).catch(() => null),
+        api(`/v1/orders?${q2('store_id', store)}&limit=100`).catch(() => []),
+        api(`/v1/inventory/balances?${q2('store_id', store)}&${q2('sku_id', sku)}`).catch(() => []),
+        api(`/v1/marketing/performance?${q2('store_id', store)}`).catch(() => []),
       ]);
       const facts = demand && demand.facts ? demand.facts.slice(-14) : [];
       const demandHtml = facts.length
@@ -3564,7 +3566,7 @@ const titles = { overview: '经营总览', service: '智能客服', commerce: '�
         : '<div class="empty">暂无库存计划</div>';
       const draftRows = (Array.isArray(drafts) ? drafts : []).filter((d) => d.sku_id === sku);
       const draftHtml = draftRows.length
-        ? draftRows.map((d) => `<div>${escapeHtml(String(d.order_draft_id || '').slice(0, 12))} · ${escapeHtml(d.status)} · 建议 ${escapeHtml(String(d.recommended_qty))} · ${escapeHtml(d.unsent_label || '')}</div>`).join('')
+        ? draftRows.map((d) => `<div>${escapeHtml(String(d.order_draft_id || '').slice(0, 12))} · ${escapeHtml(d.status)} · 建议 ${escapeHtml(String(d.recommended_qty))} · 版本 ${escapeHtml(String(d.version ?? '-'))} · ${escapeHtml(d.unsent_label || '')}</div>`).join('')
         : '<div class="empty">无订购单草稿</div>';
       const compHtml = comp
         ? `<div>竞品分析可用（${escapeHtml(String((comp.prices && comp.prices.length) || 0))} 条价格对比）</div>`
@@ -3575,6 +3577,24 @@ const titles = { overview: '经营总览', service: '智能客服', commerce: '�
           ledgerRows.map((e) => `<tr><td>${escapeHtml(e.category)}</td><td>${escapeHtml(String(e.amount ?? '受限'))}</td><td>${escapeHtml(e.granularity || '未声明')}</td><td>${escapeHtml(e.reconciliation_status || '')}</td></tr>`).join('') +
           '</tbody></table>'
         : '<div class="empty">无费用条目</div>';
+      const orderRows = (Array.isArray(orders) ? orders : []).filter((o) => (o.lines || []).some((l) => l.sku_id === sku));
+      const orderHtml = orderRows.length
+        ? '<table class="mini"><thead><tr><th>订单</th><th>状态</th><th>金额</th><th>时间</th></tr></thead><tbody>' +
+          orderRows.slice(0, 10).map((o) => `<tr><td>${escapeHtml(o.order_id)}</td><td>${escapeHtml(o.order_status)}</td><td>${escapeHtml(String(o.total_amount ?? '-'))}</td><td>${escapeHtml(o.placed_at || '')}</td></tr>`).join('') +
+          '</tbody></table>'
+        : '<div class="empty">无相关订单</div>';
+      const invRows = Array.isArray(inventory) ? inventory : [];
+      const invHtml = invRows.length
+        ? '<table class="mini"><thead><tr><th>仓库</th><th>可售</th><th>在途</th></tr></thead><tbody>' +
+          invRows.map((i) => `<tr><td>${escapeHtml(i.warehouse_id || '-')}</td><td>${escapeHtml(String(Math.max(0, (Number(i.on_hand) || 0) - (Number(i.reserved) || 0))))}</td><td>${escapeHtml(String(i.inbound ?? '-'))}</td></tr>`).join('') +
+          '</tbody></table>'
+        : '<div class="empty">无库存快照</div>';
+      const marketingRows = Array.isArray(marketing) ? marketing : [];
+      const marketingHtml = marketingRows.length
+        ? '<div class="muted">店铺级广告数据（无 SKU 级拆分）</div><table class="mini"><thead><tr><th>活动</th><th>日期</th><th>花费</th><th>归因收入</th></tr></thead><tbody>' +
+          marketingRows.slice(0, 10).map((m) => `<tr><td>${escapeHtml(m.campaign_name || '')}</td><td>${escapeHtml(m.metric_date || '')}</td><td>${escapeHtml(String(m.spend ?? '-'))}</td><td>${escapeHtml(String(m.attributed_revenue ?? '-'))}</td></tr>`).join('') +
+          '</tbody></table>'
+        : '<div class="empty">无广告数据</div>';
       const totalDemand = facts.reduce((s, f) => s + (Number(f.eligible_units) || 0), 0);
       detail.innerHTML = `<div class="grid kpis" style="margin:0 0 10px">` +
         `<div class="kpi"><span class="label">近14日需求</span><span class="value">${totalDemand}</span></div>` +
@@ -3584,12 +3604,30 @@ const titles = { overview: '经营总览', service: '智能客服', commerce: '�
         `<div class="stack"><h4>需求历史（近 14 天）</h4>${demandHtml}</div>` +
         `<div class="stack"><h4>最新预测</h4>${forecastHtml}</div>` +
         `<div class="stack"><h4>回测（最近 4 个 origin）</h4>${backtestHtml}</div>` +
+        `<div class="stack"><h4>库存快照</h4>${invHtml}</div>` +
         `<div class="stack"><h4>库存计划</h4>${planHtml}</div>` +
-        `<div class="stack"><h4>相关订购单</h4>${draftHtml}</div>` +
+        `<div class="stack"><h4>相关订单</h4>${orderHtml}</div>` +
+        `<div class="stack"><h4>相关订购单（含版本）</h4>${draftHtml}</div>` +
+        `<div class="stack"><h4>广告明细（店铺级）</h4>${marketingHtml}</div>` +
         `<div class="stack"><h4>竞品分析</h4>${compHtml}</div>` +
         `<div class="stack"><h4>费用条目（同一账本）</h4>${ledgerHtml}</div>`;
       detail.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
+
+    async function loadM10Suggestions() {
+      const store = $('m10Store').value.trim();
+      const period = $('m10Period').value.trim();
+      const scope = $('m10Scope').value;
+      $('m10Suggestions').innerHTML = '<div class="muted">正在生成经营建议…</div>';
+      const decisionResp = await api(`/v1/decision/suggestions`, { method: 'POST', body: JSON.stringify({ store_id: store, period, scope }) }).catch(() => null);
+      if (decisionResp && decisionResp.available && decisionResp.suggestions.length) {
+        $('m10Suggestions').innerHTML = decisionResp.suggestions.map((s) => `<div class="panel" style="margin:0 0 10px"><div class="panel-head"><strong>${escapeHtml(s.suggestion)}</strong></div><div class="panel-body stack"><div>${escapeHtml(s.basis)}</div><div class="muted">数据缺口：${(s.data_gaps || []).map(escapeHtml).join('、') || '无'} · 需确认：${escapeHtml(s.owner)} · 下一步：${escapeHtml(s.next_step)}${(s.evidence_refs && s.evidence_refs.length) ? ' · 证据：' + s.evidence_refs.map(escapeHtml).join('、') : ''}</div></div></div>`).join('');
+      } else {
+        $('m10Suggestions').innerHTML = `<div class="notice">模型建议不可用（${escapeHtml(decisionResp ? decisionResp.reason || '模型未启用或未配置密钥' : '接口未就绪')}）。页面不生成未经模型解释的经营建议。</div>`;
+      }
+    }
+
+    $('m10SuggestionsBtn').addEventListener('click', () => loadM10Suggestions().catch((error) => toast(error.message)));
 
     document.addEventListener('click', (e) => {
       const row = e.target.closest('[data-sku]');

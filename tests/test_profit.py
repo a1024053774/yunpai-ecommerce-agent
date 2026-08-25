@@ -412,6 +412,8 @@ def _entry_with_granularity(
     granularity: str | None,
     sku_id: str | None = None,
     entry_key: str,
+    source_kind: str = "manual",
+    order_id: str | None = None,
 ) -> LedgerEntryInput:
     return LedgerEntryInput(
         store_id=STORE,
@@ -419,11 +421,12 @@ def _entry_with_granularity(
         category=category,
         scope=ProfitScope.FORMAL,
         amount=amount,
-        source_kind="manual",
-        granularity=granularity,
-        sku_id=sku_id,
-        entry_key=entry_key,
-    )
+        source_kind=source_kind,
+            granularity=granularity,
+            sku_id=sku_id,
+            order_id=order_id,
+            entry_key=entry_key,
+        )
 
 
 def test_mixed_granularity_projection_rejected(tmp_path) -> None:
@@ -431,7 +434,15 @@ def test_mixed_granularity_projection_rejected(tmp_path) -> None:
     register_default_policy(service)
     seed_delivered_order(service, "O1")
     service.record_entry(
-        TENANT, entry(ExpenseCategory.SIGNED_REVENUE, "1000.00", order_id="O1")
+        TENANT,
+        _entry_with_granularity(
+            ExpenseCategory.SIGNED_REVENUE,
+            "1000.00",
+            granularity="store",
+            entry_key="rev-store",
+            source_kind="actual",
+            order_id="O1",
+        ),
     )
     service.record_entry(
         TENANT,
@@ -454,6 +465,74 @@ def test_mixed_granularity_projection_rejected(tmp_path) -> None:
     with pytest.raises(ProfitError) as exc:
         service.projection(TENANT, STORE, PERIOD, ProfitScope.FORMAL)
     assert "mixed_granularity_projection" in str(exc.value)
+
+
+def test_undeclared_granularity_mixing_blocked(tmp_path) -> None:
+    service = make_service(tmp_path)
+    register_default_policy(service)
+    seed_delivered_order(service, "O1")
+    service.record_entry(
+        TENANT, entry(ExpenseCategory.SIGNED_REVENUE, "1000.00", order_id="O1")
+    )
+    service.record_entry(
+        TENANT,
+        _entry_with_granularity(
+            ExpenseCategory.PLATFORM_FEE,
+            "-80.00",
+            granularity="store",
+            entry_key="pf-store",
+        ),
+    )
+    service.record_entry(
+        TENANT,
+        _entry_with_granularity(
+            ExpenseCategory.ADVERTISING_COST,
+            "-50.00",
+            granularity=None,
+            entry_key="ad-undeclared",
+        ),
+    )
+    with pytest.raises(ProfitError) as exc:
+        service.projection(TENANT, STORE, PERIOD, ProfitScope.FORMAL)
+    assert "mixed_granularity_projection" in str(exc.value)
+    assert "undeclared" in str(exc.value)
+
+
+def test_uniform_declared_granularity_passes(tmp_path) -> None:
+    service = make_service(tmp_path)
+    register_default_policy(service)
+    seed_delivered_order(service, "O1")
+    service.record_entry(
+        TENANT,
+        _entry_with_granularity(
+            ExpenseCategory.SIGNED_REVENUE,
+            "1000.00",
+            granularity="store",
+            entry_key="rev-store",
+            source_kind="actual",
+            order_id="O1",
+        ),
+    )
+    service.record_entry(
+        TENANT,
+        _entry_with_granularity(
+            ExpenseCategory.PLATFORM_FEE,
+            "-80.00",
+            granularity="store",
+            entry_key="pf-store",
+        ),
+    )
+    service.record_entry(
+        TENANT,
+        _entry_with_granularity(
+            ExpenseCategory.ADVERTISING_COST,
+            "-50.00",
+            granularity="store",
+            entry_key="ad-store",
+        ),
+    )
+    view = service.projection(TENANT, STORE, PERIOD, ProfitScope.FORMAL)
+    assert view.reconciliation_ok is True
 
 
 def test_ledger_list_entries_filters_by_sku_and_period(tmp_path) -> None:

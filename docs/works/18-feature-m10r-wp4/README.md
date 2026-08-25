@@ -137,6 +137,52 @@ red-first 反例：
 - 新增 6 个反例测试；全量回归 **1121 passed / 0 failed**（24 warnings 均为既有
   `traffic_lab_api` Operation ID 告警），耗时 27 分钟。
 
+## 2026-08-25 P1 收口（胡磊第二轮 P1 清单）
+
+### 1. 粒度守卫 fail-closed（利润）
+
+- `profit/service.py` projection：`granularity=NULL` 归一为 `"undeclared"` 并入集合，
+  出现两种及以上粒度（含空值）即抛 `mixed_granularity_projection`。空值不再能绕过
+  店铺级/订单级不许混算的守卫。
+- 反例：空+store 混算被拦；store+order 被拦（已有）；统一声明通过；全空通过。
+
+### 2. 决策台三个页面问题
+
+- 经营建议改显式触发：刷新决策台不再隐式 `POST /v1/decision/suggestions`；新增
+  “生成经营建议”按钮，点击才调模型；未生成时面板明确提示。
+- 单品下钻补全 4 块：相关订单（按订单行 SKU 过滤）、库存快照（可售/在途）、
+  广告明细（店铺级，无 SKU 拆分，显式标注）、单据版本（drafts.version）。
+- 趋势列表 SKU 集合改为 union（active catalog + drafts + risks），覆盖正常
+  无风险、无草稿的商品，取前 8 个。
+- Playwright DOM 校验：按钮存在、点击前零模型调用、点击后渲染 3 条建议（含“证据：”
+  引用行）、下钻四块齐全、趋势含仅 catalog 的 SKU。
+
+### 3. 模型建议“依据”补证据引用（硬校验）
+
+- `DecisionSuggestion` 新增 `evidence_refs`（必须来自 `evidence_catalog`）与
+  `amount_refs`（`字段=数值` 字符串，必须与事实一致）；`suggest` 从压缩事实生成
+  catalog 写入 prompt。
+- 违规（引用不在 catalog / 数值不匹配 / 格式非法）即整条 `model_output_invalid`
+  （“模型建议不可用”）；空 refs 允许。
+- 前端建议卡片渲染“证据：”引用行。真实模型 smoke：返回 3 条建议且引用全部来自
+  catalog（reconciliation:entry_count / issue codes / profit:layers:status 等）。
+
+### 4. 供货/交期 Gate 证据加固（不改 schema）
+
+- 供货只认 per-SKU `inventory_planning_policies`（已绑 SKU/料号），要求
+  `active_from <= now` 且 `created_at` 在 90 天内；移除无 SKU 绑定的店铺级
+  field evidence 兜底。
+- 交期维持店铺级 `readiness:transport_lead_days` field evidence，但强制
+  `data_as_of` 非空、不晚于 now、距今 ≤30 天，且 `source_reference` 非空；
+  “交期暂无 SKU 粒度数据源”在文档显式声明。
+- 反例：过期交期证据（>30 天）阻断、过期政策（>90 天）阻断、有效政策+新鲜交期放行。
+
+### 验证
+
+- 新增 8 个反例测试；定向回归 101 passed；compileall / git diff --check 通过；
+  全量回归 **1129 passed / 0 failed**（24 warnings 均为既有 traffic_lab 告警），
+  耗时 28:46。
+
 ## 2026-08-24 下午：决策台销量/预测面板、单品下钻与粒度守卫（补 WP4 验收）
 
 对照任务书 WP4 验收标准补齐，证据随 2026-08-24 截图更新：

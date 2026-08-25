@@ -60,6 +60,8 @@ def _valid_payload() -> dict:
                 "data_gaps": ["purchase_cost"],
                 "owner": "财务负责人人工确认",
                 "next_step": "录入采购成本并复核对账",
+                "evidence_refs": ["profit:sales:status", "profit:sales:amount"],
+                "amount_refs": ["profit.sales.amount=600"],
             }
         ]
     }
@@ -91,6 +93,8 @@ def test_valid_model_output_is_parsed_and_facts_unchanged() -> None:
     assert suggestion.suggestion == "补齐采购成本后核算销售利润"
     assert suggestion.data_gaps == ["purchase_cost"]
     assert suggestion.owner == "财务负责人人工确认"
+    assert suggestion.evidence_refs == ["profit:sales:status", "profit:sales:amount"]
+    assert suggestion.amount_refs == ["profit.sales.amount=600"]
     assert result.facts_digest is not None and len(result.facts_digest) == 64
     assert facts == snapshot  # 模型解释不得修改任何事实
     assert model.calls and "decision_suggestion" in model.calls[0][0][1]["content"]
@@ -123,6 +127,92 @@ def test_invalid_model_output_rejected() -> None:
         result = DecisionAdvisorService(model).suggest(_facts())
         assert result.available is False
         assert result.reason == "model_output_invalid"
+
+
+def test_evidence_ref_not_in_catalog_rejected() -> None:
+    model = _FakeModel(
+        payload={
+            "suggestions": [
+                {
+                    "suggestion": "x",
+                    "basis": "y",
+                    "data_gaps": [],
+                    "owner": "z",
+                    "next_step": "w",
+                    "evidence_refs": ["profit:fake:not_exist"],
+                    "amount_refs": [],
+                }
+            ]
+        }
+    )
+    result = DecisionAdvisorService(model).suggest(_facts())
+    assert result.available is False
+    assert result.reason == "model_output_invalid"
+
+
+def test_amount_ref_mismatch_rejected() -> None:
+    model = _FakeModel(
+        payload={
+            "suggestions": [
+                {
+                    "suggestion": "x",
+                    "basis": "y",
+                    "data_gaps": [],
+                    "owner": "z",
+                    "next_step": "w",
+                    "evidence_refs": ["profit:sales:amount"],
+                    "amount_refs": [
+                        "profit.sales.amount=999.99"
+                    ],
+                }
+            ]
+        }
+    )
+    result = DecisionAdvisorService(model).suggest(_facts())
+    assert result.available is False
+    assert result.reason == "model_output_invalid"
+
+
+def test_amount_ref_format_invalid_rejected() -> None:
+    model = _FakeModel(
+        payload={
+            "suggestions": [
+                {
+                    "suggestion": "x",
+                    "basis": "y",
+                    "data_gaps": [],
+                    "owner": "z",
+                    "next_step": "w",
+                    "evidence_refs": [],
+                    "amount_refs": ["profit.sales.amount"],
+                }
+            ]
+        }
+    )
+    result = DecisionAdvisorService(model).suggest(_facts())
+    assert result.available is False
+    assert result.reason == "model_output_invalid"
+
+
+def test_empty_evidence_refs_allowed() -> None:
+    model = _FakeModel(
+        payload={
+            "suggestions": [
+                {
+                    "suggestion": "当前无待处理事项",
+                    "basis": "无缺口",
+                    "data_gaps": [],
+                    "owner": "管理员",
+                    "next_step": "无需操作",
+                    "evidence_refs": [],
+                    "amount_refs": [],
+                }
+            ]
+        }
+    )
+    result = DecisionAdvisorService(model).suggest(_facts())
+    assert result.available is True
+    assert result.suggestions[0].evidence_refs == []
 
 
 ADMIN_HEADERS = {
