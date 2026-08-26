@@ -362,12 +362,16 @@ class AgentService:
         context: dict[str, Any] | None = None,
         *,
         idempotency_key: str | None,
+        source_type: str = "api",
+        source_reference: str | None = None,
     ) -> Iterator[dict[str, Any]]:
         internal_session_id = self.db.resolve_session(
             tenant_id=principal.tenant_id,
             client_id=principal.client_id,
             external_session_id=session_id,
             subject_hash=principal.subject_hash,
+            source_type=source_type,
+            source_reference=source_reference,
         )
         safe_message, input_redacted = redact_sensitive(message)
         untrusted_context = dict(context or {})

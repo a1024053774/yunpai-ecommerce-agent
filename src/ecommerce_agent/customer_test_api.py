@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 
 from fastapi import APIRouter, Depends
+from fastapi.responses import StreamingResponse
 
 from .auth import Principal
+from .database import SessionScopeError
+from .llm import ModelError, ModelUnavailableError
 from .schemas import CustomerTestCase, CustomerTestChatRequest, CustomerTestChatResponse
 from .service import AgentService
 
@@ -76,6 +80,90 @@ def build_customer_test_router(
         return CustomerTestChatResponse(
             **response.model_dump(),
             source_reference=TEST_SOURCE_REFERENCE,
+        )
+
+    @router.post("/stream")
+    def customer_chat_stream(
+        payload: CustomerTestChatRequest,
+        principal: Principal = Depends(require_local_customer_test),
+    ) -> StreamingResponse:
+        def encode(event: dict) -> str:
+            data = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
+            return f"data: {data}\n\n"
+
+        def events():
+            yield encode(
+                {
+                    "event": "status",
+                    "stage": "accepted",
+                    "message": "请求已接收，Agent 正在分析问题",
+                }
+            )
+            try:
+                stream = service.chat_stream(
+                    principal,
+                    payload.session_id,
+                    payload.message,
+                    payload.context,
+                    idempotency_key=None,
+                    source_type="simulation",
+                    source_reference=TEST_SOURCE_REFERENCE,
+                )
+                for item in stream:
+                    if item["event"] == "result":
+                        response = CustomerTestChatResponse(
+                            **item["response"],
+                            source_reference=TEST_SOURCE_REFERENCE,
+                        )
+                        yield encode(
+                            {
+                                "event": "done",
+                                "response": response.model_dump(mode="json"),
+                            }
+                        )
+                        continue
+                    yield encode(item)
+            except SessionScopeError as exc:
+                yield encode(
+                    {
+                        "event": "error",
+                        "code": exc.code,
+                        "message": str(exc),
+                        "retry_advised": False,
+                    }
+                )
+            except ModelUnavailableError:
+                yield encode(
+                    {
+                        "event": "error",
+                        "code": "model_unavailable",
+                        "message": "模型服务暂时不可用，请稍后重试",
+                        "retry_advised": True,
+                    }
+                )
+            except ModelError:
+                yield encode(
+                    {
+                        "event": "error",
+                        "code": "model_error",
+                        "message": "模型生成失败，请检查模型配置",
+                        "retry_advised": False,
+                    }
+                )
+            except Exception:
+                yield encode(
+                    {
+                        "event": "error",
+                        "code": "internal_error",
+                        "message": "测试流处理失败，请查看服务日志",
+                        "retry_advised": False,
+                    }
+                )
+
+        return StreamingResponse(
+            events(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
     return router
