@@ -45,13 +45,22 @@ class OrderingService:
     def _row_to_dict(row: Mapping[str, Any]) -> dict[str, Any]:
         return dict(row)
 
-    def _view(self, row: Mapping[str, Any]) -> OrderDraftView:
+    def _view(
+        self,
+        row: Mapping[str, Any],
+        *,
+        connection: Any | None = None,
+    ) -> OrderDraftView:
         data = self._row_to_dict(row)
         mode = OrderDraftMode(data["mode"])
         unsent_label = (
             "未发送（演示参数）" if mode is OrderDraftMode.DEMO else "未发送"
         )
-        events = self._list_events(data["tenant_id"], data["order_draft_id"])
+        events = self._list_events(
+            data["tenant_id"],
+            data["order_draft_id"],
+            connection=connection,
+        )
         return OrderDraftView(
             order_draft_id=data["order_draft_id"],
             tenant_id=data["tenant_id"],
@@ -85,18 +94,34 @@ class OrderingService:
 
     # ---------- 事件 ----------
 
-    def _list_events(self, tenant_id: str, order_draft_id: str) -> list[OrderEventView]:
+    def _list_events(
+        self,
+        tenant_id: str,
+        order_draft_id: str,
+        *,
+        connection: Any | None = None,
+    ) -> list[OrderEventView]:
+        if connection is not None:
+            return self._events_on(connection, tenant_id, order_draft_id)
         with self.db.connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT event_id, order_draft_id, from_status, to_status,
-                       actor, source_ref, note, created_at
-                FROM purchase_order_events
-                WHERE tenant_id = ? AND order_draft_id = ?
-                ORDER BY rowid ASC
-                """,
-                (tenant_id, order_draft_id),
-            ).fetchall()
+            return self._events_on(conn, tenant_id, order_draft_id)
+
+    @staticmethod
+    def _events_on(
+        conn: Any,
+        tenant_id: str,
+        order_draft_id: str,
+    ) -> list[OrderEventView]:
+        rows = conn.execute(
+            """
+            SELECT event_id, order_draft_id, from_status, to_status,
+                   actor, source_ref, note, created_at
+            FROM purchase_order_events
+            WHERE tenant_id = ? AND order_draft_id = ?
+            ORDER BY rowid ASC
+            """,
+            (tenant_id, order_draft_id),
+        ).fetchall()
         return [
             OrderEventView(
                 event_id=str(row["event_id"]),
@@ -151,6 +176,8 @@ class OrderingService:
         store_id: str,
         actor: str,
         payload: OrderDraftCreate,
+        *,
+        connection: Any | None = None,
     ) -> OrderDraftView:
         gate = self.gate.evaluate(tenant_id, store_id, payload)
         if not gate.allowed:
@@ -163,55 +190,115 @@ class OrderingService:
         missing_fields = (
             [] if payload.mode is OrderDraftMode.FORMAL else ["formal_data_placeholder"]
         )
-        with self.db.connect() as conn:
-            conn.execute(
-                """
-                INSERT INTO purchase_order_drafts (
-                    order_draft_id, tenant_id, store_id, sku_id, material_no,
-                    supplier_ref, recommended_qty, confirmed_qty, unit_cost,
-                    currency, promised_delivery_at, forecast_run_ref,
-                    inventory_snapshot_ref, policy_ref, source_summary,
-                    assumptions_json, missing_fields_json, mode, status,
-                    version, created_by, confirmed_by, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    order_draft_id,
-                    tenant_id,
-                    store_id,
-                    payload.sku_id,
-                    material_no,
-                    payload.supplier_ref,
-                    payload.recommended_qty,
-                    None,
-                    payload.unit_cost,
-                    payload.currency,
-                    payload.promised_delivery_at,
-                    payload.forecast_run_ref,
-                    payload.inventory_snapshot_ref,
-                    payload.policy_ref,
-                    payload.source_summary,
-                    _json_rows(payload.assumptions),
-                    _json_rows(missing_fields),
-                    payload.mode.value,
-                    PurchaseOrderStatus.DRAFT.value,
-                    1,
-                    actor,
-                    None,
-                    now,
-                    now,
-                ),
+        if connection is not None:
+            self._insert_draft(
+                connection,
+                tenant_id,
+                store_id,
+                actor,
+                payload,
+                material_no,
+                order_draft_id,
+                now,
+                missing_fields,
+                gate.reason,
             )
-            self._record_event(
+            return self._draft_view_on(
+                connection, tenant_id, store_id, order_draft_id
+            )
+        with self.db.connect() as conn:
+            self._insert_draft(
                 conn,
                 tenant_id,
-                order_draft_id,
-                PurchaseOrderStatus.DRAFT,
-                PurchaseOrderStatus.DRAFT,
+                store_id,
                 actor,
-                note=gate.reason,
+                payload,
+                material_no,
+                order_draft_id,
+                now,
+                missing_fields,
+                gate.reason,
             )
         return self.get(tenant_id, store_id, order_draft_id)
+
+    def _insert_draft(
+        self,
+        conn: Any,
+        tenant_id: str,
+        store_id: str,
+        actor: str,
+        payload: OrderDraftCreate,
+        material_no: str,
+        order_draft_id: str,
+        now: str,
+        missing_fields: list[str],
+        gate_reason: str,
+    ) -> None:
+        conn.execute(
+            """
+            INSERT INTO purchase_order_drafts (
+                order_draft_id, tenant_id, store_id, sku_id, material_no,
+                supplier_ref, recommended_qty, confirmed_qty, unit_cost,
+                currency, promised_delivery_at, forecast_run_ref,
+                inventory_snapshot_ref, policy_ref, source_summary,
+                assumptions_json, missing_fields_json, mode, status,
+                version, created_by, confirmed_by, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                order_draft_id,
+                tenant_id,
+                store_id,
+                payload.sku_id,
+                material_no,
+                payload.supplier_ref,
+                payload.recommended_qty,
+                None,
+                payload.unit_cost,
+                payload.currency,
+                payload.promised_delivery_at,
+                payload.forecast_run_ref,
+                payload.inventory_snapshot_ref,
+                payload.policy_ref,
+                payload.source_summary,
+                _json_rows(payload.assumptions),
+                _json_rows(missing_fields),
+                payload.mode.value,
+                PurchaseOrderStatus.DRAFT.value,
+                1,
+                actor,
+                None,
+                now,
+                now,
+            ),
+        )
+        self._record_event(
+            conn,
+            tenant_id,
+            order_draft_id,
+            PurchaseOrderStatus.DRAFT,
+            PurchaseOrderStatus.DRAFT,
+            actor,
+            note=gate_reason,
+        )
+
+    def _draft_view_on(
+        self,
+        conn: Any,
+        tenant_id: str,
+        store_id: str,
+        order_draft_id: str,
+    ) -> OrderDraftView:
+        row = conn.execute(
+            """
+            SELECT * FROM purchase_order_drafts
+            WHERE tenant_id = ? AND store_id = ? AND order_draft_id = ?
+            """,
+            (tenant_id, store_id, order_draft_id),
+        ).fetchone()
+        if row is None:
+            raise OrderingError("ordering_draft_not_found")
+        return self._view(row, connection=conn)
 
     # ---------- 查询 ----------
 
@@ -272,50 +359,73 @@ class OrderingService:
         return self._row_to_dict(row), row
 
     def submit_for_confirmation(
-        self, tenant_id: str, store_id: str, order_draft_id: str, actor: str
+        self,
+        tenant_id: str,
+        store_id: str,
+        order_draft_id: str,
+        actor: str,
+        *,
+        connection: Any | None = None,
     ) -> OrderDraftView:
+        if connection is not None:
+            self._submit_on(
+                connection, tenant_id, store_id, order_draft_id, actor
+            )
+            return self._draft_view_on(
+                connection, tenant_id, store_id, order_draft_id
+            )
         with self.db.connect() as conn:
-            row = conn.execute(
-                """
-                SELECT * FROM purchase_order_drafts
-                WHERE tenant_id = ? AND store_id = ? AND order_draft_id = ?
-                """,
-                (tenant_id, store_id, order_draft_id),
-            ).fetchone()
-            if row is None:
-                raise OrderingError("ordering_draft_not_found")
-            current = self._row_to_dict(row)
-            from_status = PurchaseOrderStatus(current["status"])
-            to_status = PurchaseOrderStatus.AWAITING_CONFIRMATION
-            if not legal_transition(from_status, to_status):
-                raise OrderingError("ordering_status_transition_invalid")
-            updated = conn.execute(
-                """
-                UPDATE purchase_order_drafts
-                SET status=?, updated_at=?
-                WHERE tenant_id=? AND store_id=? AND order_draft_id=?
-                  AND status=?
-                """,
-                (
-                    to_status.value,
-                    _utc_now(),
-                    tenant_id,
-                    store_id,
-                    order_draft_id,
-                    from_status.value,
-                ),
-            )
-            if updated.rowcount != 1:
-                raise OrderingError("ordering_status_conflict")
-            self._record_event(
-                conn,
-                tenant_id,
-                order_draft_id,
-                from_status,
-                to_status,
-                actor,
-            )
+            self._submit_on(conn, tenant_id, store_id, order_draft_id, actor)
         return self.get(tenant_id, store_id, order_draft_id)
+
+    def _submit_on(
+        self,
+        conn: Any,
+        tenant_id: str,
+        store_id: str,
+        order_draft_id: str,
+        actor: str,
+    ) -> None:
+        row = conn.execute(
+            """
+            SELECT * FROM purchase_order_drafts
+            WHERE tenant_id = ? AND store_id = ? AND order_draft_id = ?
+            """,
+            (tenant_id, store_id, order_draft_id),
+        ).fetchone()
+        if row is None:
+            raise OrderingError("ordering_draft_not_found")
+        current = self._row_to_dict(row)
+        from_status = PurchaseOrderStatus(current["status"])
+        to_status = PurchaseOrderStatus.AWAITING_CONFIRMATION
+        if not legal_transition(from_status, to_status):
+            raise OrderingError("ordering_status_transition_invalid")
+        updated = conn.execute(
+            """
+            UPDATE purchase_order_drafts
+            SET status=?, updated_at=?
+            WHERE tenant_id=? AND store_id=? AND order_draft_id=?
+              AND status=?
+            """,
+            (
+                to_status.value,
+                _utc_now(),
+                tenant_id,
+                store_id,
+                order_draft_id,
+                from_status.value,
+            ),
+        )
+        if updated.rowcount != 1:
+            raise OrderingError("ordering_status_conflict")
+        self._record_event(
+            conn,
+            tenant_id,
+            order_draft_id,
+            from_status,
+            to_status,
+            actor,
+        )
 
     def confirm(
         self,
@@ -324,104 +434,159 @@ class OrderingService:
         order_draft_id: str,
         actor: str,
         payload: OrderConfirmRequest,
+        *,
+        connection: Any | None = None,
     ) -> OrderDraftView:
-        with self.db.connect() as conn:
-            row = conn.execute(
-                """
-                SELECT * FROM purchase_order_drafts
-                WHERE tenant_id = ? AND store_id = ? AND order_draft_id = ?
-                """,
-                (tenant_id, store_id, order_draft_id),
-            ).fetchone()
-            if row is None:
-                raise OrderingError("ordering_draft_not_found")
-            current = self._row_to_dict(row)
-            from_status = PurchaseOrderStatus(current["status"])
-            to_status = PurchaseOrderStatus.CONFIRMED
-            if not legal_transition(from_status, to_status):
-                raise OrderingError("ordering_status_transition_invalid")
-            if int(current["version"]) != payload.version:
-                raise OrderingError("ordering_version_conflict")
-            updated = conn.execute(
-                """
-                UPDATE purchase_order_drafts
-                SET status=?, confirmed_qty=?, supplier_ref=?,
-                    promised_delivery_at=?, confirmed_by=?, version=version+1,
-                    updated_at=?
-                WHERE tenant_id=? AND store_id=? AND order_draft_id=?
-                  AND version=?
-                """,
-                (
-                    to_status.value,
-                    payload.confirmed_qty,
-                    payload.supplier_ref or current["supplier_ref"],
-                    payload.promised_delivery_at or current["promised_delivery_at"],
-                    actor,
-                    _utc_now(),
-                    tenant_id,
-                    store_id,
-                    order_draft_id,
-                    payload.version,
-                ),
+        if connection is not None:
+            self._confirm_on(
+                connection,
+                tenant_id,
+                store_id,
+                order_draft_id,
+                actor,
+                payload,
             )
-            if updated.rowcount != 1:
-                raise OrderingError("ordering_version_conflict")
-            self._record_event(
+            return self._draft_view_on(
+                connection, tenant_id, store_id, order_draft_id
+            )
+        with self.db.connect() as conn:
+            self._confirm_on(
                 conn,
                 tenant_id,
+                store_id,
                 order_draft_id,
-                from_status,
-                to_status,
                 actor,
-                note="confirmed_by_human",
+                payload,
             )
         return self.get(tenant_id, store_id, order_draft_id)
 
-    def cancel(
-        self, tenant_id: str, store_id: str, order_draft_id: str, actor: str
-    ) -> OrderDraftView:
-        with self.db.connect() as conn:
-            row = conn.execute(
-                """
-                SELECT * FROM purchase_order_drafts
-                WHERE tenant_id = ? AND store_id = ? AND order_draft_id = ?
-                """,
-                (tenant_id, store_id, order_draft_id),
-            ).fetchone()
-            if row is None:
-                raise OrderingError("ordering_draft_not_found")
-            current = self._row_to_dict(row)
-            from_status = PurchaseOrderStatus(current["status"])
-            to_status = PurchaseOrderStatus.CANCELLED
-            if not legal_transition(from_status, to_status):
-                raise OrderingError("ordering_status_transition_invalid")
-            updated = conn.execute(
-                """
-                UPDATE purchase_order_drafts
-                SET status=?, updated_at=?
-                WHERE tenant_id=? AND store_id=? AND order_draft_id=?
-                  AND status=?
-                """,
-                (
-                    to_status.value,
-                    _utc_now(),
-                    tenant_id,
-                    store_id,
-                    order_draft_id,
-                    from_status.value,
-                ),
-            )
-            if updated.rowcount != 1:
-                raise OrderingError("ordering_status_conflict")
-            self._record_event(
-                conn,
-                tenant_id,
-                order_draft_id,
-                from_status,
-                to_status,
+    def _confirm_on(
+        self,
+        conn: Any,
+        tenant_id: str,
+        store_id: str,
+        order_draft_id: str,
+        actor: str,
+        payload: OrderConfirmRequest,
+    ) -> None:
+        row = conn.execute(
+            """
+            SELECT * FROM purchase_order_drafts
+            WHERE tenant_id = ? AND store_id = ? AND order_draft_id = ?
+            """,
+            (tenant_id, store_id, order_draft_id),
+        ).fetchone()
+        if row is None:
+            raise OrderingError("ordering_draft_not_found")
+        current = self._row_to_dict(row)
+        from_status = PurchaseOrderStatus(current["status"])
+        to_status = PurchaseOrderStatus.CONFIRMED
+        if not legal_transition(from_status, to_status):
+            raise OrderingError("ordering_status_transition_invalid")
+        if int(current["version"]) != payload.version:
+            raise OrderingError("ordering_version_conflict")
+        updated = conn.execute(
+            """
+            UPDATE purchase_order_drafts
+            SET status=?, confirmed_qty=?, supplier_ref=?,
+                promised_delivery_at=?, confirmed_by=?, version=version+1,
+                updated_at=?
+            WHERE tenant_id=? AND store_id=? AND order_draft_id=?
+              AND version=?
+            """,
+            (
+                to_status.value,
+                payload.confirmed_qty,
+                payload.supplier_ref or current["supplier_ref"],
+                payload.promised_delivery_at or current["promised_delivery_at"],
                 actor,
+                _utc_now(),
+                tenant_id,
+                store_id,
+                order_draft_id,
+                payload.version,
+            ),
+        )
+        if updated.rowcount != 1:
+            raise OrderingError("ordering_version_conflict")
+        self._record_event(
+            conn,
+            tenant_id,
+            order_draft_id,
+            from_status,
+            to_status,
+            actor,
+            note="confirmed_by_human",
+        )
+
+    def cancel(
+        self,
+        tenant_id: str,
+        store_id: str,
+        order_draft_id: str,
+        actor: str,
+        *,
+        connection: Any | None = None,
+    ) -> OrderDraftView:
+        if connection is not None:
+            self._cancel_on(
+                connection, tenant_id, store_id, order_draft_id, actor
             )
+            return self._draft_view_on(
+                connection, tenant_id, store_id, order_draft_id
+            )
+        with self.db.connect() as conn:
+            self._cancel_on(conn, tenant_id, store_id, order_draft_id, actor)
         return self.get(tenant_id, store_id, order_draft_id)
+
+    def _cancel_on(
+        self,
+        conn: Any,
+        tenant_id: str,
+        store_id: str,
+        order_draft_id: str,
+        actor: str,
+    ) -> None:
+        row = conn.execute(
+            """
+            SELECT * FROM purchase_order_drafts
+            WHERE tenant_id = ? AND store_id = ? AND order_draft_id = ?
+            """,
+            (tenant_id, store_id, order_draft_id),
+        ).fetchone()
+        if row is None:
+            raise OrderingError("ordering_draft_not_found")
+        current = self._row_to_dict(row)
+        from_status = PurchaseOrderStatus(current["status"])
+        to_status = PurchaseOrderStatus.CANCELLED
+        if not legal_transition(from_status, to_status):
+            raise OrderingError("ordering_status_transition_invalid")
+        updated = conn.execute(
+            """
+            UPDATE purchase_order_drafts
+            SET status=?, updated_at=?
+            WHERE tenant_id=? AND store_id=? AND order_draft_id=?
+              AND status=?
+            """,
+            (
+                to_status.value,
+                _utc_now(),
+                tenant_id,
+                store_id,
+                order_draft_id,
+                from_status.value,
+            ),
+        )
+        if updated.rowcount != 1:
+            raise OrderingError("ordering_status_conflict")
+        self._record_event(
+            conn,
+            tenant_id,
+            order_draft_id,
+            from_status,
+            to_status,
+            actor,
+        )
 
     def advance_status(
         self,
@@ -430,55 +595,87 @@ class OrderingService:
         order_draft_id: str,
         actor: str,
         payload: OrderStatusAdvanceRequest,
+        *,
+        connection: Any | None = None,
     ) -> OrderDraftView:
-        with self.db.connect() as conn:
-            row = conn.execute(
-                """
-                SELECT * FROM purchase_order_drafts
-                WHERE tenant_id = ? AND store_id = ? AND order_draft_id = ?
-                """,
-                (tenant_id, store_id, order_draft_id),
-            ).fetchone()
-            if row is None:
-                raise OrderingError("ordering_draft_not_found")
-            current = self._row_to_dict(row)
-            from_status = PurchaseOrderStatus(current["status"])
-            to_status = PurchaseOrderStatus(payload.to_status)
-            if not legal_transition(from_status, to_status):
-                raise OrderingError("ordering_status_transition_invalid")
-            if int(current["version"]) != payload.version:
-                raise OrderingError("ordering_version_conflict")
-            if (
-                to_status in EXTERNAL_STATE_REQUIRES_SOURCE
-                and not payload.source_ref
-            ):
-                raise OrderingError("ordering_external_state_requires_source")
-            updated = conn.execute(
-                """
-                UPDATE purchase_order_drafts
-                SET status=?, version=version+1, updated_at=?
-                WHERE tenant_id=? AND store_id=? AND order_draft_id=?
-                  AND version=?
-                """,
-                (
-                    to_status.value,
-                    _utc_now(),
-                    tenant_id,
-                    store_id,
-                    order_draft_id,
-                    payload.version,
-                ),
+        if connection is not None:
+            self._advance_on(
+                connection,
+                tenant_id,
+                store_id,
+                order_draft_id,
+                actor,
+                payload,
             )
-            if updated.rowcount != 1:
-                raise OrderingError("ordering_version_conflict")
-            self._record_event(
+            return self._draft_view_on(
+                connection, tenant_id, store_id, order_draft_id
+            )
+        with self.db.connect() as conn:
+            self._advance_on(
                 conn,
                 tenant_id,
+                store_id,
                 order_draft_id,
-                from_status,
-                to_status,
                 actor,
-                source_ref=payload.source_ref,
-                note=payload.note,
+                payload,
             )
         return self.get(tenant_id, store_id, order_draft_id)
+
+    def _advance_on(
+        self,
+        conn: Any,
+        tenant_id: str,
+        store_id: str,
+        order_draft_id: str,
+        actor: str,
+        payload: OrderStatusAdvanceRequest,
+    ) -> None:
+        row = conn.execute(
+            """
+            SELECT * FROM purchase_order_drafts
+            WHERE tenant_id = ? AND store_id = ? AND order_draft_id = ?
+            """,
+            (tenant_id, store_id, order_draft_id),
+        ).fetchone()
+        if row is None:
+            raise OrderingError("ordering_draft_not_found")
+        current = self._row_to_dict(row)
+        from_status = PurchaseOrderStatus(current["status"])
+        to_status = PurchaseOrderStatus(payload.to_status)
+        if not legal_transition(from_status, to_status):
+            raise OrderingError("ordering_status_transition_invalid")
+        if int(current["version"]) != payload.version:
+            raise OrderingError("ordering_version_conflict")
+        if (
+            to_status in EXTERNAL_STATE_REQUIRES_SOURCE
+            and not payload.source_ref
+        ):
+            raise OrderingError("ordering_external_state_requires_source")
+        updated = conn.execute(
+            """
+            UPDATE purchase_order_drafts
+            SET status=?, version=version+1, updated_at=?
+            WHERE tenant_id=? AND store_id=? AND order_draft_id=?
+              AND version=?
+            """,
+            (
+                to_status.value,
+                _utc_now(),
+                tenant_id,
+                store_id,
+                order_draft_id,
+                payload.version,
+            ),
+        )
+        if updated.rowcount != 1:
+            raise OrderingError("ordering_version_conflict")
+        self._record_event(
+            conn,
+            tenant_id,
+            order_draft_id,
+            from_status,
+            to_status,
+            actor,
+            source_ref=payload.source_ref,
+            note=payload.note,
+        )

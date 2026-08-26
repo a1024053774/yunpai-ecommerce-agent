@@ -153,22 +153,25 @@ class OrderDraftGate:
         return False
 
     def _delivery_constraint_evidence(
-        self, tenant_id: str, store_id: str
+        self, tenant_id: str, store_id: str, sku_id: str
     ) -> bool:
-        # 交期暂无 SKU 级数据源：保持店铺级 field evidence，但强制新鲜度
-        # （data_as_of 不晚于 now 且 ≤30 天）与来源引用（P1 收口）。
+        # 交期证据必须声明适用 SKU（scope='operational:sku:<SKU_ID>'，第四轮 WP5 口径）：
+        # 店铺级或其它 SKU 的证据不得放行当前 SKU 的 formal 草稿（fail-closed）。
+        # 同时强制新鲜度（data_as_of 不晚于 now 且 ≤30 天）与来源引用。
         # 时间统一解析为 aware UTC 再比较，避免混时区 ISO 字符串字典序误判。
         now = datetime.now(UTC)
         cutoff = now - timedelta(days=30)
+        declared_scope = f"operational:sku:{sku_id}"
         with self.db.connect() as conn:
             rows = conn.execute(
                 """
                 SELECT data_as_of, source_reference FROM readonly_field_evidence
                 WHERE tenant_id = ? AND store_id = ?
                   AND field_key = 'readiness:transport_lead_days'
+                  AND scope = ?
                   AND evidence_state IN ('actual', 'manual')
                 """,
-                (tenant_id, store_id),
+                (tenant_id, store_id, declared_scope),
             ).fetchall()
         for row in rows:
             if not row["source_reference"] or not str(row["source_reference"]).strip():
@@ -231,7 +234,9 @@ class OrderDraftGate:
             tenant_id, store_id, payload.sku_id, payload.policy_ref
         ):
             missing.append("supply_constraint")
-        if not self._delivery_constraint_evidence(tenant_id, store_id):
+        if not self._delivery_constraint_evidence(
+            tenant_id, store_id, payload.sku_id
+        ):
             missing.append("delivery_constraint")
 
         if missing:

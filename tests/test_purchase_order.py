@@ -56,6 +56,7 @@ def seed_gate_ready(
     with_evidence: bool = False,
     transport_data_as_of: str = "2026-08-19T04:00:00+00:00",
     transport_source_ref: str = "objects/readonly-imports/transport.csv",
+    transport_scope: str = "operational:sku:SKU-1",
     policy_created_at: str = "2026-08-01T00:00:00+00:00",
 ) -> None:
     with db.connect() as conn:
@@ -108,13 +109,14 @@ def seed_gate_ready(
                     evidence_state, reason, data_as_of, source_reference,
                     import_id, payload_hash, created_at
                 ) VALUES (?, ?, ?, 'readiness:transport_lead_days',
-                          'operational', 'actual', 'seed', ?, ?,
+                          ?, 'actual', 'seed', ?, ?,
                           'IMPORT-1', ?, ?)
                 """,
                 (
                     "FE-T",
                     TENANT,
                     STORE,
+                    transport_scope,
                     transport_data_as_of,
                     transport_source_ref,
                     H64,
@@ -301,6 +303,26 @@ def test_formal_gate_blocks_stale_transport_lead(tmp_path) -> None:
 def test_formal_gate_blocks_blank_source_transport_evidence(tmp_path) -> None:
     db = make_db(tmp_path)
     seed_gate_ready(db, transport_source_ref="   ")
+    service = service_for(db)
+    with pytest.raises(OrderingError) as exc:
+        service.create_draft(TENANT, STORE, ACTOR, make_payload(material_no="MNO-001"))
+    assert "delivery_constraint" in str(exc.value)
+
+
+def test_formal_gate_blocks_cross_sku_transport_evidence(tmp_path) -> None:
+    """第四轮 WP5 反例：交期证据声明的是 SKU-2，不得放行 SKU-1 的 formal 草稿。"""
+    db = make_db(tmp_path)
+    seed_gate_ready(db, transport_scope="operational:sku:SKU-2")
+    service = service_for(db)
+    with pytest.raises(OrderingError) as exc:
+        service.create_draft(TENANT, STORE, ACTOR, make_payload(material_no="MNO-001"))
+    assert "delivery_constraint" in str(exc.value)
+
+
+def test_formal_gate_blocks_store_level_transport_evidence(tmp_path) -> None:
+    """第四轮 WP5 反例：店铺级交期证据（无 SKU 声明）不得放行 formal 草稿（fail-closed）。"""
+    db = make_db(tmp_path)
+    seed_gate_ready(db, transport_scope="operational")
     service = service_for(db)
     with pytest.raises(OrderingError) as exc:
         service.create_draft(TENANT, STORE, ACTOR, make_payload(material_no="MNO-001"))

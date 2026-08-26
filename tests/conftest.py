@@ -70,6 +70,23 @@ def _fast_database_initialize(_migration_template, monkeypatch):
     monkeypatch.setattr(Database, "initialize", _fast_initialize)
 
 
+# M10-R 写职责能力（第四轮 WP5：capability 默认拒绝，按职责拆分授权）。
+# 测试默认给 admin-test 全部 M10 写职责；需要验证“无权限 403”的用例自行删除。
+M10_WRITE_CAPABILITY_ENV = {
+    "M10_FINANCE_POLICY_WRITE_ADMIN_IDS": "admin-test",
+    "M10_FINANCE_LEDGER_WRITE_ADMIN_IDS": "admin-test",
+    "M10_ORDERING_DRAFT_WRITE_ADMIN_IDS": "admin-test",
+    "M10_ORDERING_CONFIRM_WRITE_ADMIN_IDS": "admin-test",
+    "M10_ORDERING_ADVANCE_WRITE_ADMIN_IDS": "admin-test",
+}
+
+
+@pytest.fixture(autouse=True)
+def _m10_write_capabilities(monkeypatch):
+    for env_name, value in M10_WRITE_CAPABILITY_ENV.items():
+        monkeypatch.setenv(env_name, value)
+
+
 def make_settings(data_dir: Path) -> Settings:
     return Settings(
         data_dir=data_dir,

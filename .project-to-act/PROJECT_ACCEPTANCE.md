@@ -91,6 +91,23 @@
   Operation ID）。未收口项同 E-20260826-001（capability/职责分离、写+审计同事务、
   交期 SKU 级绑定、GET 落审计、生产运行证据），不构成签署或生产放行。
 
+- 结论：2026-08-26 胡磊第四轮 WP5 复验（head `e379571`）的 3 个代码阻断已修复，
+  证据 ID E-20260826-003。① **写接口 capability 默认拒绝（P0-1）**：auth 新增
+  `finance:policy:write` / `finance:ledger:write` / `ordering:draft:write` /
+  `ordering:confirm:write` / `ordering:advance:write` 五个职责能力（D-035 单一权威
+  定义，按环境变量白名单授权，本地可信模式全授）；profit/ordering 全部写端点按职责
+  校验，无权限 403 `capability_denied:*`，新增无权限/职责拆分反例 2 项。② **业务写
+  与审计同事务（P0-2）**：profit/ordering 写方法支持共享 connection，API 在
+  `db.connect()` 同一事务内完成业务写+审计（成功一并提交、异常一并回滚），新增审计
+  故障注入反例 2 项（HTTP 500 后 ledger/draft/事件计数均不变）。③ **交期证据按 SKU
+  绑定（P1）**：`readiness:transport_lead_days` 证据必须声明
+  `scope='operational:sku:<SKU_ID>'`，店铺级或其它 SKU 证据不再放行 formal 草稿
+  （fail-closed），新增跨 SKU/店铺级反例 2 项；数据契约已在 gate.py 注释与
+  `.env.example` 说明。合并 head 上 M10 定向 `verify_m10r.py` **120 passed**，全量
+  回归 `python -m pytest -q` **1429 passed / 0 failed**（11:44）。仍未收口：生产发布
+  证据（GitHub CI、真实模型、canary/SLO/告警/回退/恢复演练，需外部输入），不构成
+  生产放行。
+
 - 结论：2026-08-25 PR #19 已在实现提交
   `f23dba31de755ee7df5dbc0cde894d41c06b47ad` 上修复负责人针对 `8e7ede3` 的唯一剩余阻断，
   证据 ID 为 E-20260825-002。新增回归先稳定复现“订单头 item 非空、旧订单行无 item 字段”的

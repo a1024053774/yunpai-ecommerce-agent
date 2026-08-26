@@ -38,42 +38,59 @@ class ProfitService:
 
     # ---------- 政策 ----------
 
-    def register_policy(self, tenant_id: str, payload: ProfitPolicyInput) -> dict[str, Any]:
-        with self.db.connect() as conn:
-            existing = conn.execute(
-                "SELECT 1 FROM profit_policies WHERE tenant_id=? AND policy_version=?",
-                (tenant_id, payload.policy_version),
-            ).fetchone()
-            if existing is not None:
-                raise ProfitError("profit_policy_version_conflict")
-            required: dict[str, list[str]] = {}
-            if payload.required_categories is not None:
-                required = {
-                    layer.value: [category.value for category in categories]
-                    for layer, categories in payload.required_categories.items()
-                }
-            conn.execute(
-                """
-                INSERT INTO profit_policies (
-                    policy_id, tenant_id, revenue_recognition_basis,
-                    required_categories_json, policy_version, active_from, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    uuid.uuid4().hex,
-                    tenant_id,
-                    payload.revenue_recognition_basis.value,
-                    json.dumps(required, ensure_ascii=False, sort_keys=True),
-                    payload.policy_version,
-                    _utc_now(),
-                    _utc_now(),
-                ),
-            )
+    def register_policy(
+        self,
+        tenant_id: str,
+        payload: ProfitPolicyInput,
+        *,
+        connection: Any | None = None,
+    ) -> dict[str, Any]:
+        if connection is not None:
+            self._insert_policy(connection, tenant_id, payload)
+        else:
+            with self.db.connect() as conn:
+                self._insert_policy(conn, tenant_id, payload)
         return {
             "tenant_id": tenant_id,
             "policy_version": payload.policy_version,
             "revenue_recognition_basis": payload.revenue_recognition_basis.value,
         }
+
+    @staticmethod
+    def _insert_policy(
+        conn: Any,
+        tenant_id: str,
+        payload: ProfitPolicyInput,
+    ) -> None:
+        existing = conn.execute(
+            "SELECT 1 FROM profit_policies WHERE tenant_id=? AND policy_version=?",
+            (tenant_id, payload.policy_version),
+        ).fetchone()
+        if existing is not None:
+            raise ProfitError("profit_policy_version_conflict")
+        required: dict[str, list[str]] = {}
+        if payload.required_categories is not None:
+            required = {
+                layer.value: [category.value for category in categories]
+                for layer, categories in payload.required_categories.items()
+            }
+        conn.execute(
+            """
+            INSERT INTO profit_policies (
+                policy_id, tenant_id, revenue_recognition_basis,
+                required_categories_json, policy_version, active_from, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                uuid.uuid4().hex,
+                tenant_id,
+                payload.revenue_recognition_basis.value,
+                json.dumps(required, ensure_ascii=False, sort_keys=True),
+                payload.policy_version,
+                _utc_now(),
+                _utc_now(),
+            ),
+        )
 
     def _active_policy(self, tenant_id: str) -> dict[str, Any]:
         with self.db.connect() as conn:
@@ -106,7 +123,13 @@ class ProfitService:
 
     # ---------- ledger ----------
 
-    def record_entry(self, tenant_id: str, payload: LedgerEntryInput) -> dict[str, Any]:
+    def record_entry(
+        self,
+        tenant_id: str,
+        payload: LedgerEntryInput,
+        *,
+        connection: Any | None = None,
+    ) -> dict[str, Any]:
         if payload.scope is ProfitScope.FORMAL and payload.category in {
             ExpenseCategory.SIGNED_REVENUE,
             ExpenseCategory.REFUND_OFFSET,
@@ -116,43 +139,23 @@ class ProfitService:
             )
         digest = content_digest(payload.model_dump())
         entry_id = uuid.uuid4().hex
-        try:
-            with self.db.connect() as conn:
-                conn.execute(
-                    """
-                    INSERT INTO profit_ledger_entries (
-                        entry_id, tenant_id, store_id, period, category, scope,
-                        amount, currency, source_kind, sku_id, order_id,
-                        mapping_version, entry_key, payload_hash, source_reference,
-                        granularity, is_estimated, reconciliation_status, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        entry_id,
-                        tenant_id,
-                        payload.store_id,
-                        payload.period,
-                        payload.category.value,
-                        payload.scope.value,
-                        payload.amount,
-                        payload.currency,
-                        payload.source_kind,
-                        payload.sku_id,
-                        payload.order_id,
-                        payload.mapping_version,
-                        payload.entry_key,
-                        digest,
-                        payload.source_reference,
-                        payload.granularity,
-                        1 if payload.is_estimated else 0,
-                        payload.reconciliation_status,
-                        _utc_now(),
-                    ),
+        if connection is not None:
+            try:
+                self._insert_entry(
+                    connection, tenant_id, payload, digest, entry_id
                 )
-        except Exception as exc:
-            if "UNIQUE constraint failed" in str(exc):
-                raise ProfitError("profit_ledger_entry_duplicate") from exc
-            raise
+            except Exception as exc:
+                if "UNIQUE constraint failed" in str(exc):
+                    raise ProfitError("profit_ledger_entry_duplicate") from exc
+                raise
+        else:
+            try:
+                with self.db.connect() as conn:
+                    self._insert_entry(conn, tenant_id, payload, digest, entry_id)
+            except Exception as exc:
+                if "UNIQUE constraint failed" in str(exc):
+                    raise ProfitError("profit_ledger_entry_duplicate") from exc
+                raise
         return {
             "entry_id": entry_id,
             "entry_key": payload.entry_key,
@@ -163,6 +166,46 @@ class ProfitService:
             "scope": payload.scope.value,
             "amount": payload.amount,
         }
+
+    @staticmethod
+    def _insert_entry(
+        conn: Any,
+        tenant_id: str,
+        payload: LedgerEntryInput,
+        digest: str,
+        entry_id: str,
+    ) -> None:
+        conn.execute(
+            """
+            INSERT INTO profit_ledger_entries (
+                entry_id, tenant_id, store_id, period, category, scope,
+                amount, currency, source_kind, sku_id, order_id,
+                mapping_version, entry_key, payload_hash, source_reference,
+                granularity, is_estimated, reconciliation_status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                entry_id,
+                tenant_id,
+                payload.store_id,
+                payload.period,
+                payload.category.value,
+                payload.scope.value,
+                payload.amount,
+                payload.currency,
+                payload.source_kind,
+                payload.sku_id,
+                payload.order_id,
+                payload.mapping_version,
+                payload.entry_key,
+                digest,
+                payload.source_reference,
+                payload.granularity,
+                1 if payload.is_estimated else 0,
+                payload.reconciliation_status,
+                _utc_now(),
+            ),
+        )
 
     def _require_signed_receipt(
         self, tenant_id: str, store_id: str, order_id: str | None

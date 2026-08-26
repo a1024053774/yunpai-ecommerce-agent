@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 
 from ecommerce_agent.api import create_app
 
-from conftest import make_settings
+from conftest import M10_WRITE_CAPABILITY_ENV, make_settings
 
 
 ADMIN_HEADERS = {
@@ -390,3 +390,139 @@ def test_legacy_audit_final_amount_shown_with_capability(monkeypatch, tmp_path) 
         and e["subject_id"] == "entry-legacy"
     )
     assert legacy["detail"]["amount"] == "-4321.09"
+
+
+def _ledger_payload(**overrides) -> dict:
+    values = {
+        "store_id": "store-x",
+        "period": "2026-08",
+        "category": "purchase_cost",
+        "scope": "demo",
+        "amount": "-10.00",
+        "source_kind": "demo",
+        "entry_key": "audit-key-1",
+    }
+    values.update(overrides)
+    return values
+
+
+def test_m10_write_endpoints_deny_without_capability(monkeypatch, tmp_path) -> None:
+    """第四轮 WP5 反例：无职责 capability 的管理员写正式 ledger/订购单必须 403。"""
+    for env_name in M10_WRITE_CAPABILITY_ENV:
+        monkeypatch.delenv(env_name, raising=False)
+    app = create_app(make_settings(tmp_path))
+    with TestClient(app) as client:
+        policy = client.post(
+            "/v1/profit/policies",
+            headers=ADMIN_HEADERS,
+            json={"policy_version": "v-deny"},
+        )
+        ledger = client.post(
+            "/v1/profit/ledger/entries",
+            headers=ADMIN_HEADERS,
+            json=_ledger_payload(entry_key="deny-ledger-1"),
+        )
+        draft = client.post(
+            "/v1/ordering/drafts",
+            headers=ADMIN_HEADERS,
+            json={
+                "store_id": "store-audit",
+                "sku_id": "SKU-A",
+                "recommended_qty": 5,
+                "source_summary": "deny demo",
+                "mode": "demo",
+            },
+        )
+    assert policy.status_code == 403
+    assert ledger.status_code == 403
+    assert draft.status_code == 403
+    assert _audit_rows(app, "profit.policy.registered") == []
+    assert _audit_rows(app, "ordering.draft.created") == []
+
+
+def test_m10_write_endpoints_respect_duty_split(monkeypatch, tmp_path) -> None:
+    """第四轮 WP5 反例：只有财务录入职责时，订购写仍 403，财务录入放行。"""
+    for env_name in M10_WRITE_CAPABILITY_ENV:
+        monkeypatch.delenv(env_name, raising=False)
+    monkeypatch.setenv("M10_FINANCE_LEDGER_WRITE_ADMIN_IDS", "admin-test")
+    app = create_app(make_settings(tmp_path))
+    with TestClient(app) as client:
+        ledger = client.post(
+            "/v1/profit/ledger/entries",
+            headers=ADMIN_HEADERS,
+            json=_ledger_payload(entry_key="grant-ledger-1"),
+        )
+        draft = client.post(
+            "/v1/ordering/drafts",
+            headers=ADMIN_HEADERS,
+            json={
+                "store_id": "store-audit",
+                "sku_id": "SKU-A",
+                "recommended_qty": 5,
+                "source_summary": "duty demo",
+                "mode": "demo",
+            },
+        )
+    assert ledger.status_code == 200
+    assert draft.status_code == 403
+
+
+def test_profit_write_and_audit_atomic_on_audit_failure(
+    monkeypatch, tmp_path
+) -> None:
+    """第四轮 WP5 反例：审计失败时正式 ledger 写入必须同成同败。"""
+    app = create_app(make_settings(tmp_path))
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("audit boom")
+
+    monkeypatch.setattr(app.state.agent.db, "audit", boom)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post(
+            "/v1/profit/ledger/entries",
+            headers=ADMIN_HEADERS,
+            json=_ledger_payload(entry_key="atomic-ledger-1"),
+        )
+    assert response.status_code == 500
+    with app.state.agent.db.connect() as conn:
+        count = conn.execute(
+            "SELECT COUNT(*) FROM profit_ledger_entries "
+            "WHERE tenant_id='tenant-test' AND entry_key='atomic-ledger-1'"
+        ).fetchone()[0]
+    assert count == 0
+
+
+def test_ordering_write_and_audit_atomic_on_audit_failure(
+    monkeypatch, tmp_path
+) -> None:
+    """第四轮 WP5 反例：审计失败时订购草稿/事件写入必须同成同败。"""
+    app = create_app(make_settings(tmp_path))
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("audit boom")
+
+    monkeypatch.setattr(app.state.agent.db, "audit", boom)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post(
+            "/v1/ordering/drafts",
+            headers=ADMIN_HEADERS,
+            json={
+                "store_id": "store-audit",
+                "sku_id": "SKU-A",
+                "recommended_qty": 5,
+                "source_summary": "atomic demo",
+                "mode": "demo",
+            },
+        )
+    assert response.status_code == 500
+    with app.state.agent.db.connect() as conn:
+        count = conn.execute(
+            "SELECT COUNT(*) FROM purchase_order_drafts "
+            "WHERE tenant_id='tenant-test' AND store_id='store-audit'"
+        ).fetchone()[0]
+        events = conn.execute(
+            "SELECT COUNT(*) FROM purchase_order_events "
+            "WHERE tenant_id='tenant-test'"
+        ).fetchone()[0]
+    assert count == 0
+    assert events == 0

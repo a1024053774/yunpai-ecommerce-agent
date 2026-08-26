@@ -4,7 +4,12 @@ from typing import Any, Callable
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from .auth import AdminPrincipal
+from .auth import (
+    CAPABILITY_ORDERING_ADVANCE_WRITE,
+    CAPABILITY_ORDERING_CONFIRM_WRITE,
+    CAPABILITY_ORDERING_DRAFT_WRITE,
+    AdminPrincipal,
+)
 from .ordering import (
     OrderConfirmRequest,
     OrderDraftCreate,
@@ -30,32 +35,42 @@ def build_ordering_router(
             status_code = 404 if detail.endswith("not_found") else 409
             raise HTTPException(status_code=status_code, detail=detail) from exc
 
+    def require_capability(admin: AdminPrincipal, capability: str) -> None:
+        if capability not in admin.capabilities:
+            raise HTTPException(
+                status_code=403, detail=f"capability_denied:{capability}"
+            )
+
     @router.post("/drafts")
     def create_draft(
         payload: OrderDraftCreate,
         admin: AdminPrincipal = Depends(require_admin),
     ):
-        result = call(
-            ordering.create_draft,
-            admin.tenant_id,
-            payload.store_id,
-            admin.admin_id,
-            payload,
-        )
-        service.db.audit(
-            "ordering.draft.created",
-            admin.admin_id,
-            result.order_draft_id,
-            {
-                "store_id": payload.store_id,
-                "sku_id": payload.sku_id,
-                "material_no": result.material_no,
-                "mode": result.mode.value,
-                "status": result.status.value,
-                "recommended_qty": result.recommended_qty,
-            },
-            admin.tenant_id,
-        )
+        require_capability(admin, CAPABILITY_ORDERING_DRAFT_WRITE)
+        with service.db._write_lock, service.db.connect() as conn:
+            result = call(
+                ordering.create_draft,
+                admin.tenant_id,
+                payload.store_id,
+                admin.admin_id,
+                payload,
+                connection=conn,
+            )
+            service.db.audit(
+                "ordering.draft.created",
+                admin.admin_id,
+                result.order_draft_id,
+                {
+                    "store_id": payload.store_id,
+                    "sku_id": payload.sku_id,
+                    "material_no": result.material_no,
+                    "mode": result.mode.value,
+                    "status": result.status.value,
+                    "recommended_qty": result.recommended_qty,
+                },
+                admin.tenant_id,
+                connection=conn,
+            )
         return result
 
     @router.get("/drafts")
@@ -87,20 +102,24 @@ def build_ordering_router(
         store_id: str = Query(min_length=1, max_length=128),
         admin: AdminPrincipal = Depends(require_admin),
     ):
-        result = call(
-            ordering.submit_for_confirmation,
-            admin.tenant_id,
-            store_id,
-            order_draft_id,
-            admin.admin_id,
-        )
-        service.db.audit(
-            "ordering.draft.submitted",
-            admin.admin_id,
-            order_draft_id,
-            {"store_id": store_id, "status": result.status.value},
-            admin.tenant_id,
-        )
+        require_capability(admin, CAPABILITY_ORDERING_CONFIRM_WRITE)
+        with service.db._write_lock, service.db.connect() as conn:
+            result = call(
+                ordering.submit_for_confirmation,
+                admin.tenant_id,
+                store_id,
+                order_draft_id,
+                admin.admin_id,
+                connection=conn,
+            )
+            service.db.audit(
+                "ordering.draft.submitted",
+                admin.admin_id,
+                order_draft_id,
+                {"store_id": store_id, "status": result.status.value},
+                admin.tenant_id,
+                connection=conn,
+            )
         return result
 
     @router.post("/drafts/{order_draft_id}/confirm")
@@ -110,26 +129,30 @@ def build_ordering_router(
         store_id: str = Query(min_length=1, max_length=128),
         admin: AdminPrincipal = Depends(require_admin),
     ):
-        result = call(
-            ordering.confirm,
-            admin.tenant_id,
-            store_id,
-            order_draft_id,
-            admin.admin_id,
-            payload,
-        )
-        service.db.audit(
-            "ordering.draft.confirmed",
-            admin.admin_id,
-            order_draft_id,
-            {
-                "store_id": store_id,
-                "confirmed_qty": result.confirmed_qty,
-                "version": result.version,
-                "status": result.status.value,
-            },
-            admin.tenant_id,
-        )
+        require_capability(admin, CAPABILITY_ORDERING_CONFIRM_WRITE)
+        with service.db._write_lock, service.db.connect() as conn:
+            result = call(
+                ordering.confirm,
+                admin.tenant_id,
+                store_id,
+                order_draft_id,
+                admin.admin_id,
+                payload,
+                connection=conn,
+            )
+            service.db.audit(
+                "ordering.draft.confirmed",
+                admin.admin_id,
+                order_draft_id,
+                {
+                    "store_id": store_id,
+                    "confirmed_qty": result.confirmed_qty,
+                    "version": result.version,
+                    "status": result.status.value,
+                },
+                admin.tenant_id,
+                connection=conn,
+            )
         return result
 
     @router.post("/drafts/{order_draft_id}/cancel")
@@ -138,20 +161,24 @@ def build_ordering_router(
         store_id: str = Query(min_length=1, max_length=128),
         admin: AdminPrincipal = Depends(require_admin),
     ):
-        result = call(
-            ordering.cancel,
-            admin.tenant_id,
-            store_id,
-            order_draft_id,
-            admin.admin_id,
-        )
-        service.db.audit(
-            "ordering.draft.cancelled",
-            admin.admin_id,
-            order_draft_id,
-            {"store_id": store_id, "status": result.status.value},
-            admin.tenant_id,
-        )
+        require_capability(admin, CAPABILITY_ORDERING_CONFIRM_WRITE)
+        with service.db._write_lock, service.db.connect() as conn:
+            result = call(
+                ordering.cancel,
+                admin.tenant_id,
+                store_id,
+                order_draft_id,
+                admin.admin_id,
+                connection=conn,
+            )
+            service.db.audit(
+                "ordering.draft.cancelled",
+                admin.admin_id,
+                order_draft_id,
+                {"store_id": store_id, "status": result.status.value},
+                admin.tenant_id,
+                connection=conn,
+            )
         return result
 
     @router.post("/drafts/{order_draft_id}/status")
@@ -161,26 +188,30 @@ def build_ordering_router(
         store_id: str = Query(min_length=1, max_length=128),
         admin: AdminPrincipal = Depends(require_admin),
     ):
-        result = call(
-            ordering.advance_status,
-            admin.tenant_id,
-            store_id,
-            order_draft_id,
-            admin.admin_id,
-            payload,
-        )
-        service.db.audit(
-            "ordering.draft.status_advanced",
-            admin.admin_id,
-            order_draft_id,
-            {
-                "store_id": store_id,
-                "to_status": payload.to_status.value,
-                "source_ref": payload.source_ref,
-                "status": result.status.value,
-            },
-            admin.tenant_id,
-        )
+        require_capability(admin, CAPABILITY_ORDERING_ADVANCE_WRITE)
+        with service.db._write_lock, service.db.connect() as conn:
+            result = call(
+                ordering.advance_status,
+                admin.tenant_id,
+                store_id,
+                order_draft_id,
+                admin.admin_id,
+                payload,
+                connection=conn,
+            )
+            service.db.audit(
+                "ordering.draft.status_advanced",
+                admin.admin_id,
+                order_draft_id,
+                {
+                    "store_id": store_id,
+                    "to_status": payload.to_status.value,
+                    "source_ref": payload.source_ref,
+                    "status": result.status.value,
+                },
+                admin.tenant_id,
+                connection=conn,
+            )
         return result
 
     return router
