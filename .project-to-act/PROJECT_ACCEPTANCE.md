@@ -81,6 +81,16 @@
   “不落库”或“脱敏记录”）、P1-8 生产运行证据（真实模型 key、canary/SLO/监控/
   回退/runbook，需外部输入）。
 
+- 补充（2026-08-26，E-20260826-002）：main 又合入 M9-R 读模型 PR #19（
+  `96fb063`→`b77dfeb`）后 PR #24 再次 CONFLICTING，已再次同步并解决 4 处冲突
+  （database.py schema v36/v37/v38/v39 四迁移共存、SCHEMA_VERSION=39、两个账本文档、
+  admin-console 导航标题并存），合并 head `02af3a8` 已推送且 PR 恢复
+  MERGEABLE/CLEAN。最终合并 head 上 M10 定向 `verify_m10r.py` **114 passed**，
+  M9/M10 契约+灾备+读模型+v39 重放 **41 passed**，全量回归 `python -m pytest -q`
+  **1423 passed / 0 failed**（13:14，24 warnings 为既有 traffic_lab 重复
+  Operation ID）。未收口项同 E-20260826-001（capability/职责分离、写+审计同事务、
+  交期 SKU 级绑定、GET 落审计、生产运行证据），不构成签署或生产放行。
+
 - 结论：2026-08-25 PR #19 已在实现提交
   `f23dba31de755ee7df5dbc0cde894d41c06b47ad` 上修复负责人针对 `8e7ede3` 的唯一剩余阻断，
   证据 ID 为 E-20260825-002。新增回归先稳定复现“订单头 item 非空、旧订单行无 item 字段”的
