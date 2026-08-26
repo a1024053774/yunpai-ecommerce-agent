@@ -1,3 +1,4 @@
+import base64
 from dataclasses import replace
 
 from fastapi.testclient import TestClient
@@ -111,6 +112,18 @@ def test_loopback_customer_test_page_and_chat_are_isolated(tmp_path) -> None:
         assert "/v1/test/customer-chat" in page.text
         assert "Qwen 润色：已采用" in page.text
         assert "Qwen 润色：调用失败，已回退原文" in page.text
+        assert 'id="imageUpload"' in page.text
+        assert 'id="uploadImage"' in page.text
+        assert "addEventListener('paste'" in page.text
+        assert ".image-actions .button { flex: 0 0 auto; white-space: nowrap; }" in page.text
+
+        capabilities = client.get("/v1/test/customer-chat/capabilities")
+        assert capabilities.status_code == 200
+        assert capabilities.json() == {
+            "max_image_bytes": 5 * 1024 * 1024,
+            "image_mime_types": ["image/png", "image/jpeg", "image/webp"],
+            "max_images_per_message": 1,
+        }
 
         response = client.post(
             "/v1/test/customer-chat",
@@ -162,6 +175,28 @@ def test_customer_test_interface_is_disabled_by_default(tmp_path) -> None:
     with TestClient(app, client=("127.0.0.1", 50000)) as client:
         assert client.get("/v1/test/customer-chat/cases").status_code == 404
         assert client.get("/customer-test").status_code == 404
+
+
+def test_customer_test_chat_accepts_an_image_payload(tmp_path) -> None:
+    settings = replace(make_settings(tmp_path), customer_test_enabled=True)
+    app = create_app(settings)
+    png = base64.b64encode(
+        b"\x89PNG\r\n\x1a\n" + b"x" * 4096
+    ).decode("ascii")
+
+    with TestClient(app, client=("127.0.0.1", 50000)) as client:
+        response = client.post(
+            "/v1/test/customer-chat",
+            json={
+                "session_id": "customer-test:image-contract-001",
+                "message": "请说明图片里的商品信息",
+                "context": {},
+                "image": {"mime_type": "image/png", "data_base64": png},
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["vision_status"] == "disabled"
 
 
 def test_knowledge_graph_pages_require_admin(tmp_path) -> None:

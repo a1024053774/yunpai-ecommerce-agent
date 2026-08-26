@@ -5,6 +5,53 @@
 
 ## 当前验收结论
 
+- 结论：2026-08-25 F-108 多模态跨轮记忆与媒体隐私补强已形成本机开发候选，证据 ID 为
+  E-20260825-002。此前视觉观察只服务当轮：顾客发图后在后续轮次追问「图里那台」时，
+  决策与生成提示完全丢失图片内容；顾客会话分页 API 还把媒体内部 `storage_ref` 随
+  `sources_json` 原样返回。补强后：脱敏观察随用户消息媒体元数据留存
+  （`sources_json` 内 `vision_description`，上限 2000 字符），历史构建时以
+  「图片观察｜多模态模型转录，非顾客原话，未经业务核验」标记并入后续轮次的决策与
+  生成提示，观察不改写顾客消息正文本身；顾客分页响应过滤媒体条目，仅保留公开
+  `media` 字段（管理员详情同样复用单一 `non_media_sources` 过滤）；留存清理的落库
+  报告补记 `media_files_deleted`（文件删除仍在数据库提交后执行，失败只残留无引用
+  文件）；service 流式路径复用 graph 导出的 `has_media_observation` 判定（D-035
+  单一权威）。三项补强均先红后绿；vision 聚焦 `13 passed`，受影响回归 `86 passed`，
+  仓库全量 `1073 passed, 24 warnings`（620.57 秒，24 条为既有 Traffic Lab 重复
+  Operation ID warning）；compileall 与 whitespace 通过。同日核实 DeepSeek 官方
+  多模态 `deepseek-v4-flash-vision-exp`（2026-08-21 上线，实验性）可作为视觉观察器
+  的纯配置备选并写入 `env_polish.md` 注释；默认仍用本地 Qwen-VL（4090 因润色模型
+  常驻，边际成本≈0 且顾客图片不出内网），「观察→DeepSeek 决策」路由与审计边界不变。
+  双库灾备仍不包含媒体目录；不构成真实渠道、正式 Eval、容量/长稳或生产放行证据。
+- 结论：2026-08-25 F-108 含图聊天记录显示缺陷已修复为本机开发候选，证据 ID 为
+  E-20260825-001。此前图片只存在请求和浏览器瞬时预览，会话详情没有媒体字段，刷新后无法
+  恢复；回归首先稳定得到 `KeyError: media`。修复后图片落入 `DATA_DIR/objects/chat-media`
+  私有目录，消息 `sources_json` 只保存 MIME、大小和受控引用，管理员/顾客媒体端点分别校验
+  租户、会话及主体权限，base64 不进入消息正文、上下文或审计。后台使用带管理员凭据的 fetch
+  加载 Blob，隔离浏览器实测 320×160 原图完整、显示 322×162、console 0 warning/error；消息
+  留存清理同步删除文件。受影响回归 `54 passed`，compileall、后台 JavaScript syntax、
+  whitespace 与台账校验通过，8088 已重启加载当前代码。该修复只对启用后的新消息生效；旧图片
+  从未留存，无法恢复。当前双库灾备仍不包含媒体目录，不构成生产灾备或生产放行证据。
+- 结论：2026-08-24 F-108 订单截图候选提取补强已形成本机开发候选，证据 ID 为
+  E-20260824-002。Qwen-VL 现在以受约束 JSON 同时返回图片观察与订单候选字段，DeepSeek
+  自动收到候选编号和截图可见的履约、支付、退款、金额及物流状态；已提取候选编号时不再要求
+  顾客重复提供，也不主动复述完整编号。图片候选始终带 `order_identity_verified=false`，未被
+  提升为 `trusted_context.order_id`，资金核验和业务动作仍需可信上游、业务系统或人工确认。
+  订单候选红测先为 `1 failed`，修复后 vision 聚焦 `9 passed`、API/stream/routing 受影响回归
+  `43 passed`；真实 Qwen→DeepSeek 单次链路确认提取、传递、不重复索要和不越权四项同时成立。
+  该补强不代表真实渠道、正式 Eval、容量/长稳或生产放行。
+- 结论：2026-08-24 F-108 单图多模态客服链路已形成本机开发候选，证据 ID 为
+  E-20260824-001。分支 `codex/m8r-qwen-polish` 基于
+  `ece61e14fb9c326b38dcde084513494147c508e8` 的当前未提交工作树，新增默认关闭的
+  `VISION_ENABLED` 独立网关；正式 chat/stream/session API 与回环顾客测试入口复用同一
+  `AgentService` 预处理语义。Qwen-VL 只生成脱敏、非权威图片观察，DeepSeek 继续决定意图、
+  下一语义步骤和最终客服答复；图片文字不能成为指令或单独证明价格、库存、订单归属、支付/
+  退款状态及业务动作完成。单条消息只接收一张不超过 5 MiB 的 PNG/JPEG/WebP，原图不写入
+  消息、上下文或审计，幂等仅绑定图片摘要。受影响回归为 `66 passed`，compileall、测试页
+  JavaScript 语法与 whitespace 均退出 0；完整全量在工作树继续变化后主动中止于
+  `327 passed`，不计为最终全量通过。4090 上修复后的 Qwen2.5-VL 服务经鉴权、大小图和真实
+  API 验证，顾客测试页实际完成文件上传、剪贴板粘贴、Qwen 观察、DeepSeek 最终回答及模型/
+  耗时展示；390px 按钮换行由两行修复为一行，页面无水平溢出且 console 无错误。该结论不
+  包含真实渠道媒体下载/鉴权、平台商品卡、多图、正式 Eval、容量/长稳或生产放行。
 - 结论：2026-08-21 F-324 的可选 Qwen 最终文案润色已形成本机开发候选，证据 ID 为
   E-20260821-001。分支 `codex/m8r-qwen-polish` 基于
   `ece61e14fb9c326b38dcde084513494147c508e8` 的当前未提交工作树，以默认关闭的
@@ -498,6 +545,30 @@
 
 ## 证据索引
 
+- E-20260825-002：F-108 多模态跨轮记忆与媒体隐私补强。旧实现视觉观察不落库，
+  追问轮的 `recent_messages` 只含 role/content，模型对上一张图失忆；顾客分页 API
+  泄漏媒体 `storage_ref`；留存落库报告缺媒体删除结果。新实现把脱敏观察写入用户
+  消息媒体元数据并在历史构建时按非权威标记注入，读写与过滤集中在
+  `message_media.py` 单一模块；顾客/管理员出口统一走 `non_media_sources`；
+  留存报告在文件删除后回写。三个单例先红后绿，聚焦/受影响/全量回归均通过；
+  未记录顾客原图或原始对话。不扩张为多图、真实渠道、正式 Eval 或生产 Gate。
+- E-20260825-001：F-108 含图聊天记录持久显示修复。旧实现端到端回归在管理员会话详情读取
+  `media` 时以 `KeyError` 失败；新实现增加受控消息媒体存储、用户消息附件元数据、管理员/顾客
+  鉴权读取端点、后台 Blob 渲染和留存删除。聚焦与受影响回归、静态检查及隔离浏览器真实 DOM/
+  图片尺寸/console 检查均通过；未记录测试图片、密钥或原始顾客对话。启用前历史图片不可恢复，
+  双库灾备未覆盖媒体文件，真实渠道、容量/长稳、正式 Eval 与生产 Gate 不在本证据范围。
+- E-20260824-002：F-108 订单截图结构化候选补强。旧实现把 Qwen 的结构化 JSON 整体当作
+  普通描述，且视觉提示词明确禁止输出订单号，导致 DeepSeek 再次向顾客索要截图中已有信息。
+  新实现以单一 Pydantic 契约提取订单候选，媒体证据明确保持未核验/无执行权；决策与生成提示
+  允许使用候选定位诉求，但禁止重复索要或把截图状态冒充业务系统事实。单例红测、聚焦/受影响
+  回归和真实 Qwen→DeepSeek 链路均通过；台账不记录实际订单号、原图或原始顾客对话。不扩张为
+  可信订单绑定、真实渠道、正式 Eval、容量/长稳或生产 Gate。
+- E-20260824-001：F-108 单图多模态客服链路本机开发候选。新增默认关闭的
+  OpenAI-compatible Qwen-VL 网关、严格单图契约、非权威媒体证据、同步/流式/会话 API
+  元数据和测试页上传/粘贴/预览；DeepSeek 保持语义与最终答复权，高风险动作不因图片单独
+  放行。聚焦与相关回归 `66 passed`，静态检查通过；真实 4090 服务和浏览器链路均显示
+  Qwen 模型名与实测延迟。无密钥、原图或原始顾客对话写入台账；不扩张为真实渠道、完整
+  M8-R、正式 Eval、容量/长稳或生产 Gate。
 - E-20260821-001：F-324 Qwen 最终文案润色本机开发候选。新增默认关闭的独立配置、
   OpenAI-compatible 客户端、内容漂移保护、同步/流式/持久响应元数据和测试页状态展示；事实
   换序反例先红后绿，聚焦 `22 passed`、相关回归 `43 passed`、全量
@@ -540,6 +611,10 @@
 
 | 证据 ID | 时间 | 方法或命令 | 退出状态 | 版本或文件哈希 | 结果摘要 | 证据位置 | 有效期 |
 |---|---|---|---|---|---|---|---|
+| E-20260825-002 | 2026-08-25 | 先为跨轮观察注入、顾客分页媒体泄漏、留存落库报告三个补强各建 red-first 单例（初始 `3 failed`）；实现媒体观察留存/历史注入/出口过滤/报告回写后运行 `tests/test_vision.py` 聚焦、API/stream/polish/context/agent/react/limits/admin/sessions/idle/privacy 受影响集与仓库全量；运行 compileall 与 `git diff --check` | 红态三单例退出 1；修复后聚焦、受影响、全量与静态检查均退出 0 | base `ece61e14fb9c326b38dcde084513494147c508e8`；HEAD `261377390866b9e8240981ad8fcc3b68d3a33144` + 当前未提交 worktree；schema v35 不变，无新依赖 | vision 聚焦 `13 passed`；受影响回归 `86 passed`；仓库全量 `1073 passed, 24 warnings`（620.57 秒，24 条为既有 Traffic Lab 重复 Operation ID warning）。追问轮提示含带「非顾客原话」标记的上一轮观察且观察未混入消息正文；顾客分页响应无 `storage_ref`/`chat-media`/`vision_description`；retention_runs `detail_json` 含 `media_files_deleted=1` | `src/ecommerce_agent/{message_media,database,service,graph,admin,chat_sessions_api,maintenance}.py`；`tests/test_vision.py`；`env_polish.md`（gitignored，新增 DeepSeek 视觉备选注释） | 媒体元数据契约、历史构建、出口过滤、留存策略或相关测试变化前；仅本机开发候选，双库灾备仍不含媒体目录，不代表真实渠道、多图、正式 Eval、容量/长稳或生产 Gate |
+| E-20260825-001 | 2026-08-25 | 新增管理员会话详情/媒体读取端到端回归并先在旧实现运行；实现受控文件、消息附件元数据、管理员与顾客鉴权端点、后台 Blob 渲染及留存删除；运行 vision/admin/session/retention/stream/API/ReAct 受影响 pytest、compileall、后台 JS syntax、whitespace、project-to-act validate；在隔离 8090 服务发送合成 PNG，刷新后台并从“智能客服→虚拟验收”打开会话，检查 DOM、natural/display 尺寸与 console；重启实际 8088 服务 | 红态单例退出 1，失败为 `KeyError: media`；修复后聚焦和全部静态/页面检查退出 0 | base `ece61e14fb9c326b38dcde084513494147c508e8`；HEAD `261377390866b9e8240981ad8fcc3b68d3a33144` + 当前未提交 worktree；schema v35 不变，无新依赖 | 受影响回归 `54 passed`。管理员和顾客未认证读取均 401，授权后 MIME/字节一致；图片文件与消息留存同步删除。浏览器 DOM 出现“查看顾客发送的图片”，natural 320×160、display 322×162，console 0 warning/error。base64 未进入 SQLite 消息正文、上下文或审计；消息只存受控引用。8088 health 200 并加载当前分支代码。本轮未跑仓库全量 | `src/ecommerce_agent/{message_media,service,graph,admin,admin_api,chat_sessions_api,maintenance,schemas}.py`；`docs/admin-console.html`；`tests/test_vision.py`；隔离 8090 浏览器瞬时证据；本机 8088 运行实例 | 媒体存储/附件契约、鉴权端点、后台渲染、留存策略或运行数据目录变化前；只覆盖启用后的新图片。旧图片不可恢复，双库灾备未包含媒体目录，不代表真实渠道、容量/长稳、正式 Eval 或生产 Gate |
+| E-20260824-002 | 2026-08-24 | 以 Qwen JSON 包含订单候选、退款状态与金额的网关单例建立 red-first 证据；实现视觉结构化契约、媒体候选与 DeepSeek 提示边界后，运行 vision 聚焦及 API/stream/routing 受影响回归；通过本机 SSH 隧道用脱敏演示订单截图分别实跑 Qwen 和临时隔离数据目录下的 Qwen→DeepSeek 完整链路；运行 compileall、whitespace 与 project-to-act validate | 旧实现单例退出 1（整段 JSON 被当作 description）；修复后聚焦/受影响回归、真实模型请求和静态/台账检查均退出 0 | base `ece61e14fb9c326b38dcde084513494147c508e8`；HEAD `261377390866b9e8240981ad8fcc3b68d3a33144` + 当前未提交 worktree；schema v35 不变；模型 `Qwen/Qwen2.5-VL-7B-Instruct` + `deepseek-v4-flash` | vision 聚焦 `9 passed`，API/stream/routing 受影响回归 `43 passed`。真实 Qwen 提取候选编号及截图可见退款/支付/履约/物流字段；完整链路中 DeepSeek 未再次索要订单号、未主动复述完整编号，并转人工核验资金状态。媒体候选为未核验且无执行权，`current_subject` 不含 `order_id`；审计只记录候选是否存在和字段数，不记录候选值。本轮未跑仓库全量 | `src/ecommerce_agent/{vision,prompts}.py`；`tests/test_vision.py`；`env_polish.md`（gitignored）；本机 58081 隧道与隔离临时数据目录瞬时证据 | 视觉结构化契约、媒体/Prompt 权限边界、模型资产、SSH 隧道或相关测试变化前；仅本机开发候选，不代表可信订单自动绑定、真实渠道、正式 Eval、容量/长稳或生产 Gate |
+| E-20260824-001 | 2026-08-24 | 先以顾客测试图片请求 422 建立缺能力红态；实现后运行 vision/API/limits/stream/context/polish/prompt/Agent/Graph 受影响回归；为媒体+知识原因标签建立单例红绿；运行 compileall、测试页 JS syntax、whitespace 与 project-to-act validate；经 SSH 隧道对 4090 Qwen-VL 做鉴权/大小图探针，并在 `/customer-test` 实际完成上传、粘贴、发送、桌面和 390px 目视/DOM/console 核验 | 初始图片请求为 422；原因标签红测为 `1 failed` 后转绿；最终受影响回归及静态/台账检查退出 0。仓库全量因运行期间工作树继续变化而主动中止（退出 2，停止时 `327 passed`），不计为最终全量证据 | base `ece61e14fb9c326b38dcde084513494147c508e8`；HEAD `261377390866b9e8240981ad8fcc3b68d3a33144` + 当前未提交 worktree；schema v35 不变；模型 `Qwen/Qwen2.5-VL-7B-Instruct` | 最终受影响回归 `66 passed`。原图只在请求内使用，持久消息/上下文/审计不含 base64；同步与流式共用 vision evidence，精确知识快答在含图时不旁路 DeepSeek，媒体单独不能取得执行权。4090 模型接口未授权为 401、授权为 200；大图限制修复后正确读取页面请求成功率 `89.3%`。真实顾客页显示 `Qwen 视觉：已解析`、模型名和 `5951ms`，随后由 DeepSeek 返回图片概况。上传和粘贴均生成预览并成功发送；390px 上传按钮由 `59px/2` 行修为 `36.5px/1` 行，页面宽度未溢出，console 0 error/warning | `src/ecommerce_agent/{vision,config,schemas,service,graph,context_builder,prompts,api,customer_test_api}.py`；`docs/customer-test.html`；`tests/test_{vision,api,api_limits,service_stream,context_builder,polish,prompt_templates,agent,react_graph}.py`；4090 `yunpai-m1-vlm.service` 与本机测试页瞬时证据 | 图片契约、媒体证据/Prompt/Graph、API/页面、模型资产、SSH 隧道或服务器服务状态变化前；仅本机开发候选，不代表真实渠道媒体接入、完整 M8-R、正式 Eval、容量/长稳或生产 Gate |
 | E-20260821-001 | 2026-08-21 | 为事实换序保护建立 red-first 回归；运行 `.venv/bin/python -m pytest tests/test_polish.py`、润色相关 API/stream 回归和仓库全量 pytest；运行 `.venv/bin/python -m compileall -q src` 与 `git diff --check`；经 `127.0.0.1:58080` SSH 隧道调用 4090 OpenAI-compatible 服务，并从 `/customer-test` 实际发送新消息核对状态 | 红态事实换序单例退出 1（`1 failed`）；修复后聚焦、相关、全量、compileall、whitespace、真实 API 与页面请求均退出 0 / HTTP 200 | base `ece61e14fb9c326b38dcde084513494147c508e8` + 当前未提交 worktree；分支 `codex/m8r-qwen-polish`；模型 `qwen3-14b-rag-polish`；schema v35 不变 | `tests/test_polish.py` 为 `22 passed`，相关回归 `43 passed`，全量 `1059 passed, 24 warnings`；24 条为既有 Traffic Lab FastAPI 重复 Operation ID warning。真实 API 得到 `rejected_content_drift / 14965ms` 与 `unchanged / 4684ms`，页面得到 `unchanged / 6504ms` 并显示模型名；证明 Qwen 被调用，候选因无变化或保护拒绝而未替换原文。3 秒超时不足，本地验收使用 15 秒 | `src/ecommerce_agent/{config,graph,polish,schemas,service}.py`；`docs/customer-test.html`；`tests/test_{polish,service_stream,api}.py`；本机 8080 服务日志与测试页瞬时证据 | 润色实现/保护契约/API 元数据、配置、模型资产、SSH 隧道或服务状态变化前；仅本机开发候选，不代表 M8-R WP1～WP5、独立 WP5、真实渠道、容量/长稳或生产 Gate |
 | E-20260819-002 | 2026-08-19 | 读取用户转交的 WP4 独立复验报告，保留其聚焦/全量及 47/47 门禁外探针为外部报告证据；由开发方在原候选上新增六个 GET 共用的空白 `store_id` 回归，先运行单例复现，再以单一 `Annotated` Query 契约修复；重跑同一单例、WP4 聚焦、WP1～WP4 关联集、隔离代理环境下仓库全量、compileall、后台 JS syntax、whitespace 和 project-to-act validate | 修复前单例稳定 `1 failed`，实际为 readiness 返回 200；修复后单例、聚焦、关联、全量和静态门禁均退出 0。独立报告的探针由用户转交，不冒充开发方运行；报告注明未重复浏览器实测 | base `9670aa1`；修复候选 `fe828a0`；schema v35、`readonly-readiness-v1`、Demo fixture 和页面不变 | 六个带 `store_id` 的 readonly-data GET 现在共用同一约束，纯空白请求均返回 422，不泄露数据且不产生写入。聚焦 `10 passed`、关联 `109 passed`、全量 `1035 passed, 24 warnings`（335.51 秒），无 failed/skipped/xfailed；24 条均为既有 Traffic Lab 重复 Operation ID warning。无 schema、依赖、Agent/模型、Demo、页面或平台动作变化；E-20260819-001 浏览器证据仍对应未变页面 | `fe828a0`；`src/ecommerce_agent/readonly_data_api.py`；`tests/test_m7r_wp4_readiness.py`；`docs/tasks/M7R_WP4_READINESS_HANDOFF.md`；用户在本会话转交的独立复验摘要 | 上述查询契约、WP4 代码/测试、基准提交或独立报告来源变化前；只关闭开发候选 nit，不替代合入 main、缪海南正式 WP5、真实平台样本、真实经营结论、M7-R/生产 Gate |
 | E-20260819-001 | 2026-08-19 | 读取 M7-R WP4 验收标准及 WP1～WP3/F-310 契约；先运行缺实现测试；实现单点准备度策略、八域只读投影、管理员下钻 API、后台 view 和固定脱敏 Demo；以同数据时点冲突、缺 Demo 写审计、撤销后旧确认误标 active 建立先红后绿反例；运行聚焦、WP1～WP4 关联集、compileall、后台 JS syntax、whitespace 和隔离代理环境下仓库全量；使用本机浏览器对空页面、显式装载、重放、桌面和 390px 窄屏做实际核验 | 初始缺实现收集退出 2；fixture 同时点触发预期外 D-014 冲突；缺审计与历史 active 反例均稳定 `1 failed`；修复后聚焦、关联、静态、浏览器和全量均退出 0 | base `1936a2f`；代码候选 `7d8bf47`；schema v35；readiness policy `readonly-readiness-v1`；Demo `m7r-readonly-demo-v1` | operational 默认排除 Demo；actual/manual/demo/missing 保持可区分，缺失不转零。每个域状态和数值保留 manifest ID，四项缺口保留 field evidence/import，映射保留 run/source import。顺序及线程并发重放只有 8 manifest、1 product、1 mapping、1 reconciliation；管理员 Demo POST 逐次审计，所有 GET 零事实变更。浏览器首次打开前后事实计数均 0；显式 Demo 后 8 manifest、66 evidence、1 product、1 mapping、1 run、3 reconciliation rows，重放不变；1280×720 无页面横向溢出，390×844 仅 panel 内表格滚动，console 0 error/warning。聚焦 `9 passed`、关联 `108 passed`、全量 `1034 passed, 24 warnings`（687.63 秒），无 failed/skipped/xfailed；24 条均为既有 Traffic Lab 重复 Operation ID warning | `src/ecommerce_agent/readonly_readiness/`；`src/ecommerce_agent/readonly_data_api.py`；`src/ecommerce_agent/product_identity/service.py`；`docs/admin-console.html`；`tests/test_m7r_wp4_readiness.py`；`docs/tasks/M7R_WP4_READINESS_HANDOFF.md` | WP4 代码/测试、WP1～WP3 来源/映射契约、准备度策略、Demo fixture、后台页面或基准提交变化前；仅开发者本机候选，不替代合入 main、真实平台样本、缪海南正式 WP5、真实经营结论、M7-R/生产 Gate |

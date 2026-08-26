@@ -4,6 +4,7 @@ from collections.abc import Callable
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 
 from .auth import (
     AdminOperatorCreateRequest,
@@ -91,6 +92,35 @@ def build_admin_router(
         if result is None:
             raise HTTPException(status_code=404, detail="conversation not found")
         return result
+
+    @router.get(
+        "/conversations/{session_id}/messages/{message_id}/media/{media_id}",
+        response_class=FileResponse,
+    )
+    def conversation_message_media(
+        session_id: str,
+        message_id: str,
+        media_id: str,
+        admin: AdminPrincipal = Depends(require_admin),
+    ) -> FileResponse:
+        result = service.message_media.resolve_for_message(
+            service.db,
+            tenant_id=admin.tenant_id,
+            session_id=session_id,
+            message_id=message_id,
+            media_id=media_id,
+        )
+        if result is None:
+            raise HTTPException(status_code=404, detail="message media not found")
+        path, mime_type = result
+        return FileResponse(
+            path,
+            media_type=mime_type,
+            headers={
+                "Cache-Control": "private, max-age=3600",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
 
     @router.get("/context-snapshots/{snapshot_id}")
     def context_snapshot(

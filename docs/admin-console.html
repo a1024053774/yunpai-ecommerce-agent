@@ -112,6 +112,10 @@
     .message.user { margin-left: auto; background: #e9f0f8; }
     .message.assistant { background: #edf5f3; }
     .message small { display: block; margin-top: 7px; color: var(--muted); font-size: 11px; }
+    .message-media { display: grid; gap: 8px; margin-bottom: 8px; white-space: normal; }
+    .message-media button { display: block; padding: 0; border: 0; background: transparent; cursor: zoom-in; }
+    .message-media img { display: block; max-width: min(360px, 100%); max-height: 280px; border: 1px solid var(--line); border-radius: 5px; background: #fff; object-fit: contain; }
+    .message-media img:not([src]) { width: 180px; height: 100px; }
     .conversation-source { display: flex; align-items: center; gap: 7px; margin: 7px 0; }
     .decision-details { margin-top: 9px; padding-top: 8px; border-top: 1px solid rgba(23, 33, 43, .12); white-space: normal; }
     .decision-details summary { cursor: pointer; color: var(--blue); font-size: 11px; }
@@ -923,6 +927,7 @@
       releases: [],
       health: null,
       selectedSession: null,
+      conversationMediaObjectUrls: [],
       selectedChannel: null,
       handoffQueues: [],
       handoffItems: [],
@@ -988,6 +993,37 @@
       const decision = item.decision || {};
       const trace = Array.isArray(decision.trace) ? decision.trace.join(' → ') : '';
       return `<details class="decision-details"><summary>决策详情</summary><div class="decision-grid"><div><strong>路由</strong> ${escapeHtml(item.route_reason || '-')}</div><div><strong>模型兜底</strong> ${item.model_fallback ? '是' : '否'}</div><div><strong>模式</strong> ${escapeHtml(decision.decision_mode || '-')}</div><div><strong>工具</strong> ${escapeHtml(decision.selected_tool || '-')} · ${escapeHtml(decision.tool_status || '-')}</div><div><strong>上下文</strong> ${escapeHtml(decision.context_readiness || item.context?.readiness || '-')}</div>${trace ? `<div class="decision-trace"><strong>轨迹</strong> ${escapeHtml(trace)}</div>` : ''}</div></details>`;
+    }
+
+    function conversationMedia(media) {
+      if (!Array.isArray(media) || !media.length) return '';
+      return `<div class="message-media">${media.map((item) => `<button type="button" data-message-media="${escapeHtml(item.url)}" aria-label="查看顾客发送的图片"><img alt="顾客发送的图片，正在加载"></button>`).join('')}</div>`;
+    }
+
+    function clearConversationMediaUrls() {
+      state.conversationMediaObjectUrls.forEach((url) => URL.revokeObjectURL(url));
+      state.conversationMediaObjectUrls = [];
+    }
+
+    async function loadConversationMedia() {
+      const nodes = Array.from(document.querySelectorAll('[data-message-media]'));
+      await Promise.all(nodes.map(async (node) => {
+        const image = node.querySelector('img');
+        try {
+          const headers = new Headers();
+          if (state.adminId) headers.set('X-Admin-Id', state.adminId);
+          if (state.adminKey) headers.set('X-Admin-Key', state.adminKey);
+          const response = await fetch(node.dataset.messageMedia, { headers });
+          if (!response.ok) throw new Error(`图片加载失败 (${response.status})`);
+          const objectUrl = URL.createObjectURL(await response.blob());
+          state.conversationMediaObjectUrls.push(objectUrl);
+          image.src = objectUrl;
+          image.alt = '顾客发送的图片';
+          node.addEventListener('click', () => window.open(objectUrl, '_blank', 'noopener'));
+        } catch (error) {
+          image.alt = error instanceof Error ? error.message : '图片加载失败';
+        }
+      }));
     }
     const escapeHtml = (value) => String(value ?? '').replace(/[&<>'"]/g, (char) => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
     const formatTime = (value) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '-';
@@ -1189,6 +1225,7 @@
       const data = await api(`/v1/admin/conversations?limit=100&scope=${encodeURIComponent(scope)}${query ? `&query=${encodeURIComponent(query)}` : ''}`);
       if (state.selectedSession && !data.items.some((item) => item.id === state.selectedSession)) {
         state.selectedSession = null;
+        clearConversationMediaUrls();
         $('conversationDetail').innerHTML = '<div class="empty">选择一个会话查看消息与证据</div>';
       }
       $('conversationList').innerHTML = data.items.length ? data.items.map((item) => `<button class="conversation-item ${state.selectedSession === item.id ? 'active' : ''}" data-session="${escapeHtml(item.id)}"><strong>${escapeHtml(item.external_session_id)}</strong><div class="conversation-source">${sourceBadge(item.source_type)}${item.source_reference ? `<span class="mono muted">${escapeHtml(item.source_reference)}</span>` : ''}</div><span>${escapeHtml(item.last_message || '暂无消息')}</span><span>${item.message_count} 条 · ${formatTime(item.last_message_at || item.last_seen_at)}</span></button>`).join('') : `<div class="empty">${scope === 'operational' ? '暂无运营会话，虚拟验收数据已隔离' : '当前范围暂无会话'}</div>`;
@@ -1199,7 +1236,9 @@
       state.selectedSession = sessionId;
       const data = await api(`/v1/admin/conversations/${encodeURIComponent(sessionId)}`);
       document.querySelectorAll('[data-session]').forEach((node) => node.classList.toggle('active', node.dataset.session === sessionId));
-      $('conversationDetail').innerHTML = `<div class="panel-head"><div><h3>${escapeHtml(data.session.external_session_id)}</h3><span class="muted">${data.messages.length} 条消息 · ${escapeHtml(data.session.client_id)}</span><div class="conversation-source">${sourceBadge(data.session.source_type)}${data.session.source_reference ? `<span class="mono muted">${escapeHtml(data.session.source_reference)}</span>` : ''}</div></div><span class="status ${statusClass(data.session.status)}">${escapeHtml(data.session.status)}</span></div><div class="messages">${data.messages.map((item) => `<div class="message ${item.role}">${escapeHtml(item.content)}<small>${item.role === 'assistant' ? `${escapeHtml(item.intent || 'unknown')} · ${escapeHtml(item.risk_level || '-')} · ${escapeHtml(item.route_reason || '-')}${item.model_fallback ? ' · 模型兜底' : ''}` : '顾客'} · ${formatTime(item.created_at)}</small>${item.context ? `<button class="button small" data-context-snapshot="${escapeHtml(item.context.id)}">证据 ${item.context.evidence_count} · ${escapeHtml(item.context.readiness)}</button>` : ''}${decisionDetails(item)}</div>`).join('') || '<div class="empty">暂无消息</div>'}</div>`;
+      clearConversationMediaUrls();
+      $('conversationDetail').innerHTML = `<div class="panel-head"><div><h3>${escapeHtml(data.session.external_session_id)}</h3><span class="muted">${data.messages.length} 条消息 · ${escapeHtml(data.session.client_id)}</span><div class="conversation-source">${sourceBadge(data.session.source_type)}${data.session.source_reference ? `<span class="mono muted">${escapeHtml(data.session.source_reference)}</span>` : ''}</div></div><span class="status ${statusClass(data.session.status)}">${escapeHtml(data.session.status)}</span></div><div class="messages">${data.messages.map((item) => `<div class="message ${item.role}">${conversationMedia(item.media)}<div>${escapeHtml(item.content)}</div><small>${item.role === 'assistant' ? `${escapeHtml(item.intent || 'unknown')} · ${escapeHtml(item.risk_level || '-')} · ${escapeHtml(item.route_reason || '-')}${item.model_fallback ? ' · 模型兜底' : ''}` : '顾客'} · ${formatTime(item.created_at)}</small>${item.context ? `<button class="button small" data-context-snapshot="${escapeHtml(item.context.id)}">证据 ${item.context.evidence_count} · ${escapeHtml(item.context.readiness)}</button>` : ''}${decisionDetails(item)}</div>`).join('') || '<div class="empty">暂无消息</div>'}</div>`;
+      await loadConversationMedia();
       document.querySelectorAll('[data-context-snapshot]').forEach((node) => node.addEventListener('click', () => openContextEvidence(node.dataset.contextSnapshot)));
     }
 

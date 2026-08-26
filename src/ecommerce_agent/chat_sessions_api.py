@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from .auth import Principal
 from .database import SessionScopeError
+from .message_media import non_media_sources, public_message_media
 from .service import AgentService
 
 
@@ -106,12 +110,59 @@ def build_chat_sessions_router(
         session = scoped_session(session_id, principal)
         if session is None:
             raise HTTPException(status_code=404, detail="session not found")
-        return service.db.paginated_messages(
+        page = service.db.paginated_messages(
             session["internal_id"],
             cursor,
             limit,
             tenant_id=principal.tenant_id,
             subject_hash=principal.subject_hash,
+        )
+        for item in page["items"]:
+            sources_json = item.get("sources_json")
+            item["media"] = public_message_media(
+                sources_json,
+                url_prefix=(
+                    f"/v1/chat/sessions/{quote(session_id, safe='')}"
+                    f"/messages/{quote(str(item['id']), safe='')}/media"
+                ),
+            )
+            # 媒体元数据（内部 storage_ref、模型观察）不对外，只保留引用来源
+            item["sources_json"] = json.dumps(
+                non_media_sources(sources_json), ensure_ascii=False
+            )
+        return page
+
+    @router.get(
+        "/{session_id}/messages/{message_id}/media/{media_id}",
+        response_class=FileResponse,
+    )
+    def get_message_media(
+        session_id: str,
+        message_id: str,
+        media_id: str,
+        principal: Principal = Depends(require_client),
+    ) -> FileResponse:
+        session = scoped_session(session_id, principal)
+        if session is None:
+            raise HTTPException(status_code=404, detail="session not found")
+        result = service.message_media.resolve_for_message(
+            service.db,
+            tenant_id=principal.tenant_id,
+            session_id=session["internal_id"],
+            message_id=message_id,
+            media_id=media_id,
+            subject_hash=principal.subject_hash,
+        )
+        if result is None:
+            raise HTTPException(status_code=404, detail="message media not found")
+        path, mime_type = result
+        return FileResponse(
+            path,
+            media_type=mime_type,
+            headers={
+                "Cache-Control": "private, max-age=3600",
+                "X-Content-Type-Options": "nosniff",
+            },
         )
 
     @router.delete("/{session_id}")

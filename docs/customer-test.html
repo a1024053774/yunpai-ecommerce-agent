@@ -78,7 +78,15 @@
     .context { color: var(--muted); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
     textarea { width: 100%; min-height: 82px; resize: vertical; padding: 10px 11px; border: 1px solid #b8c8cd; border-radius: 4px; color: var(--ink); background: #fff; outline: none; }
     textarea:focus { border-color: var(--teal); box-shadow: 0 0 0 2px rgba(8,123,114,.12); }
-    .composer-actions { display: flex; justify-content: flex-end; gap: 9px; }
+    .composer-actions { display: flex; align-items: center; justify-content: space-between; gap: 9px; }
+    .composer-actions-end, .image-actions { display: flex; align-items: center; gap: 9px; }
+    .image-actions .button { flex: 0 0 auto; white-space: nowrap; }
+    .paste-hint { color: var(--muted); font-size: 12px; }
+    .image-preview { display: flex; align-items: center; gap: 10px; padding: 9px; border: 1px solid #b8d7d3; border-radius: 4px; background: #f3f9f8; }
+    .image-preview.hidden { display: none; }
+    .image-preview img { width: 72px; height: 72px; object-fit: cover; border: 1px solid var(--line); border-radius: 4px; background: #fff; }
+    .image-preview-info { min-width: 0; flex: 1; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+    .message-image { display: block; max-width: min(360px, 100%); max-height: 300px; margin: 0 0 9px; border: 1px solid var(--line); border-radius: 4px; object-fit: contain; background: #fff; }
     .evidence { margin: 0 16px 16px; padding: 0 0 14px; border-top: 1px solid var(--line); }
     .evidence summary { padding-top: 12px; color: var(--muted); font-size: 13px; cursor: pointer; }
     pre { max-height: 260px; margin: 10px 0 0; padding: 12px; overflow: auto; border-radius: 4px; background: #172a31; color: #dce8ea; font: 12px/1.55 ui-monospace, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -96,7 +104,9 @@
       .case-list { grid-template-columns: 1fr; }
       .session-row { align-items: flex-start; flex-direction: column; }
       .message { max-width: 95%; }
-      .composer-actions .button { flex: 1; }
+      .composer-actions { align-items: stretch; flex-direction: column; }
+      .composer-actions-end .button { flex: 1; }
+      .image-actions { justify-content: space-between; }
     }
   </style>
 </head>
@@ -129,10 +139,22 @@
         <div class="notice hidden" id="errorNotice" role="alert"></div>
         <form class="composer" id="chatForm">
           <div class="context" id="contextHint">当前上下文：无</div>
-          <textarea id="messageInput" maxlength="4000" placeholder="以顾客身份输入问题，例如：这款商品多久发货？" required></textarea>
+          <textarea id="messageInput" maxlength="4000" placeholder="输入顾客问题，或直接粘贴一张图片后发送"></textarea>
+          <div class="image-preview hidden" id="imagePreview">
+            <img id="imagePreviewImg" alt="待发送图片预览">
+            <div class="image-preview-info" id="imagePreviewInfo"></div>
+            <button class="button" type="button" id="removeImage">移除图片</button>
+          </div>
+          <input id="imageUpload" type="file" hidden>
           <div class="composer-actions">
-            <button class="button" type="button" id="clearContext">清除上下文</button>
-            <button class="button primary" id="sendButton" type="submit">发送对话</button>
+            <div class="image-actions">
+              <button class="button" type="button" id="uploadImage" disabled>上传图片</button>
+              <span class="paste-hint">支持 PNG / JPEG / WebP，也可直接粘贴到输入框</span>
+            </div>
+            <div class="composer-actions-end">
+              <button class="button" type="button" id="clearContext">清除上下文</button>
+              <button class="button primary" id="sendButton" type="submit">发送对话</button>
+            </div>
           </div>
         </form>
         <details class="evidence" id="outputDetails">
@@ -143,7 +165,7 @@
     </main>
   </div>
   <script>
-    const state = { sessionId: '', context: {}, selectedCase: null, busy: false };
+    const state = { sessionId: '', context: {}, selectedCase: null, busy: false, image: null, imageCapabilities: null };
     const $ = (id) => document.getElementById(id);
     const escapeHtml = (value) => String(value ?? '').replace(/[&<>'"]/g, (char) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' })[char]);
 
@@ -192,15 +214,28 @@
       return `<span class="tag">Qwen 润色：${escapeHtml(status)}${model}${latency}</span>`;
     }
 
-    function appendMessage(kind, title, content, meta = null) {
+    function visionTag(meta) {
+      const status = meta.vision_status || 'not_applicable';
+      if (status === 'not_applicable') return '';
+      const model = meta.vision_model ? ` · ${escapeHtml(meta.vision_model)}` : '';
+      const latency = Number.isInteger(meta.vision_latency_ms) ? ` · ${meta.vision_latency_ms}ms` : '';
+      if (status === 'applied') return `<span class="tag ok">Qwen 视觉：已解析${model}${latency}</span>`;
+      if (status === 'disabled') return '<span class="tag">Qwen 视觉：未启用</span>';
+      if (status === 'misconfigured') return `<span class="tag danger">Qwen 视觉：配置不完整${model}</span>`;
+      if (status === 'error') return `<span class="tag danger">Qwen 视觉：调用失败${model}${latency}</span>`;
+      return `<span class="tag">Qwen 视觉：${escapeHtml(status)}${model}${latency}</span>`;
+    }
+
+    function appendMessage(kind, title, content, meta = null, imageUrl = null) {
       $('emptyState')?.remove();
       const node = document.createElement('article');
       node.className = `message ${kind}`;
       const time = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-      let html = `<div class="message-head"><strong>${escapeHtml(title)}</strong><span>${time}</span></div><div>${escapeHtml(content)}</div>`;
+      const image = imageUrl ? `<img class="message-image" src="${escapeHtml(imageUrl)}" alt="顾客发送的图片">` : '';
+      let html = `<div class="message-head"><strong>${escapeHtml(title)}</strong><span>${time}</span></div>${image}<div>${escapeHtml(content)}</div>`;
       if (meta) {
         const handoffClass = meta.requires_human ? 'warn' : 'ok';
-        html += `<div class="reply-meta"><span class="tag ${handoffClass}">${meta.requires_human ? '已转人工' : escapeHtml(meta.intent)}</span><span class="tag">风险 ${escapeHtml(meta.risk_level)}</span><span class="tag">${escapeHtml(meta.reason)}</span>${polishTag(meta)}</div>`;
+        html += `<div class="reply-meta"><span class="tag ${handoffClass}">${meta.requires_human ? '已转人工' : escapeHtml(meta.intent)}</span><span class="tag">风险 ${escapeHtml(meta.risk_level)}</span><span class="tag">${escapeHtml(meta.reason)}</span>${visionTag(meta)}${polishTag(meta)}</div>`;
         if (meta.sources?.length) {
           html += `<div class="source-list"><strong>命中来源</strong><br>${meta.sources.map((source) => `${escapeHtml(source.category)} · ${escapeHtml(source.source)} · v${escapeHtml(source.version)}`).join('<br>')}</div>`;
         }
@@ -210,20 +245,81 @@
       $('messages').scrollTop = $('messages').scrollHeight;
     }
 
+    function clearImage() {
+      state.image = null;
+      $('imagePreview').classList.add('hidden');
+      $('imagePreviewImg').removeAttribute('src');
+      $('imagePreviewInfo').textContent = '';
+      $('imageUpload').value = '';
+    }
+
+    function readFileAsDataUrl(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(new Error('图片读取失败'));
+        reader.readAsDataURL(file);
+      });
+    }
+
+    async function attachImage(file) {
+      clearError();
+      if (!state.imageCapabilities) {
+        showError('图片能力仍在加载，请稍后重试。');
+        return;
+      }
+      if (!file || !state.imageCapabilities.mimeTypes.has(file.type)) {
+        showError('仅支持 PNG、JPEG 或 WebP 图片。');
+        return;
+      }
+      if (file.size > state.imageCapabilities.maxBytes) {
+        showError(`图片不能超过 ${(state.imageCapabilities.maxBytes / (1024 * 1024)).toFixed(0)} MiB。`);
+        return;
+      }
+      try {
+        const previewUrl = await readFileAsDataUrl(file);
+        const separator = previewUrl.indexOf(',');
+        if (separator < 0) throw new Error('图片编码失败');
+        state.image = {
+          mime_type: file.type,
+          data_base64: previewUrl.slice(separator + 1),
+          previewUrl,
+          name: file.name || '粘贴的图片',
+          size: file.size
+        };
+        $('imagePreviewImg').src = previewUrl;
+        $('imagePreviewInfo').textContent = `${state.image.name} · ${(file.size / 1024).toFixed(1)} KiB`;
+        $('imagePreview').classList.remove('hidden');
+      } catch (error) {
+        showError(error instanceof Error ? error.message : '图片读取失败');
+      }
+    }
+
     function setBusy(busy) {
       state.busy = busy;
       $('sendButton').disabled = busy;
       $('sendButton').textContent = busy ? '正在请求...' : '发送对话';
       $('messageInput').disabled = busy;
+      $('uploadImage').disabled = busy || !state.imageCapabilities;
+      $('removeImage').disabled = busy;
+      $('imageUpload').disabled = busy || !state.imageCapabilities;
     }
 
     async function sendMessage(message = $('messageInput').value.trim()) {
-      if (!message || state.busy) return;
+      if ((!message && !state.image) || state.busy) return;
       clearError();
-      appendMessage('customer', '顾客', message);
+      const pendingImage = state.image;
+      appendMessage('customer', '顾客', message || '（发送了一张图片）', null, pendingImage?.previewUrl || null);
       $('messageInput').value = '';
+      clearImage();
       setBusy(true);
       const requestPayload = { session_id: state.sessionId, message, context: state.context };
+      if (pendingImage) {
+        requestPayload.image = {
+          mime_type: pendingImage.mime_type,
+          data_base64: pendingImage.data_base64
+        };
+      }
       try {
         const response = await fetch('/v1/test/customer-chat', {
           method: 'POST',
@@ -250,6 +346,7 @@
       document.querySelectorAll('.case').forEach((item) => item.classList.remove('selected'));
       node.classList.add('selected');
       $('messageInput').value = testCase.message;
+      clearImage();
       updateContext();
       $('messageInput').focus();
     }
@@ -275,6 +372,23 @@
       }
     }
 
+    async function loadImageCapabilities() {
+      try {
+        const response = await fetch('/v1/test/customer-chat/capabilities');
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.detail || `图片能力加载失败 (${response.status})`);
+        state.imageCapabilities = {
+          maxBytes: payload.max_image_bytes,
+          mimeTypes: new Set(payload.image_mime_types || [])
+        };
+        $('imageUpload').accept = (payload.image_mime_types || []).join(',');
+        $('uploadImage').disabled = state.busy;
+        $('imageUpload').disabled = state.busy;
+      } catch (error) {
+        showError(error instanceof Error ? error.message : '无法加载图片能力');
+      }
+    }
+
     $('chatForm').addEventListener('submit', (event) => {
       event.preventDefault();
       sendMessage();
@@ -286,6 +400,7 @@
       $('messages').innerHTML = '<div class="empty" id="emptyState">已创建新会话。选择案例，或直接输入顾客问题。</div>';
       $('outputJson').textContent = '尚未调用接口。';
       $('messageInput').value = '';
+      clearImage();
       document.querySelectorAll('.case').forEach((item) => item.classList.remove('selected'));
       clearError();
       updateSession();
@@ -299,11 +414,27 @@
       updateContext();
       $('messageInput').focus();
     });
+    $('uploadImage').addEventListener('click', () => $('imageUpload').click());
+    $('imageUpload').addEventListener('change', () => {
+      const file = $('imageUpload').files?.[0];
+      if (file) attachImage(file);
+    });
+    $('removeImage').addEventListener('click', () => {
+      clearImage();
+      $('messageInput').focus();
+    });
+    $('messageInput').addEventListener('paste', (event) => {
+      const items = Array.from(event.clipboardData?.items || []);
+      const imageItem = items.find((item) => item.kind === 'file' && item.type.startsWith('image/'));
+      const file = imageItem?.getAsFile();
+      if (file) attachImage(file);
+    });
 
     state.sessionId = createSessionId();
     updateSession();
     updateContext();
     loadCases();
+    loadImageCapabilities();
   </script>
 </body>
 </html>

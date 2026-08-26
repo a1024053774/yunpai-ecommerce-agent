@@ -5,7 +5,13 @@ from collections.abc import Callable
 from fastapi import APIRouter, Depends
 
 from .auth import Principal
-from .schemas import CustomerTestCase, CustomerTestChatRequest, CustomerTestChatResponse
+from .schemas import (
+    ALLOWED_CHAT_IMAGE_MIME_TYPES,
+    MAX_CHAT_IMAGE_BYTES,
+    CustomerTestCase,
+    CustomerTestChatRequest,
+    CustomerTestChatResponse,
+)
 from .service import AgentService
 
 
@@ -60,6 +66,14 @@ def build_customer_test_router(
     def list_cases(_: Principal = Depends(require_local_customer_test)) -> list[CustomerTestCase]:
         return list(TEST_CASES)
 
+    @router.get("/capabilities")
+    def capabilities(_: Principal = Depends(require_local_customer_test)) -> dict:
+        return {
+            "max_image_bytes": MAX_CHAT_IMAGE_BYTES,
+            "image_mime_types": list(ALLOWED_CHAT_IMAGE_MIME_TYPES),
+            "max_images_per_message": 1,
+        }
+
     @router.post("", response_model=CustomerTestChatResponse)
     def customer_chat(
         payload: CustomerTestChatRequest,
@@ -70,6 +84,7 @@ def build_customer_test_router(
             payload.session_id,
             payload.message,
             payload.context,
+            image=payload.image,
             source_type="simulation",
             source_reference=TEST_SOURCE_REFERENCE,
         )

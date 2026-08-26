@@ -46,6 +46,7 @@ from .simulation_api import build_simulation_router
 from .traffic_lab_api import build_traffic_lab_router
 from .schemas import (
     CandidateView,
+    CHAT_IMAGE_ENVELOPE_BYTES,
     ChatMessageRequest,
     ChatRequest,
     ChatResponse,
@@ -77,6 +78,7 @@ from .schemas import (
     HandoffTransition,
     HandoffView,
     RetentionRequest,
+    MAX_CHAT_IMAGE_REQUEST_BODY_BYTES,
 )
 from .service import AgentService
 from .taobao import (
@@ -120,7 +122,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def enforce_request_size(request: Request, call_next):
         content_length = request.headers.get("content-length")
         if content_length and int(content_length) > service.settings.max_request_body_bytes:
-            return JSONResponse(status_code=413, content={"detail": "request body too large"})
+            path = request.url.path
+            image_chat_path = path in {
+                "/v1/chat",
+                "/v1/chat/stream",
+                "/v1/test/customer-chat",
+            } or (path.startswith("/v1/chat/sessions/") and path.endswith("/messages"))
+            if not image_chat_path or int(content_length) > MAX_CHAT_IMAGE_REQUEST_BODY_BYTES:
+                return JSONResponse(status_code=413, content={"detail": "request body too large"})
+            body = await request.body()
+            try:
+                payload = json.loads(body)
+                encoded_image = payload["image"]["data_base64"]
+            except (json.JSONDecodeError, KeyError, TypeError):
+                return JSONResponse(status_code=413, content={"detail": "request body too large"})
+            if not isinstance(encoded_image, str) or (
+                len(body) - len(encoded_image.encode("utf-8"))
+                > service.settings.max_request_body_bytes + CHAT_IMAGE_ENVELOPE_BYTES
+            ):
+                return JSONResponse(status_code=413, content={"detail": "request body too large"})
         return await call_next(request)
 
     def enforce_rate_limit(key: str) -> None:
@@ -555,7 +575,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/v1/chat", response_model=ChatResponse)
     def chat(payload: ChatRequest, principal: Principal = Depends(require_client)) -> ChatResponse:
         try:
-            return service.chat(principal, payload.session_id, payload.message, payload.context)
+            return service.chat(
+                principal,
+                payload.session_id,
+                payload.message,
+                payload.context,
+                image=payload.image,
+            )
         except SessionScopeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -578,6 +604,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     payload.session_id,
                     payload.message,
                     payload.context,
+                    image=payload.image,
                     idempotency_key=idempotency_key,
                 )
                 for item in stream:
@@ -711,6 +738,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 session_id=session_id,
                 message=payload.message,
                 context=payload.context,
+                image=payload.image,
             ),
             principal,
             idempotency_key,

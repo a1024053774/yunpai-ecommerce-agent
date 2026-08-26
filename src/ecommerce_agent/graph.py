@@ -94,6 +94,19 @@ def _response_evidence(state: AgentState) -> str:
     return evidence
 
 
+def has_media_observation(state: AgentState | dict[str, Any]) -> bool:
+    media = state.get("media_evidence") or {}
+    return media.get("status") == "applied" and bool(media.get("description"))
+
+
+def has_generation_evidence(state: AgentState | dict[str, Any]) -> bool:
+    return bool(
+        state.get("retrieved")
+        or state.get("tool_result", {}).get("postcondition_met") is True
+        or has_media_observation(state)
+    )
+
+
 def verify_response(state: AgentState) -> dict[str, Any]:
     evidence = _response_evidence(state)
     passed, reason = review_output(state["draft"], evidence)
@@ -281,13 +294,14 @@ def persist_response(
                 route_reason, sources_json, model_fallback, created_at,
                 tenant_id, client_id, redacted, context_snapshot_id,
                 customer_intent, intent_confidence, intent_method
-            ) VALUES (?, ?, ?, 'user', ?, NULL, NULL, NULL, '[]', 0, ?, ?, ?, ?, NULL, ?, ?, ?)
+            ) VALUES (?, ?, ?, 'user', ?, NULL, NULL, NULL, ?, 0, ?, ?, ?, ?, NULL, ?, ?, ?)
             """,
             (
                 user_message_id,
                 state["trace_id"],
                 state["session_id"],
                 safe_user,
+                json.dumps(state.get("message_media") or [], ensure_ascii=False),
                 now,
                 state["tenant_id"],
                 state["client_id"],
@@ -343,6 +357,10 @@ def persist_response(
                 "polish_applied": bool(state.get("polish_applied")),
                 "polish_model": state.get("polish_model"),
                 "polish_latency_ms": state.get("polish_latency_ms"),
+                "vision_status": state.get("vision_status", "not_applicable"),
+                "vision_model": state.get("vision_model"),
+                "vision_latency_ms": state.get("vision_latency_ms"),
+                "vision_image_count": state.get("vision_image_count", 0),
                 "handoff_id": state.get("handoff_id"),
                 "handoff_status": state.get("handoff_status"),
                 "sop_id": (state.get("active_sop") or {}).get("id"),
@@ -387,6 +405,7 @@ def persist_response(
             "context_snapshot_id": state.get("context_snapshot_id"),
             "context_readiness": state.get("context_readiness"),
             "evidence_ids": state.get("context_evidence_ids", []),
+            "vision_status": state.get("vision_status", "not_applicable"),
             "trace": state["trace"],
         },
         state["tenant_id"],
@@ -482,12 +501,22 @@ def build_graph(
                 settings.polish_model_name if settings.polish_enabled else None
             ),
             "polish_latency_ms": None,
+            "media_evidence": state.get("media_evidence") or {},
+            "message_media": state.get("message_media") or [],
+            "vision_status": state.get("vision_status") or "not_applicable",
+            "vision_model": state.get("vision_model"),
+            "vision_latency_ms": state.get("vision_latency_ms"),
+            "vision_image_count": int(state.get("vision_image_count") or 0),
             "answer": "",
             "citations": [],
             "requires_human": False,
             "message_id": state.get("message_id") or f"msg-{uuid.uuid4().hex}",
             "trace_id": state.get("trace_id") or f"trace-{uuid.uuid4().hex}",
-            "trace": ["intake"],
+            "trace": (
+                ["intake", f"vision:{state.get('vision_status', 'error')}"]
+                if state.get("vision_image_count")
+                else ["intake"]
+            ),
             "review_route": "pass",
             "model_fallback": False,
             "model_retry_advised": False,
@@ -721,6 +750,7 @@ def build_graph(
             history=history,
             history_budget_tokens=history_budget,
             tool_result=state.get("tool_result") or None,
+            media_evidence=state.get("media_evidence") or None,
             parent_snapshot_id=state.get("context_snapshot_id"),
         )
         route = "handoff" if snapshot.readiness == "handoff_required" else "deliberate"
@@ -759,6 +789,7 @@ def build_graph(
             # 导致高分但问题不匹配的文档被错误复用，绕过模型决策）
             and normalize_text(top_document["question"])
             == normalize_text(state["normalized_input"])
+            and not has_media_observation(state)
         ):
             decision = AgentDecision(
                 intent=top_document["intent"],
@@ -884,7 +915,14 @@ def build_graph(
                 route = "handoff"
                 reason = "tool_result_not_verified"
         if route == "answer":
-            reason = "knowledge_answer_allowed"
+            if has_media_observation(state):
+                reason = (
+                    "media_and_knowledge_answer_allowed"
+                    if state.get("retrieved")
+                    else "media_observation_answer_allowed"
+                )
+            else:
+                reason = "knowledge_answer_allowed"
         elif route == "clarify":
             reason = "llm_clarification_required"
         elif route == "finish":
@@ -1226,6 +1264,7 @@ def build_graph(
             history=history,
             history_budget_tokens=history_budget,
             tool_result=state.get("tool_result") or None,
+            media_evidence=state.get("media_evidence") or None,
             parent_snapshot_id=state.get("context_snapshot_id"),
         )
         route = "handoff" if snapshot.readiness == "handoff_required" else "generate"
@@ -1258,7 +1297,7 @@ def build_graph(
             if state.get("tool_result", {}).get("postcondition_met")
             else None
         )
-        if not state["retrieved"] and not verified_result:
+        if not has_generation_evidence(state):
             return {
                 "draft": "当前知识库中没有足够信息，我会为您转人工客服进一步核对。",
                 "draft_origin": "fallback",
@@ -1273,6 +1312,7 @@ def build_graph(
             and top_document["source"].startswith("evolution:")
             # 精确匹配才复用（对齐 deliberate 同逻辑）
             and normalize_text(top_document["question"]) == state["normalized_input"]
+            and not has_media_observation(state)
         ):
             return {
                 "draft": top_document["answer"],

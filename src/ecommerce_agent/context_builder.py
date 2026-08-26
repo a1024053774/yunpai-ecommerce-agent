@@ -166,6 +166,7 @@ class ContextBuilder:
         history: list[dict[str, Any]],
         history_budget_tokens: int | None = None,
         tool_result: dict[str, Any] | None = None,
+        media_evidence: dict[str, Any] | None = None,
         parent_snapshot_id: str | None = None,
     ) -> ContextSnapshot:
         safe_context = _safe_value(trusted_context)
@@ -183,6 +184,17 @@ class ContextBuilder:
         )
         safe_history = _safe_value(recent_history)
         safe_tool_result = _safe_value(tool_result or {})
+        safe_media = _safe_value(media_evidence or {})
+        if safe_media.get("status") == "applied" and safe_media.get("description"):
+            safe_media.update(
+                {
+                    "authority": "multimodal_model_observation",
+                    "semantic_authority": False,
+                    "business_execution_authority": False,
+                }
+            )
+        else:
+            safe_media = {}
         conflicts = self._conflicts(safe_context)
         if safe_context.get("authorized") is not True:
             safe_context = {
@@ -327,6 +339,23 @@ class ContextBuilder:
                 )
                 if stage == "generation":
                     readiness = "handoff_required"
+        if safe_media:
+            evidence.append(
+                self._evidence(
+                    "media_observation",
+                    f"media:{trace_id}:{sequence}",
+                    authority="multimodal_model_observation",
+                    freshness="current",
+                    source_version=self.CONTEXT_VERSION,
+                    summary={
+                        "source_kind": safe_media.get("source_kind"),
+                        "model": safe_media.get("model"),
+                        "image_count": safe_media.get("image_count"),
+                        "semantic_authority": False,
+                        "business_execution_authority": False,
+                    },
+                )
+            )
 
         bundle = {
             "context_version": self.CONTEXT_VERSION,
@@ -346,6 +375,7 @@ class ContextBuilder:
             },
             "sop_evidence": safe_sops,
             "knowledge_evidence": safe_documents,
+            "media_evidence": safe_media,
             "product_advisor": safe_advisor,
             "available_tools": safe_tools,
             "output_constraints": {

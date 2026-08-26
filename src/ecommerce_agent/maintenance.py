@@ -7,15 +7,23 @@ from typing import Any
 
 from .config import Settings
 from .database import Database, utc_now
+from .message_media import MessageMediaStore, parse_message_media
 
 
 TERMINAL_HANDOFF_STATUSES = ("completed", "failed", "canceled", "rejected")
 
 
 class MaintenanceService:
-    def __init__(self, db: Database, settings: Settings):
+    def __init__(
+        self,
+        db: Database,
+        settings: Settings,
+        *,
+        media_store: MessageMediaStore | None = None,
+    ):
         self.db = db
         self.settings = settings
+        self.media_store = media_store or MessageMediaStore(settings.data_dir)
 
     def purge_expired(self, *, actor: str, dry_run: bool) -> dict[str, Any]:
         now = datetime.now(UTC)
@@ -88,6 +96,22 @@ class MaintenanceService:
                     (message_cutoff, *terminal),
                 ).fetchall()
             ]
+            media_sources = [
+                str(row["sources_json"])
+                for row in conn.execute(
+                    """
+                    SELECT m.sources_json FROM messages m
+                    WHERE m.created_at < ?
+                      AND NOT EXISTS (
+                          SELECT 1 FROM handoff_tasks h
+                          WHERE h.session_id=m.session_id
+                            AND h.status NOT IN (?, ?, ?, ?)
+                      )
+                    """,
+                    (message_cutoff, *terminal),
+                ).fetchall()
+                if parse_message_media(row["sources_json"])
+            ]
 
             report = {
                 "dry_run": dry_run,
@@ -101,6 +125,9 @@ class MaintenanceService:
                 "audit_events_deleted": int(audit_delete),
                 "sessions_closed": len(expired_sessions),
                 "expired_session_ids": expired_sessions,
+                "media_files_selected": sum(
+                    len(parse_message_media(value)) for value in media_sources
+                ),
             }
             if dry_run:
                 return report
@@ -171,10 +198,21 @@ class MaintenanceService:
                     tuple(expired_sessions),
                 )
             run_id = f"retention-{uuid.uuid4().hex}"
+            report["media_files_deleted"] = 0
             conn.execute(
                 "INSERT INTO retention_runs VALUES (?, ?, ?, ?)",
                 (run_id, actor, json.dumps(report, ensure_ascii=False), utc_now()),
             )
+        # 文件删除放在数据库提交之后：失败时只会残留无引用文件，不会出现悬空引用
+        if media_sources:
+            report["media_files_deleted"] = sum(
+                self.media_store.remove(value) for value in media_sources
+            )
+            with self.db._write_lock, self.db.connect() as conn:
+                conn.execute(
+                    "UPDATE retention_runs SET detail_json=? WHERE id=?",
+                    (json.dumps(report, ensure_ascii=False), run_id),
+                )
         return report
 
     def close_idle_sessions(self) -> dict[str, Any]:
