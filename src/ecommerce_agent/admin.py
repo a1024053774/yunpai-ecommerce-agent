@@ -5,6 +5,7 @@ from typing import Any
 
 from .database import Database, session_scope_condition
 from .context_builder import ContextBuilder
+from .profit.models import ExpenseCategory, category_is_final
 
 
 class AdminConsoleService:
@@ -288,6 +289,7 @@ class AdminConsoleService:
         *,
         event_type: str | None = None,
         limit: int = 100,
+        mask_final_amounts: bool = False,
     ) -> list[dict[str, Any]]:
         conditions = ["tenant_id=?"]
         params: list[Any] = [tenant_id]
@@ -307,8 +309,20 @@ class AdminConsoleService:
         for row in rows:
             item = dict(row)
             try:
-                item["detail"] = json.loads(item.pop("detail_json") or "{}")
+                detail = json.loads(item.pop("detail_json") or "{}")
             except ValueError:
-                item["detail"] = {}
+                detail = {}
+            if (
+                mask_final_amounts
+                and isinstance(detail, dict)
+                and detail.get("category")
+                and detail.get("amount") is not None
+            ):
+                try:
+                    if category_is_final(ExpenseCategory(str(detail["category"]))):
+                        detail["amount"] = None
+                except ValueError:
+                    pass
+            item["detail"] = detail
             events.append(item)
         return events

@@ -1,0 +1,166 @@
+{
+  "tenant_id": "tenant-demo",
+  "store_id": "store-demo",
+  "summary": {
+    "forecast_target": {
+      "missing": 1
+    },
+    "candidate_signal": {
+      "missing": 4
+    },
+    "supply_constraint": {
+      "missing": 2
+    },
+    "delivery_constraint": {
+      "missing": 2
+    },
+    "master_data": {
+      "missing": 2
+    }
+  },
+  "inputs": [
+    {
+      "input_key": "demand_daily_facts",
+      "field_key": "readiness:demand_daily_facts",
+      "category": "forecast_target",
+      "label": "每日需求事实（store+SKU）",
+      "evidence_state": "missing",
+      "source_kind": null,
+      "data_as_of": null,
+      "granularity": "daily",
+      "sku_coverage": 0,
+      "missing_reason": "无需求事实：等待订单/需求导入（M7-R WP1 导入契约）（未登记 field evidence，按行存在推断）",
+      "source_reference": null
+    },
+    {
+      "input_key": "traffic_metric_buckets",
+      "field_key": "readiness:traffic_metric_buckets",
+      "category": "candidate_signal",
+      "label": "流量曝光/点击（revision→SKU）",
+      "evidence_state": "missing",
+      "source_kind": null,
+      "data_as_of": null,
+      "granularity": null,
+      "sku_coverage": 0,
+      "missing_reason": "无流量数据：M9-R/Traffic Lab 接入后可用（未登记 field evidence，按行存在推断）",
+      "source_reference": null
+    },
+    {
+      "input_key": "marketing_campaign_metrics",
+      "field_key": "readiness:marketing_campaign_metrics",
+      "category": "candidate_signal",
+      "label": "广告投放指标",
+      "evidence_state": "missing",
+      "source_kind": null,
+      "data_as_of": null,
+      "granularity": "daily",
+      "sku_coverage": null,
+      "missing_reason": "无广告数据：等待营销指标导入（未登记 field evidence，按行存在推断）",
+      "source_reference": null
+    },
+    {
+      "input_key": "competitor_approved_signal",
+      "field_key": "readiness:competitor_approved_signal",
+      "category": "candidate_signal",
+      "label": "竞品信号（approved-only）",
+      "evidence_state": "missing",
+      "source_kind": null,
+      "data_as_of": null,
+      "granularity": null,
+      "sku_coverage": 0,
+      "missing_reason": "无已批准竞品匹配（D-025 approved-only）（未登记 field evidence，按行存在推断）",
+      "source_reference": null
+    },
+    {
+      "input_key": "after_sale_cases",
+      "field_key": "readiness:after_sale_cases",
+      "category": "candidate_signal",
+      "label": "退款/售后",
+      "evidence_state": "missing",
+      "source_kind": null,
+      "data_as_of": null,
+      "granularity": null,
+      "sku_coverage": null,
+      "missing_reason": "无退款/售后记录：等待订单售后导入（SKU 经订单行关联）（未登记 field evidence，按行存在推断）",
+      "source_reference": null
+    },
+    {
+      "input_key": "inventory_balances",
+      "field_key": "readiness:inventory_balances",
+      "category": "supply_constraint",
+      "label": "可售/在途/预留库存",
+      "evidence_state": "missing",
+      "source_kind": null,
+      "data_as_of": null,
+      "granularity": null,
+      "sku_coverage": 0,
+      "missing_reason": "无库存快照：等待库存导入（未登记 field evidence，按行存在推断）",
+      "source_reference": null
+    },
+    {
+      "input_key": "inventory_planning_policies",
+      "field_key": "readiness:inventory_planning_policies",
+      "category": "supply_constraint",
+      "label": "补货策略（lead/review/MOQ/服务水平）",
+      "evidence_state": "missing",
+      "source_kind": null,
+      "data_as_of": null,
+      "granularity": null,
+      "sku_coverage": 0,
+      "missing_reason": "无补货策略：等待策略配置（未登记 field evidence，按行存在推断）",
+      "source_reference": null
+    },
+    {
+      "input_key": "supplier_lead_days",
+      "field_key": "readiness:supplier_lead_days",
+      "category": "delivery_constraint",
+      "label": "供应商生产/备货周期",
+      "evidence_state": "missing",
+      "source_kind": null,
+      "data_as_of": null,
+      "granularity": null,
+      "sku_coverage": 0,
+      "missing_reason": "无补货策略/供应商参数（未登记 field evidence，按行存在推断）",
+      "source_reference": null
+    },
+    {
+      "input_key": "transport_lead_days",
+      "field_key": "readiness:transport_lead_days",
+      "category": "delivery_constraint",
+      "label": "运输周期",
+      "evidence_state": "missing",
+      "source_kind": null,
+      "data_as_of": null,
+      "granularity": null,
+      "sku_coverage": null,
+      "missing_reason": "运输周期未接入（M7-R 财务/物流输入）（未登记 field evidence，按行存在推断）",
+      "source_reference": null
+    },
+    {
+      "input_key": "catalog_items",
+      "field_key": "readiness:catalog_items",
+      "category": "master_data",
+      "label": "商品/SKU",
+      "evidence_state": "missing",
+      "source_kind": null,
+      "data_as_of": null,
+      "granularity": null,
+      "sku_coverage": 0,
+      "missing_reason": "无商品主数据：等待 catalog 导入（未登记 field evidence，按行存在推断）",
+      "source_reference": null
+    },
+    {
+      "input_key": "material_no_mapping",
+      "field_key": "readiness:material_no_mapping",
+      "category": "master_data",
+      "label": "内部料号映射",
+      "evidence_state": "missing",
+      "source_kind": null,
+      "data_as_of": null,
+      "granularity": null,
+      "sku_coverage": null,
+      "missing_reason": "料号映射未完成（M7-R WP3）（未登记 field evidence，按行存在推断）",
+      "source_reference": null
+    }
+  ]
+}

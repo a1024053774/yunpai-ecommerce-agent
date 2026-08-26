@@ -27,6 +27,48 @@ class Principal:
 class AdminPrincipal:
     tenant_id: str
     admin_id: str
+    capabilities: frozenset[str] = frozenset()
+
+
+# M10-R 写职责能力（D-035：唯一权威定义，路由层只引用常量，不复制字符串）。
+CAPABILITY_FINANCE_POLICY_WRITE = "finance:policy:write"
+CAPABILITY_FINANCE_LEDGER_WRITE = "finance:ledger:write"
+CAPABILITY_ORDERING_DRAFT_WRITE = "ordering:draft:write"
+CAPABILITY_ORDERING_CONFIRM_WRITE = "ordering:confirm:write"
+CAPABILITY_ORDERING_ADVANCE_WRITE = "ordering:advance:write"
+
+M10_WRITE_CAPABILITIES = frozenset(
+    {
+        CAPABILITY_FINANCE_POLICY_WRITE,
+        CAPABILITY_FINANCE_LEDGER_WRITE,
+        CAPABILITY_ORDERING_DRAFT_WRITE,
+        CAPABILITY_ORDERING_CONFIRM_WRITE,
+        CAPABILITY_ORDERING_ADVANCE_WRITE,
+    }
+)
+
+# 每个 capability 由独立环境变量按 admin_id 白名单授权（服务端默认拒绝）。
+_CAPABILITY_ENV: dict[str, str] = {
+    "finance:final_profit:read": "FINAL_PROFIT_READ_ADMIN_IDS",
+    CAPABILITY_FINANCE_POLICY_WRITE: "M10_FINANCE_POLICY_WRITE_ADMIN_IDS",
+    CAPABILITY_FINANCE_LEDGER_WRITE: "M10_FINANCE_LEDGER_WRITE_ADMIN_IDS",
+    CAPABILITY_ORDERING_DRAFT_WRITE: "M10_ORDERING_DRAFT_WRITE_ADMIN_IDS",
+    CAPABILITY_ORDERING_CONFIRM_WRITE: "M10_ORDERING_CONFIRM_WRITE_ADMIN_IDS",
+    CAPABILITY_ORDERING_ADVANCE_WRITE: "M10_ORDERING_ADVANCE_WRITE_ADMIN_IDS",
+}
+
+
+def _admin_capabilities(admin_id: str) -> frozenset[str]:
+    granted: set[str] = set()
+    for capability, env_name in _CAPABILITY_ENV.items():
+        allowed = {
+            item.strip()
+            for item in os.environ.get(env_name, "").split(",")
+            if item.strip()
+        }
+        if admin_id in allowed:
+            granted.add(capability)
+    return frozenset(granted)
 
 
 class AdminOperatorCreateRequest(BaseModel):
@@ -140,9 +182,13 @@ class AuthenticationService:
 
     def authenticate_admin(self, admin_id: str | None, admin_key: str | None) -> AdminPrincipal:
         if not self.settings.admin_auth_required:
+            # 本地/未启用管理员认证时视为可信开发环境：授予全部 M10 写职责。
             return AdminPrincipal(
                 tenant_id=self.settings.bootstrap_tenant_id,
                 admin_id=self.settings.bootstrap_admin_id,
+                capabilities=_admin_capabilities(
+                    self.settings.bootstrap_admin_id
+                ) | M10_WRITE_CAPABILITIES,
             )
         if not self.admin_configured:
             raise AuthError("administrator authentication is not configured")
@@ -157,7 +203,11 @@ class AuthenticationService:
             admin_key, row["key_salt"], row["key_hash"], row["key_iterations"]
         ):
             raise AuthError("invalid administrator credentials")
-        return AdminPrincipal(tenant_id=str(row["tenant_id"]), admin_id=str(row["id"]))
+        return AdminPrincipal(
+            tenant_id=str(row["tenant_id"]),
+            admin_id=str(row["id"]),
+            capabilities=_admin_capabilities(str(row["id"])),
+        )
 
     def create_admin_operator(
         self,

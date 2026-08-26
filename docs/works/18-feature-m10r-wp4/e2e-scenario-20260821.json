@@ -1,0 +1,56 @@
+{
+  "title": "M10-R WP4 端到端场景证据",
+  "generated_at": "2026-08-21T06:47:18.159178+00:00",
+  "base_url": "http://127.0.0.1:8081",
+  "checks": [
+    {
+      "name": "登记利润政策",
+      "passed": true,
+      "detail": "status=200 policy={'tenant_id': 'local-appliance', 'policy_version': 'v-e2e-20260821-064717', 'revenue_recognition_basis': 'signed_receipt'}"
+    },
+    {
+      "name": "正式三层利润全可用（600/430/410）",
+      "passed": true,
+      "detail": "status=200 600.00/430.00/410.00"
+    },
+    {
+      "name": "缺失费用不补零（经营层 missing + 金额 null）",
+      "passed": true,
+      "detail": "status=200 operating=missing amount=None"
+    },
+    {
+      "name": "demo 隔离与标签（试算 1300，formal 不受影响）",
+      "passed": true,
+      "detail": "demo_sales=1300.00 formal_final=410.00"
+    },
+    {
+      "name": "重复退款被对账检出",
+      "passed": true,
+      "detail": "status=200 issues=2"
+    },
+    {
+      "name": "订购单 formal Gate 阻断（缺证据）",
+      "passed": true,
+      "detail": "status=409 detail={'detail': 'ordering_gate_blocked:material_no,forecast_run_ref,supply_constraint,delivery_constraint'}"
+    },
+    {
+      "name": "订购单 demo 放行且带未发送标签",
+      "passed": true,
+      "detail": "status=200 label=未发送（演示参数）"
+    },
+    {
+      "name": "订购单 draft→awaiting→confirmed（版本 2）",
+      "passed": true,
+      "detail": "submit=awaiting_confirmation confirm=confirmed v=2"
+    },
+    {
+      "name": "写屏障：订购单推进不改变利润投影",
+      "passed": true,
+      "detail": "final=310.00 expected=310.00"
+    }
+  ],
+  "summary": {
+    "passed": 9,
+    "failed": 0
+  }
+}

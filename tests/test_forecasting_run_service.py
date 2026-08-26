@@ -13,6 +13,10 @@ from ecommerce_agent.forecasting import (
     ForecastRunService,
     SUPPORTED_FORECAST_MODELS,
 )
+from ecommerce_agent.forecasting.signal_gate import (
+    SignalAdmission,
+    SignalGateResult,
+)
 
 
 TENANT = "tenant-forecast-run"
@@ -74,6 +78,48 @@ def _service(tmp_path, rows: list[dict], *, engine: ForecastEngine | None = None
     return db, ForecastRunService(db, facts=_FactSource(rows), engine=engine)
 
 
+def _admitted_signal(factor: float) -> SignalGateResult:
+    return SignalGateResult(
+        admission=SignalAdmission.ADMITTED,
+        reason="signal_improves_baseline_no_leakage",
+        operational_champion=True,
+        signal_usage="signal_used",
+        comparisons=(),
+        data_as_of=None,
+        final_signal_factor=factor,
+    )
+
+
+def test_admitted_signal_scales_forecast_points(tmp_path) -> None:
+    db, service = _service(tmp_path, _facts([10] * 56))
+    baseline = service.run(TENANT, store_id=STORE, sku_id=SKU)
+    admitted = service.run(
+        TENANT,
+        store_id=STORE,
+        sku_id=SKU,
+        signal_gate_result=_admitted_signal(1.5),
+    )
+    for before, after in zip(baseline["points"], admitted["points"]):
+        assert after["p50"] == round(float(before["p50"]) * 1.5, 9)
+        assert after["p80"] == round(float(before["p80"]) * 1.5, 9)
+        assert after["p95"] == round(float(before["p95"]) * 1.5, 9)
+    reason = admitted["candidate_models"]["signal_champion_reason"]
+    assert reason["operational_champion"] is True
+    assert reason["final_signal_factor"] == 1.5
+
+
+def test_data_hash_changes_when_signal_changes_forecast(tmp_path) -> None:
+    db, service = _service(tmp_path, _facts([10] * 56))
+    baseline = service.run(TENANT, store_id=STORE, sku_id=SKU)
+    admitted = service.run(
+        TENANT,
+        store_id=STORE,
+        sku_id=SKU,
+        signal_gate_result=_admitted_signal(1.5),
+    )
+    assert baseline["data_hash"] != admitted["data_hash"]
+
+
 def test_run_persists_replayable_policy_backtests_and_quantiles(tmp_path) -> None:
     db, service = _service(tmp_path, _facts([10] * 56))
 
@@ -112,6 +158,26 @@ def test_run_persists_replayable_policy_backtests_and_quantiles(tmp_path) -> Non
     )
     with pytest.raises(ForecastRunError, match="forecast_policy_version_conflict"):
         conflict.run(TENANT, store_id=STORE, sku_id=SKU)
+
+
+def test_run_persists_signal_gate_evidence(tmp_path) -> None:
+    db, service = _service(tmp_path, _facts([10] * 56))
+    result = SignalGateResult(
+        admission=SignalAdmission.REJECTED_NOT_BETTER,
+        reason="signal_not_better_than_baseline",
+        operational_champion=False,
+        signal_usage="not_used",
+        comparisons=(),
+        data_as_of="2026-02-25",
+    )
+    run = service.run(
+        TENANT, store_id=STORE, sku_id=SKU, signal_gate_result=result
+    )
+    assert (
+        run["candidate_models"]["signal_champion_reason"]["signal_usage"]
+        == "not_used"
+    )
+    assert run["candidate_models"]["signal_candidates"] == []
 
 
 def test_run_marks_gaps_stockouts_and_unknown_inventory_as_degraded(tmp_path) -> None:

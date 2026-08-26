@@ -109,7 +109,10 @@ def build_admin_router(
         admin: AdminPrincipal = Depends(require_admin),
     ) -> list[dict[str, Any]]:
         return service.admin.audit_events(
-            admin.tenant_id, event_type=event_type, limit=limit
+            admin.tenant_id,
+            event_type=event_type,
+            limit=limit,
+            mask_final_amounts="finance:final_profit:read" not in admin.capabilities,
         )
 
     return router

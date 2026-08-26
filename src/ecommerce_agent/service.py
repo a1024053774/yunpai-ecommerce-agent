@@ -30,6 +30,7 @@ from .channel_sdk.taobao_adapter import TaobaoChannelAdapter
 from .config import Settings
 from .context_builder import ContextBuilder
 from .database import Database, SessionScopeError, utc_now
+from .decision_advisor import DecisionAdvisorService
 from .disaster_recovery import DataDirectoryLock
 from .evaluation import EvaluationRunRequest, EvaluationService
 from .graph import MODEL_UNAVAILABLE_HANDOFF_ANSWER, build_graph, verify_response
@@ -46,6 +47,8 @@ from .rag import KnowledgeBase
 from .quality import QualityService
 from .releases import ReleaseReplayRequest, ReleaseService
 from .readonly_data import ReadonlyDataService, ReadonlyReportIngestionService
+from .ordering import OrderingService
+from .profit import ProfitService
 from .readonly_readiness import ReadonlyDemoService, ReadonlyReadinessService
 from .product_identity import ProductIdentityService
 from .schemas import ChatResponse, SourceItem
@@ -98,6 +101,7 @@ class AgentService:
             # 现在 kg-* 知识进入 RAG 检索，222 节点知识图谱真正服务客服。
             self.kg_import_stats = self._import_knowledge_assets()
             self.model = ModelGateway(self.settings)
+            self.decision_advisor = DecisionAdvisorService(self.model)
             self.handoff_staffing = HandoffStaffingService(self.db)
             self.handoffs = HandoffService(self.db, self.handoff_staffing)
             self.handoffs.ensure_default_queues(self.settings.bootstrap_tenant_id)
@@ -151,6 +155,8 @@ class AgentService:
             self.product_identity = ProductIdentityService(self.db)
             self.readonly_readiness = ReadonlyReadinessService(self.db)
             self.readonly_demo = ReadonlyDemoService(self.db)
+            self.ordering = OrderingService(self.db)
+            self.profit = ProfitService(self.db)
             if self.settings.model_enabled:
                 # 文案与报告解读可走真实模型；模型异常时服务内部自动降级到模板。
                 self.operations.ops_assistant.attach_model(self.model)

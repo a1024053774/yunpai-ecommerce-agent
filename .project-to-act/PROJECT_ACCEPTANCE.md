@@ -5,6 +5,109 @@
 
 ## 当前验收结论
 
+- 结论：2026-08-24 M10-R WP1～WP4 代码候选在 PR #24 分支
+  `feature/m10r-wp4-profit-ledger` 上补齐闫睿涵最终门禁 #9/#10：真实外生信号
+  生产接线（`signal_adapter.py` 按 tenant/store/SKU/date 隔离接入 SignalGate，
+  无信号显式 missing/not_used）与结构化经营建议入口（`/v1/decision/suggestions`
+  复用 ModelGateway，禁用/失败显式“模型建议不可用”，移除浏览器 if/else 语义
+  建议）；#11 final 净利润最小 capability 已在前序 head 完成。证据 ID
+  E-20260824-001（`docs/works/18-feature-m10r-wp4/README.md` + 截图）。M10 定向
+  回归 84 passed、compileall/diff-check 通过；真实模型 smoke（DeepSeek 测试 key，
+  仅环境变量注入）返回 3 条中文结构化建议。未完成：WP5 独立验收、全量回归重跑、
+  决策台销量/预测面板与单品下钻、利润粒度混用守卫；不构成正式签署或生产放行。
+
+- 补充（2026-08-24 下午，同 E-20260824-001）：决策台补齐“销量趋势与预测”面板
+  与点击单品下钻（需求历史/预测/回测/库存计划/订购单/竞品/费用，新增只读
+  `GET /v1/profit/ledger/entries` 并按 #11 对最终层脱敏）；利润投影新增粒度
+  混用守卫（≥2 种已声明粒度时拒绝静默混算）。M10 定向回归 88 passed，compileall/
+  diff-check 通过；截图更新为正式/下钻/演示三张。剩余未完成：全量回归重跑、WP5
+  独立验收；不构成正式签署或生产放行。
+
+- 反例复核（2026-08-24 下午，同 E-20260824-001）：对 5 个关键边界做 mutation
+  红→绿（信号未来泄漏拦截、信号 SKU 隔离、利润粒度混用守卫、final 净利润服务端
+  脱敏、模型建议“未启用即不可用”），破坏时对应测试均失败、还原后均通过；还原后
+  相关 5 个测试文件 42 passed。
+
+- 全量回归（2026-08-24，同 E-20260824-001）：`python -m pytest -q` 单进程
+  **1115 passed / 0 failed**，24 warnings（均为 traffic_lab_api 重复 Operation ID
+  的既有告警），耗时 1:33:12。剩余未完成：WP5 独立验收（胡磊）；不构成签署或
+  生产放行。
+
+- P0 复核修复（2026-08-24 晚间，同 E-20260824-001）：按胡磊第二轮 WP5 复核修复
+  4 个 P0 生产阻断——① final 财务金额统一按权限脱敏（模型输入/对账/审计三旁路）；
+  ② 对账失败时正式利润 blocked 不显示精确值；③ 信号 admitted 真正改变预测点；
+  ④ 迟到信号按每条 as-of 排除出回测。顺带修复 chat_sessions 消息排序竞态（UUID
+  tiebreak → rowid）。新增 6 个反例测试，全量回归 **1121 passed / 0 failed**（27 分钟）。
+  剩余：待胡磊第三轮 WP5 复核签署；不构成生产放行。
+
+- 结论：2026-08-25 M10-R P1 收口完成，证据 ID E-20260825-001。四项：① 利润粒度
+  守卫 fail-closed（空值不再绕过混算拦截）；② 决策台经营建议改显式触发、单品下钻
+  补全（订单/库存快照/广告明细/单据版本）、趋势列表覆盖正常 SKU；③ 模型建议依据
+  补证据引用（evidence_refs/amount_refs 硬校验，真实模型 smoke 引用全部合法）；
+  ④ 供货/交期 Gate 证据加固（供货走 per-SKU 政策+时效，交期店铺级证据强制新鲜度+
+  来源引用，不改 schema）。新增 8 个反例测试，全量回归 **1129 passed / 0 failed**
+  （28:46）。剩余：待胡磊第三轮 WP5 复核签署；不构成生产放行。
+
+- 对抗复核（2026-08-25，追加至 E-20260825-001）：对今日四项做对抗测试，发现并修复
+  2 个问题——① 决策台切换店铺/期间后旧经营建议残留（刷新时重置建议面板）；
+  ② 交期证据 source_reference 纯空白可绕过（改 length(trim())>0 并补反例）。
+  其余（粒度 fail-closed、建议证据硬校验、供货政策 SKU+时效）未发现新漏洞；
+  已知残留：粒度守卫不交叉校验声明与 order_id/sku_id 结构（负责人选择暂不修）、
+  交期仍为店铺级、ISO 字符串时间比较在混时区导入时需注意。
+
+- 第三轮 WP5 复核修复（2026-08-25，追加至 E-20260825-001）：按胡磊第三轮复核
+  （head 4313557）修复 8 项 P0/P1——P0-1 历史审计 final 金额读侧脱敏、P0-2 信号
+  迟到修订按当时可见值重建、P1-1 正式利润未知粒度 blocked（入账+投影双层）、
+  P1-2 模型建议数值声称绑定合法事实、P1-3 供货政策时间上界、P1-4 data_hash 含信号
+  门禁结果、P1-5 旧 UUID 游标兼容、P1-6 决策台跨店请求竞态（generation token）；
+  另补 verify_m10r 漏收 2 个测试文件。每项按“修复前截图→修复→修复后截图”留证
+  （BUGFIX_RECORD_20260825.md）。受影响定向 104 passed，全量回归 **1142 passed /
+  0 failed**（28:17）。剩余待办：capability/职责分离、写+审计原子性、同步 main 解
+  冲突、真实模型/生产运行证据（等闫哥定口径或外部输入）；不构成签署或生产放行。
+
+- 结论：2026-08-26 M10-R 最终合并 head 复验完成，证据 ID E-20260826-001。同步
+  `upstream/main`（v39 已由 M9-R WP5 登记）到 `feature/m10r-wp4-profit-ledger`，
+  解决 `CONTRIBUTING.md` v37/v38/v39 三方冲突（保留 M10 行 37/38 细节、采纳 main
+  v39 占号，下一空闲号 40）；合并 head `ecbfcfd`，PR #24 由 CONFLICTING 变为
+  MERGEABLE/CLEAN。最终合并 head 上 `scripts/verify_m10r.py` 定向 **114 passed /
+  0 failed**（83.7s），全量回归 `python -m pytest -q` 单进程 **1142 passed /
+  0 failed**（30:19，24 warnings 为既有 traffic_lab 重复 Operation ID），
+  compileall / `git diff --check` 通过；合并仅改动 CONTRIBUTING.md/.gitignore，
+  未夹带代码变更。仍未收口（等闫哥定口径或外部输入，不构成签署或生产放行）：
+  P0-3 formal 写接口 capability 默认拒绝（普通管理员仍可 POST ledger/ordering，
+  权限模型需按职责矩阵设计）、P0-4 业务写与审计同事务（db.audit 独立连接，
+  需 service 层事务重构）、P1-3 交期证据仍为店铺级（无 SKU 级数据源，需 schema
+  扩展）、P1-7 页面 GET 拒绝读取仍落审计（三条 read_denied 断言锁定，待确认改
+  “不落库”或“脱敏记录”）、P1-8 生产运行证据（真实模型 key、canary/SLO/监控/
+  回退/runbook，需外部输入）。
+
+- 补充（2026-08-26，E-20260826-002）：main 又合入 M9-R 读模型 PR #19（
+  `96fb063`→`b77dfeb`）后 PR #24 再次 CONFLICTING，已再次同步并解决 4 处冲突
+  （database.py schema v36/v37/v38/v39 四迁移共存、SCHEMA_VERSION=39、两个账本文档、
+  admin-console 导航标题并存），合并 head `02af3a8` 已推送且 PR 恢复
+  MERGEABLE/CLEAN。最终合并 head 上 M10 定向 `verify_m10r.py` **114 passed**，
+  M9/M10 契约+灾备+读模型+v39 重放 **41 passed**，全量回归 `python -m pytest -q`
+  **1423 passed / 0 failed**（13:14，24 warnings 为既有 traffic_lab 重复
+  Operation ID）。未收口项同 E-20260826-001（capability/职责分离、写+审计同事务、
+  交期 SKU 级绑定、GET 落审计、生产运行证据），不构成签署或生产放行。
+
+- 结论：2026-08-26 胡磊第四轮 WP5 复验（head `e379571`）的 3 个代码阻断已修复，
+  证据 ID E-20260826-003。① **写接口 capability 默认拒绝（P0-1）**：auth 新增
+  `finance:policy:write` / `finance:ledger:write` / `ordering:draft:write` /
+  `ordering:confirm:write` / `ordering:advance:write` 五个职责能力（D-035 单一权威
+  定义，按环境变量白名单授权，本地可信模式全授）；profit/ordering 全部写端点按职责
+  校验，无权限 403 `capability_denied:*`，新增无权限/职责拆分反例 2 项。② **业务写
+  与审计同事务（P0-2）**：profit/ordering 写方法支持共享 connection，API 在
+  `db.connect()` 同一事务内完成业务写+审计（成功一并提交、异常一并回滚），新增审计
+  故障注入反例 2 项（HTTP 500 后 ledger/draft/事件计数均不变）。③ **交期证据按 SKU
+  绑定（P1）**：`readiness:transport_lead_days` 证据必须声明
+  `scope='operational:sku:<SKU_ID>'`，店铺级或其它 SKU 证据不再放行 formal 草稿
+  （fail-closed），新增跨 SKU/店铺级反例 2 项；数据契约已在 gate.py 注释与
+  `.env.example` 说明。合并 head 上 M10 定向 `verify_m10r.py` **120 passed**，全量
+  回归 `python -m pytest -q` **1429 passed / 0 failed**（11:44）。仍未收口：生产发布
+  证据（GitHub CI、真实模型、canary/SLO/告警/回退/恢复演练，需外部输入），不构成
+  生产放行。
+
 - 结论：2026-08-25 PR #19 已在实现提交
   `f23dba31de755ee7df5dbc0cde894d41c06b47ad` 上修复负责人针对 `8e7ede3` 的唯一剩余阻断，
   证据 ID 为 E-20260825-002。新增回归先稳定复现“订单头 item 非空、旧订单行无 item 字段”的

@@ -26,9 +26,12 @@ from .chat_sessions_api import build_chat_sessions_router
 from .config import Settings, is_loopback_host
 from .customer_test_api import build_customer_test_router
 from .database import SessionScopeError
+from .decision_api import build_decision_router
 from .evolution import EvolutionError, EvolutionService
 from .evaluation_api import build_evaluation_router
 from .forecasting_api import build_forecasting_router
+from .ordering_api import build_ordering_router
+from .profit_api import build_profit_router
 from .handoff import HandoffError
 from .handoff_dispatch import DispatchError
 from .handoff_staffing import StaffingError
@@ -186,6 +189,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(build_operations_router(service, require_admin))
     app.include_router(build_forecasting_router(service, require_admin))
+    app.include_router(build_ordering_router(service, require_admin))
+    app.include_router(build_profit_router(service, require_admin))
+    app.include_router(build_decision_router(service, require_admin))
     app.include_router(build_traffic_lab_router(service, require_admin))
     app.include_router(build_ops_assistant_router(service, require_admin))
     app.include_router(build_admin_router(service, require_admin))

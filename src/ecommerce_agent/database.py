@@ -198,12 +198,17 @@ class Database:
             if 36 not in applied:
                 self._apply_v36(conn)
                 conn.execute("INSERT INTO schema_migrations VALUES (36, ?)", (utc_now(),))
+            # MERGE-GATE M10-R：v37 订购单 / v38 费用 ledger 与 M9-R v36/v39 并存，
+            # 按数字顺序应用，不得回退 SCHEMA_VERSION 或互相覆盖。
+            if 37 not in applied:
+                self._apply_v37(conn)
+                conn.execute("INSERT INTO schema_migrations VALUES (37, ?)", (utc_now(),))
+            if 38 not in applied:
+                self._apply_v38(conn)
+                conn.execute("INSERT INTO schema_migrations VALUES (38, ?)", (utc_now(),))
             if 39 not in applied:
                 self._apply_v39(conn)
                 conn.execute("INSERT INTO schema_migrations VALUES (39, ?)", (utc_now(),))
-            # MERGE-GATE：v36 已含 M9-R 生命周期最终形态（复合主键 + stale + 内容不可变
-            # 触发器）。v37/v38 归 M10-R（群公告占号 08-20），本分支不再占用。
-            # v39 由本分支占用（库存重建 + 订单行 item 归属）。
             conn.execute(f"PRAGMA user_version = {self.SCHEMA_VERSION}")
             self._validate_schema(conn)
 
@@ -3435,6 +3440,112 @@ class Database:
         )
 
     @staticmethod
+    def _apply_v37(conn: sqlite3.Connection) -> None:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS purchase_order_drafts (
+                order_draft_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                store_id TEXT NOT NULL,
+                sku_id TEXT NOT NULL,
+                material_no TEXT NOT NULL,
+                supplier_ref TEXT,
+                recommended_qty INTEGER NOT NULL CHECK(recommended_qty >= 1),
+                confirmed_qty INTEGER
+                    CHECK(confirmed_qty IS NULL OR confirmed_qty >= 0),
+                unit_cost TEXT,
+                currency TEXT NOT NULL DEFAULT 'CNY',
+                promised_delivery_at TEXT,
+                forecast_run_ref TEXT,
+                inventory_snapshot_ref TEXT,
+                policy_ref TEXT,
+                source_summary TEXT NOT NULL,
+                assumptions_json TEXT NOT NULL,
+                missing_fields_json TEXT NOT NULL,
+                mode TEXT NOT NULL CHECK(mode IN ('formal','demo')),
+                status TEXT NOT NULL CHECK(status IN (
+                    'draft','awaiting_confirmation','confirmed','in_transit',
+                    'received','cancelled','overdue'
+                )),
+                version INTEGER NOT NULL CHECK(version >= 1),
+                created_by TEXT NOT NULL,
+                confirmed_by TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(tenant_id, order_draft_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_purchase_order_drafts_scope
+                ON purchase_order_drafts(
+                    tenant_id, store_id, status, updated_at DESC
+                );
+
+            CREATE TABLE IF NOT EXISTS purchase_order_events (
+                event_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                order_draft_id TEXT NOT NULL,
+                from_status TEXT NOT NULL,
+                to_status TEXT NOT NULL,
+                actor TEXT NOT NULL,
+                source_ref TEXT,
+                note TEXT,
+                created_at TEXT NOT NULL,
+                UNIQUE(tenant_id, event_id),
+                FOREIGN KEY(tenant_id, order_draft_id)
+                    REFERENCES purchase_order_drafts(tenant_id, order_draft_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_purchase_order_events_draft
+                ON purchase_order_events(tenant_id, order_draft_id, created_at);
+            """
+        )
+
+    @staticmethod
+    def _apply_v38(conn: sqlite3.Connection) -> None:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS profit_policies (
+                policy_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                revenue_recognition_basis TEXT NOT NULL,
+                required_categories_json TEXT NOT NULL,
+                policy_version TEXT NOT NULL,
+                active_from TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(tenant_id, policy_version)
+            );
+            CREATE TABLE IF NOT EXISTS profit_ledger_entries (
+                entry_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                store_id TEXT NOT NULL,
+                period TEXT NOT NULL,
+                category TEXT NOT NULL,
+                scope TEXT NOT NULL CHECK(scope IN ('formal','demo')),
+                amount TEXT NOT NULL,
+                currency TEXT NOT NULL DEFAULT 'CNY',
+                source_kind TEXT NOT NULL
+                    CHECK(source_kind IN ('actual','manual','demo')),
+                sku_id TEXT,
+                order_id TEXT,
+                mapping_version TEXT NOT NULL,
+                entry_key TEXT NOT NULL,
+                payload_hash TEXT NOT NULL CHECK(length(payload_hash) = 64),
+                source_reference TEXT,
+                granularity TEXT,
+                is_estimated INTEGER NOT NULL DEFAULT 0
+                    CHECK(is_estimated IN (0, 1)),
+                reconciliation_status TEXT NOT NULL DEFAULT 'pending'
+                    CHECK(reconciliation_status IN ('pending','reconciled','disputed')),
+                created_at TEXT NOT NULL,
+                UNIQUE(tenant_id, entry_key),
+                UNIQUE(tenant_id, entry_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_profit_ledger_scope
+                ON profit_ledger_entries(
+                    tenant_id, store_id, period, scope, category
+                );
+            """
+        )
+
+    @staticmethod
     def _apply_v36(conn: sqlite3.Connection) -> None:
         # M9-R WP3 生命周期建议持久化（占号裁定 08-18：v36 归 M9-R WP3，v35 归 M7-R WP3）。
         # 含 M9-R WP5 验收修复最终形态：复合主键 (tenant_id, recommendation_id) 防
@@ -3840,6 +3951,24 @@ class Database:
                 "scope", "evidence_state", "reason", "data_as_of",
                 "source_reference", "import_id", "payload_hash",
                 "created_at",
+            },
+            "purchase_order_drafts": {
+                "tenant_id", "store_id", "material_no", "recommended_qty",
+                "mode", "status", "version", "created_by", "updated_at",
+            },
+            "purchase_order_events": {
+                "tenant_id", "order_draft_id", "from_status", "to_status",
+                "actor", "created_at",
+            },
+            "profit_policies": {
+                "tenant_id", "revenue_recognition_basis",
+                "required_categories_json", "policy_version",
+                "active_from", "created_at",
+            },
+            "profit_ledger_entries": {
+                "tenant_id", "store_id", "period", "category", "scope",
+                "amount", "entry_key", "payload_hash", "granularity",
+                "is_estimated", "reconciliation_status", "created_at",
             },
             "readonly_import_row_issues": {
                 "issue_id", "import_id", "tenant_id", "store_id",
@@ -4331,7 +4460,7 @@ class Database:
         tenant_id: str,
         subject_hash: str,
     ) -> dict[str, Any]:
-        decoded_cursor: tuple[str, str] | None = None
+        decoded_cursor: tuple[str, str | int] | None = None
         if cursor:
             try:
                 if "|" in cursor:
@@ -4352,7 +4481,19 @@ class Database:
                 created_at, message_id = raw_cursor.rsplit("|", 1)
                 datetime.fromisoformat(created_at)
                 if created_at and message_id:
-                    decoded_cursor = (created_at, message_id)
+                    try:
+                        decoded_cursor = (created_at, int(message_id))
+                    except ValueError:
+                        # 旧版游标：created_at|message_uuid → 兼容迁移到 rowid，
+                        # 避免静默从第一页重复返回。
+                        with self.connect() as conn:
+                            row = conn.execute(
+                                "SELECT rowid FROM messages WHERE id=?",
+                                (message_id,),
+                            ).fetchone()
+                        decoded_cursor = (
+                            (created_at, int(row["rowid"])) if row else None
+                        )
             except (binascii.Error, TypeError, UnicodeDecodeError, ValueError):
                 decoded_cursor = None
 
@@ -4365,7 +4506,7 @@ class Database:
         params: list[Any] = [session_id, tenant_id, subject_hash]
         if decoded_cursor is not None:
             conditions.append(
-                "(m.created_at > ? OR (m.created_at = ? AND m.id > ?))"
+                "(m.created_at > ? OR (m.created_at = ? AND m.rowid > ?))"
             )
             params.extend(
                 [
@@ -4381,11 +4522,11 @@ class Database:
                        m.risk_level, m.route_reason, m.sources_json,
                        m.model_fallback, m.redacted, m.context_snapshot_id,
                        m.customer_intent, m.intent_confidence, m.intent_method,
-                       m.created_at
+                       m.created_at, m.rowid AS _rowid
                 FROM messages m
                 JOIN sessions s ON s.id=m.session_id
                 WHERE {' AND '.join(conditions)}
-                ORDER BY m.created_at, m.id
+                ORDER BY m.created_at, m.rowid
                 LIMIT ?
                 """,
                 (*params, page_limit + 1),
@@ -4394,9 +4535,11 @@ class Database:
         has_more = len(rows) > page_limit
         page_rows = rows[:page_limit]
         items = [dict(row) for row in page_rows]
+        for item in items:
+            item.pop("_rowid", None)
         next_cursor = None
         if has_more and page_rows:
-            raw_cursor = f"{page_rows[-1]['created_at']}|{page_rows[-1]['id']}"
+            raw_cursor = f"{page_rows[-1]['created_at']}|{page_rows[-1]['_rowid']}"
             next_cursor = base64.urlsafe_b64encode(raw_cursor.encode("utf-8")).decode(
                 "ascii"
             ).rstrip("=")

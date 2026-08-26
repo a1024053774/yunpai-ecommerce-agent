@@ -16,6 +16,9 @@ from ..database import Database, utc_now
 from ..evidence_freshness import evidence_freshness
 from .engine import ForecastEngine, ForecastPolicy
 from .models import DEMAND_V1
+from .signal_adapter import SignalInput, TrafficSignalAdapter
+from .signal_gate import SignalGate, SignalGateResult
+from ..readonly_data.contracts import SourceKind
 
 
 def _json(value: Any) -> str:
@@ -58,10 +61,14 @@ class ForecastRunService:
         *,
         facts: DemandFactReader,
         engine: ForecastEngine | None = None,
+        signal_adapter: Any | None = None,
     ) -> None:
         self.db = db
         self.facts = facts
         self.engine = engine or ForecastEngine()
+        self._signal_adapter = (
+            signal_adapter if signal_adapter is not None else TrafficSignalAdapter(db)
+        )
 
     def resolve_policy(
         self, tenant_id: str, *, store_id: str, sku_id: str
@@ -107,10 +114,11 @@ class ForecastRunService:
         self,
         tenant_id: str,
         *,
-        store_id: str,
-        sku_id: str,
-        policy: ForecastPolicy | None = None,
-    ) -> dict[str, Any]:
+    store_id: str,
+    sku_id: str,
+    policy: ForecastPolicy | None = None,
+    signal_gate_result: SignalGateResult | None = None,
+) -> dict[str, Any]:
         facts = sorted(
             self.facts.list_facts(tenant_id, store_id=store_id, sku_id=sku_id),
             key=lambda item: str(item["business_date"]),
@@ -139,6 +147,38 @@ class ForecastRunService:
             if item["windows_failed"]
             or item.get("final_forecast_failure_reason") is not None
         ]
+        if signal_gate_result is None:
+            signal_input: SignalInput | None = self._signal_adapter.load(
+                tenant_id=tenant_id, store_id=store_id, sku_id=sku_id
+            )
+            if signal_input is None or not signal_input.signal_by_date:
+                # 无真实候选信号：保持 missing/not_used，baseline 照跑，禁止补零或伪造。
+                signal_gate_result = SignalGate().evaluate(
+                    baseline_rows=evaluation["backtests"],
+                    signal_by_date={},
+                    source_kind=SourceKind.MANUAL,
+                    data_as_of=None,
+                )
+            else:
+                signal_gate_result = SignalGate().evaluate(
+                    baseline_rows=evaluation["backtests"],
+                    signal_by_date=signal_input.signal_by_date,
+                    signal_as_of=signal_input.signal_as_of,
+                    source_kind=signal_input.source_kind,
+                    data_as_of=signal_input.data_as_of,
+                )
+        if (
+            signal_gate_result.operational_champion
+            and signal_gate_result.signal_usage == "signal_used"
+            and signal_gate_result.final_signal_factor is not None
+        ):
+            factor = signal_gate_result.final_signal_factor
+            for point in evaluation["points"]:
+                for quantile in ("p50", "p80", "p95"):
+                    point[quantile] = round(float(point[quantile]) * factor, 9)
+            for horizon, quantiles in evaluation["horizon_totals"].items():
+                for quantile, value in quantiles.items():
+                    quantiles[quantile] = round(float(value) * factor, 9)
         anomalies = self._anomalies(input_issues, evaluation, model_failures)
         status = (
             "degraded"
@@ -146,7 +186,11 @@ class ForecastRunService:
             else "completed"
         )
         policy_evidence = self._policy_evidence(engine.policy)
-        data_hash = self._input_data_hash(facts, policy_evidence)
+        data_hash = self._input_data_hash(
+            facts,
+            policy_evidence,
+            signal_evidence=signal_gate_result.to_evidence(),
+        )
         run_id = f"forecast-run-{uuid.uuid4().hex}"
         created_at = utc_now()
         candidate_evidence = {
@@ -156,6 +200,20 @@ class ForecastRunService:
             "horizon_totals": evaluation["horizon_totals"],
             "policy": policy_evidence,
         }
+        if signal_gate_result is not None:
+            signal_evidence = signal_gate_result.to_evidence()
+            candidate_evidence["signal_candidates"] = signal_evidence["comparisons"]
+            candidate_evidence["signal_champion_reason"] = {
+                key: signal_evidence[key]
+                for key in (
+                    "admission",
+                    "reason",
+                    "operational_champion",
+                    "signal_usage",
+                    "data_as_of",
+                    "final_signal_factor",
+                )
+            }
         try:
             candidate_evidence["source_provenance"] = merge_source_provenance(
                 (
@@ -393,7 +451,10 @@ class ForecastRunService:
 
     @staticmethod
     def _input_data_hash(
-        facts: list[dict[str, Any]], policy_evidence: dict[str, Any]
+        facts: list[dict[str, Any]],
+        policy_evidence: dict[str, Any],
+        *,
+        signal_evidence: dict[str, Any] | None = None,
     ) -> str:
         return hashlib.sha256(
             _json(
@@ -411,6 +472,7 @@ class ForecastRunService:
                         for item in facts
                     ],
                     "forecast_policy": policy_evidence,
+                    "signal_evidence": signal_evidence,
                 }
             ).encode("utf-8")
         ).hexdigest()
@@ -439,7 +501,18 @@ class ForecastRunService:
             key=lambda item: str(item["business_date"]),
         )
         try:
-            current_data_hash = self._input_data_hash(facts, policy_evidence)
+            signal_reason = candidate_evidence.get("signal_champion_reason") or {}
+            signal_candidates = candidate_evidence.get("signal_candidates") or []
+            signal_evidence = (
+                {**dict(signal_reason), "comparisons": list(signal_candidates)}
+                if signal_reason
+                else None
+            )
+            current_data_hash = self._input_data_hash(
+                facts,
+                policy_evidence,
+                signal_evidence=signal_evidence,
+            )
         except (KeyError, TypeError, ValueError):
             return evidence_freshness(
                 status="stale",
