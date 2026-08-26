@@ -462,7 +462,13 @@ class OpsAssistantService:
     # 运营分析报告
     # ------------------------------------------------------------------
 
-    def analysis_report(self, tenant_id: str, query: OpsReportQuery) -> dict[str, Any]:
+    def analysis_report(
+        self,
+        tenant_id: str,
+        query: OpsReportQuery,
+        *,
+        include_narrative: bool = True,
+    ) -> dict[str, Any]:
         rows = self.list_records(
             tenant_id,
             dataset_key=query.dataset_key,
@@ -478,7 +484,12 @@ class OpsAssistantService:
         channels = self._channel_breakdown(rows)
         findings = self._findings(rows, totals, trends, channels)
         summary = self._summary_lines(rows, totals, trends)
-        narrative, narrative_generator = self._model_narrative(totals, trends, findings)
+        if include_narrative:
+            narrative, narrative_generator = self._model_narrative(
+                totals, trends, findings
+            )
+        else:
+            narrative, narrative_generator = None, "suppressed"
         source_formats = sorted({str(item["source_format"]) for item in rows})
         return {
             "period": {
