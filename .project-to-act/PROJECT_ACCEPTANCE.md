@@ -65,6 +65,22 @@
   0 failed**（28:17）。剩余待办：capability/职责分离、写+审计原子性、同步 main 解
   冲突、真实模型/生产运行证据（等闫哥定口径或外部输入）；不构成签署或生产放行。
 
+- 结论：2026-08-26 M10-R 最终合并 head 复验完成，证据 ID E-20260826-001。同步
+  `upstream/main`（v39 已由 M9-R WP5 登记）到 `feature/m10r-wp4-profit-ledger`，
+  解决 `CONTRIBUTING.md` v37/v38/v39 三方冲突（保留 M10 行 37/38 细节、采纳 main
+  v39 占号，下一空闲号 40）；合并 head `ecbfcfd`，PR #24 由 CONFLICTING 变为
+  MERGEABLE/CLEAN。最终合并 head 上 `scripts/verify_m10r.py` 定向 **114 passed /
+  0 failed**（83.7s），全量回归 `python -m pytest -q` 单进程 **1142 passed /
+  0 failed**（30:19，24 warnings 为既有 traffic_lab 重复 Operation ID），
+  compileall / `git diff --check` 通过；合并仅改动 CONTRIBUTING.md/.gitignore，
+  未夹带代码变更。仍未收口（等闫哥定口径或外部输入，不构成签署或生产放行）：
+  P0-3 formal 写接口 capability 默认拒绝（普通管理员仍可 POST ledger/ordering，
+  权限模型需按职责矩阵设计）、P0-4 业务写与审计同事务（db.audit 独立连接，
+  需 service 层事务重构）、P1-3 交期证据仍为店铺级（无 SKU 级数据源，需 schema
+  扩展）、P1-7 页面 GET 拒绝读取仍落审计（三条 read_denied 断言锁定，待确认改
+  “不落库”或“脱敏记录”）、P1-8 生产运行证据（真实模型 key、canary/SLO/监控/
+  回退/runbook，需外部输入）。
+
 - 结论：2026-08-20 M7-R WP1～WP4 已在固定代码对象上通过 WP5 代码级、本机技术 Gate，
   PR #20 已合入 `main`，证据 ID 为 E-20260820-001。WP1 因是 M8-R～M10-R 共用基建而
   先行合入，PR base `48013b1` 已包含 WP1；缪海南独立验收的 WP2～WP4 head 为
