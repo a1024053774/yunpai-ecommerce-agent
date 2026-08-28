@@ -27,6 +27,7 @@ from .tools import ToolExecutionContext
 from .workspace_presenter import (
     answer_preserves_critical_values,
     critical_fact_values,
+    critical_fact_claims,
     observation_data_status,
     observation_summary,
     present_observation,
@@ -113,6 +114,7 @@ WORKSPACE_PROMPT_VERSION = "workspace-router-v4.3"
 WORKSPACE_IMAGE_ONLY_MESSAGE = "请根据我粘贴的图片说明相关信息。"
 WORKSPACE_READ_TASK_TIMEOUT_SECONDS = 20.0
 WORKSPACE_READ_PLAN_TIMEOUT_SECONDS = 90.0
+WORKSPACE_MAX_ANSWER_CHARS = 12000
 WORKSPACE_PENDING_DELIVERY_MODE = "pending"
 WORKSPACE_CONTROL_DELIVERY_MODE = "control_response"
 WORKSPACE_INCOMPLETE_DELIVERY_MODE = "incomplete"
@@ -125,6 +127,7 @@ WORKSPACE_DELIVERY_MODES = frozenset(
     }
 )
 WORKSPACE_COMPLETION_STATUSES = frozenset({"completed", "partial", "failed"})
+WORKSPACE_VERIFIED_TASK_STATUSES = frozenset({"success", "no_data"})
 WORKSPACE_MISSING_INFORMATION_LABELS = {
     "store_id": "店铺编号",
     "sku_id": "商品编号",
@@ -349,6 +352,10 @@ def _safe_model_text(value: Any, *, limit: int) -> str:
     return safe.strip()[:limit]
 
 
+def _safe_answer_text(value: Any) -> str:
+    return _safe_model_text(value, limit=WORKSPACE_MAX_ANSWER_CHARS)
+
+
 class WorkspaceAgent:
     def __init__(self, service: AgentService, evolution: EvolutionService):
         self.service = service
@@ -563,13 +570,14 @@ class WorkspaceAgent:
                     "status": observation_status,
                     "objective": plan.reason,
                     "status_facts": product_view.get("已核实状态", []),
+                    "field_claims": product_view.get("已核实字段", []),
                 }
             )
             yield {
                 "event": "tool",
                 "tool_name": plan.tool_name,
                 "tool_label": selected_label,
-                "status": "success",
+                "status": observation_status,
                 "summary": observation_summary(product_view),
                 "step": len(observations),
             }
@@ -623,10 +631,12 @@ class WorkspaceAgent:
         completion_status = "completed"
         facts_validated = False
         if plan.mode == "propose_action":
-            answer = self._safe_action_response()
+            answer = _safe_answer_text(self._safe_action_response())
             yield {"event": "delta", "text": answer}
         elif plan.mode == "clarify":
-            answer = (plan.response or "请补充完成任务所需的最少信息。").strip()
+            answer = _safe_answer_text(
+                plan.response or "请补充完成任务所需的最少信息。"
+            )
             if answer:
                 yield {"event": "delta", "text": answer}
         elif observations:
@@ -638,8 +648,8 @@ class WorkspaceAgent:
                 image_observation=image_observation,
             )
             try:
-                candidate_answer = "".join(
-                    self.service.model.stream_generate(messages)
+                candidate_answer = _safe_answer_text(
+                    "".join(self.service.model.stream_generate(messages))
                 )
                 if answer_preserves_critical_values(
                     candidate_answer, observations, require_all=False
@@ -648,7 +658,9 @@ class WorkspaceAgent:
                     facts_validated = True
                 else:
                     degraded_reasons.append("critical_value_mismatch")
-                    answer = self._deterministic_answer(observations, execution_notes)
+                    answer = _safe_answer_text(
+                        self._deterministic_answer(observations, execution_notes)
+                    )
                     facts_validated = answer_preserves_critical_values(
                         answer, observations, require_all=False
                     )
@@ -656,7 +668,9 @@ class WorkspaceAgent:
                     yield {"event": "delta", "text": answer}
             except ModelUnavailableError:
                 degraded_reasons.append("response_model_unavailable")
-                answer = self._deterministic_answer(observations, execution_notes)
+                answer = _safe_answer_text(
+                    self._deterministic_answer(observations, execution_notes)
+                )
                 facts_validated = answer_preserves_critical_values(
                     answer, observations, require_all=False
                 )
@@ -682,7 +696,9 @@ class WorkspaceAgent:
                     "message": "流式整理暂时中断，正在切换稳定模式",
                 }
                 try:
-                    candidate_answer = self.service.model.generate(messages).strip()
+                    candidate_answer = _safe_answer_text(
+                        self.service.model.generate(messages)
+                    )
                     if answer_preserves_critical_values(
                         candidate_answer, observations, require_all=False
                     ):
@@ -690,34 +706,43 @@ class WorkspaceAgent:
                         facts_validated = True
                     else:
                         degraded_reasons.append("critical_value_mismatch")
-                        answer = self._deterministic_answer(
-                            observations, execution_notes
+                        answer = _safe_answer_text(
+                            self._deterministic_answer(
+                                observations, execution_notes
+                            )
                         )
                         facts_validated = answer_preserves_critical_values(
                             answer, observations, require_all=False
                         )
                 except ModelUnavailableError:
                     degraded_reasons.append("response_model_unavailable")
-                    answer = self._deterministic_answer(observations, execution_notes)
+                    answer = _safe_answer_text(
+                        self._deterministic_answer(observations, execution_notes)
+                    )
                     facts_validated = answer_preserves_critical_values(
                         answer, observations, require_all=False
                     )
                 except ModelError:
                     degraded_reasons.append("response_generation_failed")
-                    answer = self._deterministic_answer(observations, execution_notes)
+                    answer = _safe_answer_text(
+                        self._deterministic_answer(observations, execution_notes)
+                    )
                     facts_validated = answer_preserves_critical_values(
                         answer, observations, require_all=False
                     )
                 if answer:
                     yield {"event": "delta", "text": answer}
         else:
-            answer = (plan.response or "目前没有需要查询的业务事实。").strip()
+            answer = _safe_answer_text(
+                plan.response or "目前没有需要查询的业务事实。"
+            )
             if answer:
                 yield {"event": "delta", "text": answer}
 
         if observations:
-            all_observations_succeeded = all(
-                str(item.get("status") or "") == "success" for item in observations
+            all_observations_verified = all(
+                str(item.get("status") or "") in WORKSPACE_VERIFIED_TASK_STATUSES
+                for item in observations
             )
             has_unresolved_execution = limit_reached or any(
                 item.get("type") in {"query_rejected", "planning_model_unavailable", "planning_output_invalid"}
@@ -725,7 +750,7 @@ class WorkspaceAgent:
             )
             completion_status = (
                 "completed"
-                if all_observations_succeeded and not has_unresolved_execution
+                if all_observations_verified and not has_unresolved_execution
                 else "partial"
             )
             delivery_mode = (
@@ -948,7 +973,9 @@ class WorkspaceAgent:
             },
         }
         if not plan.tasks:
-            answer = (plan.response or "目前没有需要查询的业务事实。").strip()
+            answer = _safe_answer_text(
+                plan.response or "目前没有需要查询的业务事实。"
+            )
             yield {"event": "status", "stage": "composing", "message": "正在整理结论与下一步"}
             if answer:
                 yield {"event": "delta", "text": answer}
@@ -1029,7 +1056,9 @@ class WorkspaceAgent:
                 }
             )
 
-        if results and all(result.status == "failed" for result in results):
+        if results and all(
+            result.status not in WORKSPACE_VERIFIED_TASK_STATUSES for result in results
+        ):
             yield {
                 "event": "error",
                 "code": "read_plan_all_failed",
@@ -1085,32 +1114,42 @@ class WorkspaceAgent:
         )
         answer = ""
         degraded_reasons: list[str] = []
-        all_tasks_succeeded = all(result.status == "success" for result in results)
+        all_tasks_verified = all(
+            result.status in WORKSPACE_VERIFIED_TASK_STATUSES for result in results
+        )
         facts_validated = False
-        if not all_tasks_succeeded:
-            answer = self._deterministic_answer(observations, [])
+        if not all_tasks_verified:
+            answer = _safe_answer_text(self._deterministic_answer(observations, []))
         else:
             try:
-                answer = "".join(self.service.model.stream_generate(messages))
+                answer = _safe_answer_text(
+                    "".join(self.service.model.stream_generate(messages))
+                )
             except (ModelUnavailableError, ModelError):
                 degraded_reasons.append("response_generation_failed")
-                answer = self._deterministic_answer(observations, [])
+                answer = _safe_answer_text(
+                    self._deterministic_answer(observations, [])
+                )
             if answer_preserves_critical_values(
                 answer, results, require_all=True
             ):
                 facts_validated = True
             else:
                 degraded_reasons.append("critical_value_mismatch")
-                answer = self._deterministic_answer(observations, [])
+                answer = _safe_answer_text(
+                    self._deterministic_answer(observations, [])
+                )
                 facts_validated = answer_preserves_critical_values(
                     answer, results, require_all=True
                 )
-        if not all_tasks_succeeded:
+        if not all_tasks_verified:
             facts_validated = False
         if answer:
             yield {"event": "delta", "text": answer}
 
-        completed = all(result.status == "success" for result in results)
+        completed = all(
+            result.status in WORKSPACE_VERIFIED_TASK_STATUSES for result in results
+        )
         last_tool = results[-1].tool_name if results else None
         yield {
             "event": "done",
@@ -1140,7 +1179,11 @@ class WorkspaceAgent:
                         "objective": result.objective,
                         "status": result.status,
                         "tool_label": result.tool_label,
-                        "error_summary": self._public_read_error(result.error_summary),
+                        "error_summary": (
+                            None
+                            if result.status in WORKSPACE_VERIFIED_TASK_STATUSES
+                            else self._public_read_error(result.error_summary)
+                        ),
                     }
                     for result in results
                 ],
@@ -1172,18 +1215,16 @@ class WorkspaceAgent:
                     reference.path,
                 )
             )
-        observation = _compact(
-            self._execute(
-                WorkspacePlan(
-                    mode="observe",
-                    tool_name=task.tool_name,
-                    arguments=arguments,
-                    reason=task.objective,
-                ),
-                request,
-                admin,
-                trace_id,
-            )
+        observation = self._execute(
+            WorkspacePlan(
+                mode="observe",
+                tool_name=task.tool_name,
+                arguments=arguments,
+                reason=task.objective,
+            ),
+            request,
+            admin,
+            trace_id,
         )
         product_view = present_observation(task.tool_name, observation)
         status = observation_data_status(task.tool_name, observation)
@@ -1204,6 +1245,7 @@ class WorkspaceAgent:
                 for item in product_view.get("已核实状态") or []
                 if isinstance(item, dict)
             ],
+            field_claims=critical_fact_claims(task.tool_name, observation),
             structured_data=observation,
         )
 
@@ -1214,11 +1256,6 @@ class WorkspaceAgent:
     ) -> Any:
         value: Any = structured_data
         for segment in path:
-            if isinstance(value, dict) and segment == "result" and "result" not in value:
-                value = WorkspaceAgent._single_list_value(value)
-                continue
-            if isinstance(value, dict) and isinstance(segment, int):
-                value = WorkspaceAgent._single_list_value(value)
             if isinstance(segment, int):
                 if (
                     not isinstance(value, list)
@@ -1235,15 +1272,6 @@ class WorkspaceAgent:
             raise ValueError("read_dependency_value_missing")
         return value
 
-    @staticmethod
-    def _single_list_value(value: dict[str, Any]) -> list[Any]:
-        """Resolve a model's root-array shorthand only when the shape is unambiguous."""
-
-        candidates = [item for item in value.values() if isinstance(item, list)]
-        if len(candidates) != 1:
-            raise ValueError("read_dependency_value_missing")
-        return candidates[0]
-
     def _execute(
         self,
         plan: WorkspacePlan,
@@ -1254,40 +1282,38 @@ class WorkspaceAgent:
         name = plan.tool_name or ""
         if name == "get_workspace_overview":
             ready, readiness = self.service.readiness()
-            return _compact(
-                {
-                    "ready": ready,
-                    "readiness": readiness,
-                    "overview": self.service.admin.overview(admin.tenant_id, scope="operational"),
-                    "handoffs": self.service.handoffs.summary(
-                        tenant_id=admin.tenant_id, scope="operational"
-                    ),
-                    "customer_team": self._customer_team(admin.tenant_id),
-                    "quality": self.service.quality.summary(admin.tenant_id),
-                    "evaluations": self.service.evaluations.overview(admin.tenant_id),
-                    "modules": self.service.operations.modules(),
-                    "channels": [item.model_dump() for item in self.service.channel_adapters.catalog()],
-                }
-            )
+            return {
+                "ready": ready,
+                "readiness": readiness,
+                "overview": self.service.admin.overview(admin.tenant_id, scope="operational"),
+                "handoffs": self.service.handoffs.summary(
+                    tenant_id=admin.tenant_id, scope="operational"
+                ),
+                "customer_team": self._customer_team(admin.tenant_id),
+                "quality": self.service.quality.summary(admin.tenant_id),
+                "evaluations": self.service.evaluations.overview(admin.tenant_id),
+                "modules": self.service.operations.modules(),
+                "channels": [
+                    item.model_dump() for item in self.service.channel_adapters.catalog()
+                ],
+            }
         if name == "get_customer_service_status":
             scope = str(plan.arguments.get("scope") or "operational")
             if scope not in {"operational", "simulation", "evaluation", "all"}:
                 raise ValueError("invalid_scope")
-            return _compact(
-                {
-                    "overview": self.service.admin.overview(admin.tenant_id, scope=scope),
-                    "recent_conversations": self.service.admin.list_conversations(
-                        admin.tenant_id, scope=scope, limit=8, offset=0
-                    ),
-                    "handoffs": self.service.handoffs.summary(
-                        tenant_id=admin.tenant_id, scope=scope
-                    ),
-                    "customer_team": self._customer_team(admin.tenant_id),
-                    "dispatch": self.service.handoff_dispatch.summary(
-                        tenant_id=admin.tenant_id, scope=scope
-                    ),
-                }
-            )
+            return {
+                "overview": self.service.admin.overview(admin.tenant_id, scope=scope),
+                "recent_conversations": self.service.admin.list_conversations(
+                    admin.tenant_id, scope=scope, limit=8, offset=0
+                ),
+                "handoffs": self.service.handoffs.summary(
+                    tenant_id=admin.tenant_id, scope=scope
+                ),
+                "customer_team": self._customer_team(admin.tenant_id),
+                "dispatch": self.service.handoff_dispatch.summary(
+                    tenant_id=admin.tenant_id, scope=scope
+                ),
+            }
         if name == "get_governance_status":
             active = self.service.knowledge_management.list_items(
                 admin.tenant_id, status="active", limit=100
@@ -1296,64 +1322,54 @@ class WorkspaceAgent:
                 admin.tenant_id, status="candidate", limit=100
             )
             evolution = self.evolution.list_candidates(tenant_id=admin.tenant_id)
-            return _compact(
-                {
-                    "knowledge": {
-                        "active_count": len(active),
-                        "candidate_count": len(candidates),
-                        "recent_active": active[:8],
-                    },
-                    "sops": self.service.sops.list_definitions(admin.tenant_id),
-                    "evolution_candidates": evolution[:12],
-                    "quality": self.service.quality.summary(admin.tenant_id),
-                    "evaluations": self.service.evaluations.overview(admin.tenant_id),
-                }
-            )
+            return {
+                "knowledge": {
+                    "active_count": len(active),
+                    "candidate_count": len(candidates),
+                    "recent_active": active[:8],
+                },
+                "sops": self.service.sops.list_definitions(admin.tenant_id),
+                "evolution_candidates": evolution[:12],
+                "quality": self.service.quality.summary(admin.tenant_id),
+                "evaluations": self.service.evaluations.overview(admin.tenant_id),
+            }
         if name == "get_channel_status":
-            return _compact(
-                {
-                    "adapters": [
-                        item.model_dump() for item in self.service.channel_adapters.catalog()
-                    ],
-                    "taobao": self.service.taobao.capabilities(admin.tenant_id),
-                    "outbox": self.service.taobao.outbox_summary(admin.tenant_id),
-                }
-            )
+            return {
+                "adapters": [
+                    item.model_dump() for item in self.service.channel_adapters.catalog()
+                ],
+                "taobao": self.service.taobao.capabilities(admin.tenant_id),
+                "outbox": self.service.taobao.outbox_summary(admin.tenant_id),
+            }
         if name == "get_module_registry":
-            return _compact({"modules": self.service.operations.modules()})
+            return {"modules": self.service.operations.modules()}
         if name == "get_catalog_status":
             query = WorkspaceCatalogQuery.model_validate(plan.arguments)
-            return _compact(
-                {
-                    "items": self.service.operations.catalog.list_items(
-                        admin.tenant_id,
-                        store_id=query.store_id,
-                        status=query.status,
-                        limit=query.limit,
-                    )
-                }
-            )
+            return {
+                "items": self.service.operations.catalog.list_items(
+                    admin.tenant_id,
+                    store_id=query.store_id,
+                    status=query.status,
+                    limit=query.limit,
+                )
+            }
         if name == "get_order_management_status":
             query = WorkspaceOrderQuery.model_validate(plan.arguments)
-            return _compact(
-                {
-                    "orders": self.service.operations.orders.list_orders(
-                        admin.tenant_id,
-                        store_id=query.store_id,
-                        order_status=query.order_status,
-                        limit=query.limit,
-                        service_scope=query.scope,
-                    )
-                }
-            )
+            return {
+                "orders": self.service.operations.orders.list_orders(
+                    admin.tenant_id,
+                    store_id=query.store_id,
+                    order_status=query.order_status,
+                    limit=query.limit,
+                    service_scope=query.scope,
+                )
+            }
         if name == "get_operations_assistant_report":
             query = OpsReportQuery.model_validate(plan.arguments)
-            return _compact(
-                self.service.operations.ops_assistant.analysis_report(
-                    admin.tenant_id,
-                    query,
-                    include_narrative=False,
-                )
+            return self.service.operations.ops_assistant.analysis_report(
+                admin.tenant_id,
+                query,
+                include_narrative=False,
             )
         if name == "generate_marketing_copy_draft":
             payload = CopywritingRequest.model_validate(plan.arguments)
@@ -1377,7 +1393,7 @@ class WorkspaceAgent:
                 },
                 admin.tenant_id,
             )
-            return _compact(result)
+            return result
 
         context = request.context.model_dump(exclude_none=True)
         if context.get("store_id"):
@@ -1403,7 +1419,7 @@ class WorkspaceAgent:
         )
         if result.status != "success" or not result.postcondition_met:
             raise ValueError(result.error_code or "tool_execution_failed")
-        return _compact(result.output)
+        return result.output
 
     def _response_messages(
         self,
@@ -1429,7 +1445,11 @@ class WorkspaceAgent:
             "已核实结果": [
                 {
                     "查询内容": item["tool_label"],
-                    "结果": item["result"],
+                    "结果": {
+                        "查询内容": item["result"].get("查询内容"),
+                        "已核实信息": item["result"].get("已核实信息") or [],
+                        "已核实状态": item["result"].get("已核实状态") or [],
+                    },
                 }
                 for item in observations
             ],
@@ -1511,7 +1531,7 @@ class WorkspaceAgent:
                 "目前没有查到对应记录。",
             )
             return note
-        return "已完成事实核对：\n" + "\n".join(f"- {item}" for item in sections)
+        return "核实结果：\n" + "\n".join(f"- {item}" for item in sections)
 
     @staticmethod
     def _requires_confirmation_request(message: str) -> bool:

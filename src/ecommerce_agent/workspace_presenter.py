@@ -139,46 +139,49 @@ MODEL_LABELS = frozenset(
 )
 
 
-_STATUS_CONFLICT_GROUPS: tuple[frozenset[str], ...] = (
-    frozenset(
-        {
-            "正常",
-            "标准",
-            "通过",
-            "失败",
-            "不可用",
-            "缺失",
-            "被阻断",
-            "已完成",
-            "已核实",
-            "有效",
-            "无效",
-            "暂无数据",
-            "可用",
-            "就绪",
-            "已降级",
-        }
-    ),
-    frozenset({"新鲜", "当前有效", "已过期", "已被新证据替代"}),
-    frozenset({"低", "高", "严重", "无风险", "临近缺货", "需要补货"}),
-    MODEL_LABELS,
+_WORKSPACE_OVERVIEW_COUNT_FIELDS: tuple[tuple[str, str, str], ...] = (
+    ("pending_learning", "知识学习候选数", "知识学习候选"),
+    ("pending_qa_reviews", "质检待复核数", "质检待复核"),
 )
-STATUS_CONFLICTS: dict[str, frozenset[str]] = {
-    label: frozenset(
-        other
-        for group in _STATUS_CONFLICT_GROUPS
-        if label in group
-        for other in group
-        if other != label
-    )
-    for group in _STATUS_CONFLICT_GROUPS
-    for label in group
+
+
+_STATUS_LABELS_BY_FIELD: dict[str, frozenset[str]] = {
+    "核实结果": frozenset({"已核实", "暂无数据", "失败"}),
+    "整机状态": frozenset({"正常", "不可用", "就绪"}),
+    "商品状态": frozenset({"草稿", "正常", "停用", "已删除"}),
+    "订单状态": frozenset(
+        {"已创建", "已支付", "履约中", "已发货", "已送达", "已关闭", "已取消"}
+    ),
+    "支付状态": frozenset({"未支付", "已支付", "部分退款", "已退款", "已关闭"}),
+    "物流状态": frozenset({"待处理", "已揽收", "运输中", "已送达", "物流异常"}),
+    "预测状态": frozenset(
+        {"正常", "已完成", "已降级", "失败", "部分完成", "运行中", "待处理"}
+    ),
+    "预测模型": MODEL_LABELS | frozenset({"尚未选定"}),
+    "证据新鲜度": frozenset({"新鲜", "当前有效", "已过期", "已被新证据替代"}),
+    "风险等级": frozenset({"低", "中", "高", "严重"}),
+    "库存风险": frozenset({"正常", "已经缺货", "临近缺货", "需要补货", "销售偏慢"}),
+    "计划质量": frozenset(
+        {"标准", "已降级", "暂不提供", "有效", "无效", "通过", "被阻断", "缺失", "待复核"}
+    ),
+    "建议模式": frozenset({"仅建议", "暂不提供", "尚未生成"}),
+    "指标质量": frozenset({"可用", "暂无数据", "缺失", "已降级", "有效", "无效"}),
+    "分析状态": frozenset({"通过", "被阻断", "暂不能下结论", "支持", "失败", "已完成"}),
+    "质量门禁": frozenset({"通过", "被阻断", "缺失", "无需运行"}),
+    "实验状态": frozenset({"就绪", "运行中", "已完成", "已暂停", "无效"}),
+    "统计结论": frozenset(
+        {"正向变化", "负向变化", "未检测到明确差异", "暂不能下结论", "被阻断"}
+    ),
+    "建议状态": frozenset(
+        {"草稿", "待审核", "已批准", "已驳回", "观察中", "已过期", "已关闭"}
+    ),
+    "证据状态": frozenset({"已核实", "已降级"}),
 }
 
 
 _STATUS_ASSERTION_ALIASES: dict[str, tuple[str, ...]] = {
-    "正常": ("正常", "健康", "无异常"),
-    "已核实": ("已核实", "已确认"),
+    "正常": ("正常", "健康", "无异常", "没有异常", "没有需要立即处理的异常"),
+    "已核实": ("已核实", "已经核实", "已确认"),
     "失败": ("失败", "出错", "未完成"),
     "不可用": ("不可用", "无法使用"),
     "缺失": ("缺失", "不完整"),
@@ -187,6 +190,11 @@ _STATUS_ASSERTION_ALIASES: dict[str, tuple[str, ...]] = {
     "已降级": ("已降级", "降级"),
     "通过": ("通过", "已通过"),
     "已完成": ("已完成", "完成"),
+    "履约中": ("履约中", "正在履约"),
+    "已支付": ("已支付", "已经支付", "支付完成"),
+    "已取消": ("已取消", "已经取消", "已作废", "作废"),
+    "已关闭": ("已关闭", "已经关闭"),
+    "运输中": ("运输中", "正在运输", "物流运输中"),
     "新鲜": ("新鲜", "最新"),
     "当前有效": ("当前有效", "有效"),
     "已过期": ("已过期", "过期"),
@@ -241,6 +249,7 @@ def present_observation(tool_name: str | None, observation: dict[str, Any]) -> d
         "查询内容": tool_label(tool_name),
         "已核实信息": facts or ["目前没有查到对应记录。"],
         "已核实状态": _status_facts(tool_name or "", observation),
+        "已核实字段": critical_fact_claims(tool_name or "", observation),
     }
 
 
@@ -268,7 +277,265 @@ def observation_data_status(
         return "no_data"
     if tool_name == "get_listing_traffic_insights" and not _list(observation.get("insights")):
         return "no_data"
+    if tool_name == "get_operations_assistant_report":
+        record_count = _dict(observation.get("data_quality")).get("record_count")
+        if record_count is not None and _number(record_count) == 0:
+            return "no_data"
     return "success"
+
+
+def _lower_priced_competitor_count(observation: dict[str, Any]) -> Any:
+    return _dict(observation.get("summary")).get("our_price_higher")
+
+
+def critical_fact_claims(
+    tool_name: str, observation: dict[str, Any]
+) -> list[dict[str, str]]:
+    claims: list[dict[str, str]] = []
+
+    def add(
+        entity: str,
+        entity_id: Any,
+        field: str,
+        value: Any,
+        *,
+        field_terms: str = "",
+    ) -> None:
+        if value in (None, ""):
+            return
+        claims.append(
+            {
+                "实体": entity,
+                "实体标识": str(entity_id or ""),
+                "字段": field,
+                "字段语义": field_terms or field,
+                "数值": str(value),
+            }
+        )
+
+    if tool_name in {"get_workspace_overview", "get_customer_service_status"}:
+        team = _dict(observation.get("customer_team"))
+        for field, key in (
+            ("客服总数", "total"),
+            ("在线客服数", "online"),
+            ("工作中客服数", "working"),
+            ("可继续接待客服数", "available"),
+        ):
+            if key in team:
+                add("客服团队", "customer_team", field, team.get(key))
+        handoffs = _dict(observation.get("handoffs"))
+        for field, key in (
+            ("待处理任务数", "open"),
+            ("未分配任务数", "unassigned"),
+            ("即将超时任务数", "due_soon"),
+            ("已超时任务数", "breached"),
+        ):
+            if key in handoffs:
+                add("人工接待任务", "handoffs", field, handoffs.get(key))
+    if tool_name == "get_workspace_overview":
+        counts = _dict(_dict(observation.get("overview")).get("counts"))
+        for key, field, display in _WORKSPACE_OVERVIEW_COUNT_FIELDS:
+            if key in counts:
+                add(
+                    "工作区待办",
+                    "workspace_overview",
+                    field,
+                    counts.get(key),
+                    field_terms=f"{field} {display}",
+                )
+    if tool_name == "get_governance_status":
+        knowledge = _dict(observation.get("knowledge"))
+        add("知识库", "knowledge", "生效知识数", knowledge.get("active_count"))
+        add("知识库", "knowledge", "候选知识数", knowledge.get("candidate_count"))
+        add("标准处理流程", "sops", "流程数量", len(_list(observation.get("sops"))))
+        add(
+            "自进化候选",
+            "evolution_candidates",
+            "候选数量",
+            len(_list(observation.get("evolution_candidates"))),
+        )
+    if tool_name == "get_channel_status":
+        adapters = _list(observation.get("adapters"))
+        add("渠道连接", "channels", "连接数量", len(adapters))
+        add(
+            "渠道连接",
+            "channels",
+            "可用连接数量",
+            sum(
+                str(_dict(item).get("status")) in {"active", "available", "ready"}
+                for item in adapters
+            ),
+        )
+    if tool_name == "get_module_registry":
+        modules = _list(observation.get("modules"))
+        add(
+            "业务能力",
+            "modules",
+            "登记数量",
+            len(modules),
+            field_terms="登记数量 共登记 业务能力总数",
+        )
+        add(
+            "业务能力",
+            "modules",
+            "可用数量",
+            sum(str(_dict(item).get("status")) == "available" for item in modules),
+            field_terms="可用数量 当前可用 可用能力",
+        )
+    if tool_name in {"get_catalog_status", "get_product_facts", "search_products"}:
+        items = _list(observation.get("items"))
+        add("商品目录", "catalog", "商品数量", len(items))
+        for item in items[:8]:
+            value = _dict(item)
+            sku_id = value.get("sku_id")
+            add(
+                f"商品 {sku_id or '未提供编号'}",
+                sku_id,
+                "售价",
+                value.get("sale_price"),
+                field_terms="售价 价格 金额",
+            )
+    if tool_name in {"get_order_management_status", "get_order_facts"}:
+        orders = _list(observation.get("orders"))
+        add("订单汇总", "orders", "订单数量", len(orders))
+        for item in orders[:8]:
+            value = _dict(item)
+            order_id = value.get("order_id")
+            entity = f"订单 {order_id or '未提供编号'}"
+            add(
+                entity,
+                order_id,
+                "订单金额",
+                value.get("total_amount"),
+                field_terms="订单金额 金额 销售额",
+            )
+            add(entity, order_id, "商品件数", len(_list(value.get("lines"))))
+    if tool_name == "get_inventory_risk":
+        risks = _list(observation.get("risks"))
+        add("库存风险", "inventory", "库存记录数", len(risks))
+        add(
+            "库存风险",
+            "inventory",
+            "优先关注数",
+            sum(
+                str(_dict(item).get("risk_level")) in {"high", "critical"}
+                for item in risks
+            ),
+        )
+        for item in risks[:8]:
+            value = _dict(item)
+            sku_id = value.get("sku_id")
+            entity = f"商品 {sku_id or '未提供编号'}"
+            add(entity, sku_id, "可用库存", value.get("available"))
+            add(entity, sku_id, "预计可售天数", value.get("coverage_days"))
+            add(
+                entity,
+                sku_id,
+                "建议补货数量",
+                value.get("recommended_replenishment"),
+            )
+    if tool_name == "get_business_metric":
+        entity = str(observation.get("display_name") or "经营指标")
+        add(
+            entity,
+            str(observation.get("metric") or "metric"),
+            "指标值",
+            observation.get("value"),
+            field_terms=f"{entity} 指标值 金额 收入 比例 数量",
+        )
+        add(entity, "metric", "业务记录数", observation.get("evidence_count"))
+    if tool_name in {"get_competitor_price_analysis", "get_competitive_intelligence"}:
+        add(
+            "竞品分析",
+            "competitive",
+            "可比较竞品数",
+            _dict(observation.get("quality_gate")).get("eligible_competitors"),
+        )
+        add("竞品分析", "competitive", "价格提醒数", len(_list(observation.get("alerts"))))
+        add(
+            "竞品分析",
+            "competitive",
+            "低价竞品数",
+            _lower_priced_competitor_count(observation),
+        )
+    if tool_name == "get_marketing_diagnosis":
+        totals = _dict(observation.get("totals"))
+        add("营销投放", "marketing", "投放花费", totals.get("spend"))
+        add("营销投放", "marketing", "归因订单数", totals.get("attributed_orders"))
+        add("营销投放", "marketing", "归因收入", totals.get("attributed_revenue"))
+        add("营销投放", "marketing", "投放回报", totals.get("roas"))
+        add("营销投放", "marketing", "点击率", totals.get("ctr"))
+    if tool_name == "get_profit_reconciliation":
+        profit = _dict(observation.get("profit"))
+        add("利润核对", "profit", "销售额", profit.get("gross_sales"))
+        add("利润核对", "profit", "退款金额", profit.get("approved_refunds"))
+        add("利润核对", "profit", "费用", profit.get("expense_total"))
+        add("利润核对", "profit", "预计利润", profit.get("management_profit"))
+        add(
+            "利润核对",
+            "profit",
+            "结算核对任务数",
+            len(_list(observation.get("reconciliation_tasks"))),
+        )
+    if tool_name == "get_listing_traffic_insights":
+        insights = _list(observation.get("insights"))
+        add("流量实验洞察", observation.get("sku_id"), "分析数量", len(insights))
+        for item in insights[:4]:
+            insight = _dict(item)
+            experiment = _dict(insight.get("experiment"))
+            experiment_id = experiment.get("experiment_id")
+            evidence = _dict(_dict(insight.get("analysis")).get("evidence"))
+            effect = _dict(evidence.get("effect"))
+            interval = _dict(evidence.get("confidence_interval"))
+            entity = f"实验 {experiment_id or '未提供编号'}"
+            add(entity, experiment_id, "变化值", effect.get("absolute"))
+            add(entity, experiment_id, "可信区间下限", interval.get("low"))
+            add(entity, experiment_id, "可信区间上限", interval.get("high"))
+    if tool_name == "get_demand_forecast":
+        forecast = _dict(observation.get("forecast"))
+        sku_id = forecast.get("sku_id")
+        entity = f"需求预测 {sku_id or ''}".strip()
+        points = _list(forecast.get("points"))
+        add(entity, sku_id, "预测日数量", len(points))
+        if points:
+            first = _dict(points[0])
+            add(entity, sku_id, "首日 P50", first.get("p50"))
+            add(entity, sku_id, "首日 P80", first.get("p80"))
+            add(entity, sku_id, "首日 P95", first.get("p95"))
+    if tool_name == "get_inventory_plan":
+        plan = _dict(observation.get("inventory_plan"))
+        sku_id = plan.get("sku_id")
+        entity = f"库存计划 {sku_id or ''}".strip()
+        add(
+            entity,
+            sku_id,
+            "建议数量",
+            plan.get("recommended_order_qty")
+            if plan.get("recommended_order_qty") is not None
+            else plan.get("recommended_qty"),
+        )
+    if tool_name == "list_recommendations":
+        add(
+            "商品经营建议",
+            "recommendations",
+            "建议数量",
+            len(_list(observation.get("items"))),
+        )
+    if tool_name == "get_recommendation_audit_trail":
+        add(
+            "建议审计记录",
+            observation.get("recommendation_id") or "recommendation_audit",
+            "审计记录数",
+            len(_list(observation.get("items"))),
+        )
+    if tool_name == "generate_marketing_copy_draft":
+        add(
+            "营销文案草稿",
+            "copy_draft",
+            "候选文案数",
+            len(_list(observation.get("variants"))),
+        )
+    return claims
 
 
 def critical_fact_values(product_view: dict[str, Any]) -> list[str]:
@@ -307,59 +574,110 @@ def _critical_tokens(text: str) -> tuple[set[str], set[Decimal]]:
 def _status_facts(tool_name: str, observation: dict[str, Any]) -> list[dict[str, str]]:
     facts: list[dict[str, str]] = []
 
-    def add(subject: str, value: Any) -> None:
+    def add(entity: str, field: str, value: Any) -> None:
         if value in (None, ""):
             return
-        facts.append({"主题": subject, "状态": _status(value)})
+        facts.append(
+            {
+                "主题": f"{entity}的{field}",
+                "实体": entity,
+                "字段": field,
+                "状态": _status(value),
+            }
+        )
 
-    add(tool_label(tool_name), observation_data_status(tool_name, observation))
+    add(tool_label(tool_name), "核实结果", observation_data_status(tool_name, observation))
 
-    if tool_name == "get_demand_forecast":
+    if tool_name == "get_workspace_overview":
+        add("整机", "整机状态", "active" if observation.get("ready") else "unavailable")
+    elif tool_name in {"get_catalog_status", "get_product_facts", "search_products"}:
+        for item in _list(observation.get("items"))[:8]:
+            value = _dict(item)
+            entity = f"商品 {value.get('sku_id') or '未提供编号'}"
+            add(entity, "商品状态", value.get("status"))
+    elif tool_name in {"get_order_management_status", "get_order_facts"}:
+        for item in _list(observation.get("orders"))[:8]:
+            value = _dict(item)
+            entity = f"订单 {value.get('order_id') or '未提供编号'}"
+            add(entity, "订单状态", value.get("order_status"))
+            add(entity, "支付状态", value.get("payment_status"))
+            add(entity, "物流状态", _dict(value.get("logistics")).get("status"))
+    elif tool_name == "get_inventory_risk":
+        risks = [_dict(item) for item in _list(observation.get("risks"))[:8]]
+        if risks:
+            severity = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+            highest = max(
+                risks,
+                key=lambda item: severity.get(str(item.get("risk_level")), -1),
+            )
+            add("库存风险", "风险等级", highest.get("risk_level"))
+        for value in risks:
+            entity = f"商品 {value.get('sku_id') or '未提供编号'}"
+            add(entity, "库存风险", value.get("risk_code"))
+            add(entity, "风险等级", value.get("risk_level"))
+    elif tool_name == "get_demand_forecast":
         forecast = _dict(observation.get("forecast"))
-        add("需求预测", forecast.get("status"))
-        add("预测模型", forecast.get("champion_model"))
+        entity = f"需求预测 {forecast.get('sku_id') or ''}".strip()
+        add(entity, "预测状态", forecast.get("status"))
+        add(entity, "预测模型", forecast.get("champion_model"))
         freshness = _dict(observation.get("freshness"))
-        add("预测证据新鲜度", freshness.get("status"))
+        add(entity, "证据新鲜度", freshness.get("status"))
     elif tool_name == "get_inventory_plan":
         plan = _dict(observation.get("inventory_plan"))
-        add("库存计划风险", plan.get("risk_level"))
+        entity = f"库存计划 {plan.get('sku_id') or ''}".strip()
+        add(entity, "风险等级", plan.get("risk_level"))
         add(
-            "库存计划质量",
+            entity,
+            "计划质量",
             plan.get("effective_plan_quality") or plan.get("plan_quality"),
         )
         add(
-            "库存计划建议",
+            entity,
+            "建议模式",
             plan.get("quantity_status") or plan.get("action_mode"),
         )
         freshness = _dict(plan.get("freshness") or observation.get("freshness"))
-        add("库存计划证据新鲜度", freshness.get("status"))
+        add(entity, "证据新鲜度", freshness.get("status"))
     elif tool_name == "get_business_metric":
-        add("经营指标质量", observation.get("quality"))
+        entity = str(observation.get("display_name") or "经营指标")
+        add(entity, "指标质量", observation.get("quality"))
     elif tool_name in {
         "get_listing_traffic_insights",
         "get_competitive_intelligence",
         "get_competitor_price_analysis",
     }:
-        add("业务分析状态", observation.get("status"))
-        add("分析证据新鲜度", _dict(observation.get("freshness")).get("status"))
-        add("质量门禁", _dict(observation.get("quality_gate")).get("status"))
+        add(tool_label(tool_name), "分析状态", observation.get("status"))
+        add(
+            tool_label(tool_name),
+            "证据新鲜度",
+            _dict(observation.get("freshness")).get("status"),
+        )
+        add(
+            tool_label(tool_name),
+            "质量门禁",
+            _dict(observation.get("quality_gate")).get("status"),
+        )
         for index, item in enumerate(_list(observation.get("insights"))[:6], start=1):
             insight = _dict(item)
             experiment = _dict(insight.get("experiment"))
             experiment_id = str(experiment.get("experiment_id") or index)
-            add(f"实验 {experiment_id} 状态", experiment.get("status"))
+            entity = f"实验 {experiment_id}"
+            add(entity, "实验状态", experiment.get("status"))
             analysis = _dict(insight.get("analysis"))
             evidence = _dict(analysis.get("evidence"))
             add(
-                f"实验 {experiment_id} 质量门禁",
+                entity,
+                "质量门禁",
                 _dict(evidence.get("quality_gate")).get("status"),
             )
             add(
-                f"实验 {experiment_id} 统计结论",
+                entity,
+                "统计结论",
                 evidence.get("statistical_conclusion"),
             )
             add(
-                f"实验 {experiment_id} 证据新鲜度",
+                entity,
+                "证据新鲜度",
                 _dict(insight.get("freshness") or analysis.get("freshness")).get("status"),
             )
     elif tool_name in {"list_recommendations", "get_recommendation_audit_trail"}:
@@ -368,9 +686,10 @@ def _status_facts(tool_name: str, observation: dict[str, Any]) -> list[dict[str,
             identifier = str(
                 value.get("recommendation_id") or value.get("id") or "建议"
             )
-            add(f"商品经营建议 {identifier}", value.get("state"))
+            entity = f"商品经营建议 {identifier}"
+            add(entity, "建议状态", value.get("state"))
             if value.get("degraded"):
-                add(f"商品经营建议 {identifier} 的证据", "degraded")
+                add(entity, "证据状态", "degraded")
     return facts
 
 
@@ -386,9 +705,12 @@ def _verified_source(result: Any) -> dict[str, Any]:
             or []
         )
         if not status_facts:
+            entity = str(result.get("tool_label") or "业务信息")
             status_facts = [
                 {
-                    "主题": str(result.get("tool_label") or "业务信息"),
+                    "主题": f"{entity}的核实结果",
+                    "实体": entity,
+                    "字段": "核实结果",
                     "状态": _status(
                         "no_data"
                         if status == "no_data"
@@ -404,13 +726,21 @@ def _verified_source(result: Any) -> dict[str, Any]:
             "tool_label": str(result.get("tool_label") or ""),
             "facts": [str(fact) for fact in product_view.get("已核实信息") or []],
             "status_facts": status_facts,
+            "field_claims": list(
+                product_view.get("已核实字段")
+                or result.get("field_claims")
+                or []
+            ),
         }
     status = str(getattr(result, "status", "success"))
     status_facts = list(getattr(result, "status_facts", []) or [])
     if not status_facts:
+        entity = str(getattr(result, "tool_label", "业务信息"))
         status_facts = [
             {
-                "主题": str(getattr(result, "tool_label", "业务信息")),
+                "主题": f"{entity}的核实结果",
+                "实体": entity,
+                "字段": "核实结果",
                 "状态": _status(
                     "no_data"
                     if status == "no_data"
@@ -430,6 +760,7 @@ def _verified_source(result: Any) -> dict[str, Any]:
             if str(fact)
         ],
         "status_facts": status_facts,
+        "field_claims": list(getattr(result, "field_claims", []) or []),
     }
 
 
@@ -437,7 +768,7 @@ def _semantic_words(value: str) -> set[str]:
     words: set[str] = set()
     stop_words = {"目前", "当前", "已经", "可以", "相关", "其中"}
     for word in re.findall(r"[A-Za-z0-9_-]+|[\u4e00-\u9fff]{2,}", value):
-        if word in stop_words:
+        if word in stop_words or word.isdigit():
             continue
         words.add(word)
         if re.fullmatch(r"[\u4e00-\u9fff]+", word):
@@ -452,6 +783,82 @@ def _answer_sentences(answer: str) -> list[str]:
         if sentence:
             sentences.append(sentence)
     return sentences
+
+
+def _answer_clauses(sentence: str) -> list[str]:
+    return [
+        clause.strip()
+        for clause in re.split(r"[,，:：]|(?:并且|同时|以及|而是|但是|但)", sentence)
+        if clause.strip()
+    ]
+
+
+def _scope_match_score(text: str, scope: str) -> int:
+    normalized_text = re.sub(r"\s+", "", text).lower()
+    phrases = [item for item in re.split(r"\s+", scope) if item]
+    score = 0
+    for phrase in phrases:
+        normalized_phrase = re.sub(r"\s+", "", phrase).lower()
+        if normalized_phrase and normalized_phrase in normalized_text:
+            score = max(score, 100 + len(normalized_phrase))
+
+    ignored = {"状态", "数量", "结果", "信息", "当前", "业务"}
+    overlap = (
+        _semantic_words(text)
+        & _semantic_words(scope)
+        - ignored
+    )
+    if overlap:
+        score = max(score, max(len(word) for word in overlap))
+    return score
+
+
+def _status_label_mentions(
+    text: str, domain: frozenset[str]
+) -> tuple[set[str], set[str]]:
+    matches: list[tuple[int, int, str, bool]] = []
+    for label in domain:
+        for alias in _STATUS_ASSERTION_ALIASES.get(label, (label,)):
+            start = 0
+            while True:
+                position = text.find(alias, start)
+                if position < 0:
+                    break
+                prefix = text[:position]
+                negated = bool(
+                    re.search(
+                        r"(?:不|未|没有|暂无|无法|不能|不可|不应|并非|不是|不算)"
+                        r"[^,，。！？!?；;]*$",
+                        prefix,
+                    )
+                )
+                matches.append((position, position + len(alias), label, negated))
+                start = position + len(alias)
+
+    selected: list[tuple[int, int, str, bool]] = []
+    for match in sorted(matches, key=lambda item: (-(item[1] - item[0]), item[0])):
+        if any(match[0] < item[1] and item[0] < match[1] for item in selected):
+            continue
+        selected.append(match)
+    return (
+        {item[2] for item in selected if not item[3]},
+        {item[2] for item in selected if item[3]},
+    )
+
+
+def _asserted_status_labels(text: str, domain: frozenset[str]) -> set[str]:
+    return _status_label_mentions(text, domain)[0]
+
+
+def _looks_like_status_claim(text: str) -> bool:
+    return bool(
+        re.search(
+            r"状态|作废|取消|关闭|暂停|冻结|失效|有效|过期|履约|支付|退款|"
+            r"发货|送达|运输|异常|正常|健康|可用|不可用|就绪|缺货|补货|"
+            r"风险|降级|阻断|完成|运行中|待处理|草稿|审核|批准|驳回",
+            text,
+        )
+    )
 
 
 def answer_preserves_critical_values(
@@ -476,67 +883,340 @@ def answer_preserves_critical_values(
         )
         for source in sources
     ]
+    source_scopes = [
+        f"{source['objective']} {source['tool_label']}" for source in sources
+    ]
     source_tokens: list[tuple[set[str], set[Decimal]]] = []
     for source in sources:
-        identifiers: set[str] = set()
+        identifiers, _ = _critical_tokens(
+            " ".join(
+                [
+                    source["objective"],
+                    source["tool_label"],
+                    *source["facts"],
+                    *[
+                        " ".join(
+                            [
+                                str(item.get("主题") or item.get("subject") or ""),
+                                str(item.get("实体") or item.get("entity") or ""),
+                            ]
+                        )
+                        for item in source["status_facts"]
+                        if isinstance(item, dict)
+                    ],
+                ]
+            )
+        )
         numbers: set[Decimal] = set()
         if source["status"] == "success":
             for fact in source["facts"]:
-                fact_identifiers, fact_numbers = _critical_tokens(fact)
-                identifiers.update(fact_identifiers)
+                _, fact_numbers = _critical_tokens(fact)
                 numbers.update(fact_numbers)
+        for item in source["field_claims"]:
+            if not isinstance(item, dict):
+                continue
+            claim_identifiers, _ = _critical_tokens(
+                " ".join(
+                    [
+                        str(item.get("实体") or item.get("entity") or ""),
+                        str(
+                            item.get("实体标识")
+                            or item.get("entity_id")
+                            or ""
+                        ),
+                    ]
+                )
+            )
+            identifiers.update(claim_identifiers)
         source_tokens.append((identifiers, numbers))
 
-    seen_tokens: list[tuple[set[str], set[Decimal]]] = [
-        (set(), set()) for _ in sources
-    ]
+    seen_tokens: list[tuple[set[str], set[Decimal]]] = [(set(), set()) for _ in sources]
+    seen_no_data_sources: set[int] = set()
+    sentence_sources: list[set[int]] = []
     for sentence in sentences:
         identifiers, numbers = _critical_tokens(sentence)
         sentence_words = _semantic_words(sentence)
-        matched = [
-            index
-            for index, words in enumerate(source_words)
-            if sentence_words & words
+        source_scores = [
+            _scope_match_score(sentence, scope) for scope in source_scopes
         ]
-        if (identifiers or numbers) and not matched:
-            return False
-        for index in matched:
+        best_source_score = max(source_scores, default=0)
+        word_matched = (
+            [
+                index
+                for index, score in enumerate(source_scores)
+                if score == best_source_score
+            ]
+            if best_source_score > 0
+            else [
+                index
+                for index, words in enumerate(source_words)
+                if sentence_words & words
+            ]
+        )
+        compatible: set[int] = set()
+        candidate_indexes = (
+            word_matched
+            if word_matched
+            else range(len(sources))
+            if identifiers
+            else ()
+        )
+        for index in candidate_indexes:
             source = sources[index]
-            if source["status"] != "success":
-                if identifiers or numbers or re.search(
-                    r"(?:为|是|有|共|合计)\s*(?:0|零)", sentence
-                ):
-                    return False
-                continue
             allowed_identifiers, allowed_numbers = source_tokens[index]
-            if not identifiers.issubset(allowed_identifiers):
+            if source["status"] != "success":
+                if not numbers and identifiers.issubset(allowed_identifiers):
+                    compatible.add(index)
+                continue
+            if identifiers.issubset(allowed_identifiers) and numbers.issubset(
+                allowed_numbers
+            ):
+                compatible.add(index)
+        if identifiers or numbers:
+            if not compatible:
                 return False
-            if not numbers.issubset(allowed_numbers):
-                return False
+        else:
+            compatible.update(word_matched)
+        sentence_sources.append(compatible)
+        for index in compatible:
             seen_tokens[index][0].update(identifiers)
             seen_tokens[index][1].update(numbers)
+        if _asserted_status_labels(sentence, frozenset({"暂无数据"})):
+            seen_no_data_sources.update(
+                index
+                for index in compatible
+                if sources[index]["status"] == "no_data"
+            )
+
+        matched_no_data = any(
+            sources[index]["status"] != "success" for index in word_matched
+        )
+        matched_success = any(
+            sources[index]["status"] == "success" for index in compatible
+        )
+        if matched_no_data and not matched_success:
+            if (
+                numbers
+                or re.search(r"(?:为|是|有|共|合计)\s*(?:0|零)", sentence)
+            ):
+                return False
+
+    field_claims: list[dict[str, Any]] = []
+    for source_index, source in enumerate(sources):
+        if source["status"] != "success":
+            continue
+        for item in source["field_claims"]:
+            if not isinstance(item, dict):
+                continue
+            value_numbers = _critical_tokens(
+                str(item.get("数值") or item.get("value") or "")
+            )[1]
+            if len(value_numbers) != 1:
+                continue
+            entity = str(item.get("实体") or item.get("entity") or "")
+            entity_id = str(
+                item.get("实体标识") or item.get("entity_id") or ""
+            )
+            field = str(item.get("字段") or item.get("field") or "")
+            field_scope = str(
+                item.get("字段语义") or item.get("field_terms") or field
+            )
+            if entity and field:
+                field_claims.append(
+                    {
+                        "source_index": source_index,
+                        "entity": entity,
+                        "entity_id": entity_id,
+                        "entity_identifiers": _critical_tokens(
+                            f"{entity_id} {entity}"
+                        )[0],
+                        "field": field,
+                        "field_scope": f"{field} {field_scope}",
+                        "value": next(iter(value_numbers)),
+                    }
+                )
+
+    known_entity_identifiers = {
+        identifier
+        for claim in field_claims
+        for identifier in claim["entity_identifiers"]
+    }
+    for sentence_index, sentence in enumerate(sentences):
+        sentence_identifiers = _critical_tokens(sentence)[0] & known_entity_identifiers
+        inherited_identifiers = (
+            sentence_identifiers if len(sentence_identifiers) == 1 else set()
+        )
+        for clause in _answer_clauses(sentence):
+            _, numbers = _critical_tokens(clause)
+            if not numbers:
+                continue
+            explicit_identifiers = (
+                _critical_tokens(clause)[0] & known_entity_identifiers
+            )
+            entity_identifiers = explicit_identifiers or inherited_identifiers
+            source_claims = [
+                claim
+                for claim in field_claims
+                if (
+                    not sentence_sources[sentence_index]
+                    or claim["source_index"] in sentence_sources[sentence_index]
+                )
+            ]
+            relevant_claims = [
+                claim
+                for claim in source_claims
+                if (
+                    not entity_identifiers
+                    or bool(claim["entity_identifiers"] & entity_identifiers)
+                )
+            ]
+            represented_numbers = {claim["value"] for claim in source_claims}
+            for number in numbers & represented_numbers:
+                scored = [
+                    (claim, _scope_match_score(clause, claim["field_scope"]))
+                    for claim in relevant_claims
+                ]
+                best_score = max((score for _, score in scored), default=0)
+                selected = [
+                    claim
+                    for claim, score in scored
+                    if score == best_score and (best_score > 0 or len(scored) == 1)
+                ]
+                slots = {
+                    (claim["source_index"], claim["entity_id"] or claim["entity"], claim["field"])
+                    for claim in selected
+                }
+                if len(slots) != 1 or not any(
+                    claim["value"] == number for claim in selected
+                ):
+                    return False
 
     status_facts: list[dict[str, str]] = []
-    for source in sources:
+    for source_index, source in enumerate(sources):
         for item in source["status_facts"]:
             if isinstance(item, dict):
                 subject = str(item.get("主题") or item.get("subject") or "")
+                entity = str(item.get("实体") or item.get("entity") or subject)
+                field = str(item.get("字段") or item.get("field") or "")
                 label = str(item.get("状态") or item.get("label") or "")
-                if subject and label:
-                    status_facts.append({"subject": subject, "label": label})
-    for item in status_facts:
-        subject_words = _semantic_words(item["subject"])
-        conflicts = STATUS_CONFLICTS.get(item["label"], frozenset())
-        if not subject_words or not conflicts:
-            continue
-        for sentence in sentences:
-            if not subject_words & _semantic_words(sentence):
-                continue
+                domain = _STATUS_LABELS_BY_FIELD.get(field)
+                if subject and entity and field and label and domain and label in domain:
+                    status_facts.append(
+                        {
+                            "subject": subject,
+                            "entity": entity,
+                            "field": field,
+                            "label": label,
+                            "source_index": str(source_index),
+                            "entity_identifiers": " ".join(
+                                sorted(_critical_tokens(entity)[0])
+                            ),
+                            "scope": " ".join(
+                                [
+                                    entity,
+                                    subject,
+                                    source["objective"] if field == "核实结果" else "",
+                                    source["tool_label"] if field == "核实结果" else "",
+                                ]
+                            ),
+                        }
+                    )
+                elif label:
+                    return False
+    known_status_identifiers = {
+        identifier
+        for item in status_facts
+        for identifier in item["entity_identifiers"].split()
+        if identifier
+    }
+    for sentence_index, sentence in enumerate(sentences):
+        sentence_identifiers = _critical_tokens(sentence)[0] & known_status_identifiers
+        inherited_identifiers = (
+            sentence_identifiers if len(sentence_identifiers) == 1 else set()
+        )
+        for clause in _answer_clauses(sentence):
+            explicit_identifiers = (
+                _critical_tokens(clause)[0] & known_status_identifiers
+            )
+            entity_identifiers = explicit_identifiers or inherited_identifiers
+            matching = [
+                item
+                for item in status_facts
+                if (
+                    not sentence_sources[sentence_index]
+                    or int(item["source_index"]) in sentence_sources[sentence_index]
+                )
+                and (
+                    not entity_identifiers
+                    or bool(
+                        set(item["entity_identifiers"].split())
+                        & entity_identifiers
+                    )
+                )
+            ]
+            candidates: list[tuple[dict[str, str], str, int]] = []
+            negative_candidates: list[tuple[dict[str, str], str, int]] = []
+            for item in matching:
+                domain = _STATUS_LABELS_BY_FIELD[item["field"]]
+                field_scope = item["field"]
+                score = _scope_match_score(clause, field_scope)
+                if item["field"] == "核实结果":
+                    score = max(score, _scope_match_score(clause, item["scope"]))
+                asserted_labels, negated_labels = _status_label_mentions(clause, domain)
+                for asserted in asserted_labels:
+                    candidates.append((item, asserted, score))
+                for negated in negated_labels:
+                    negative_candidates.append((item, negated, score))
+            all_candidates = [*candidates, *negative_candidates]
             if any(
-                _status_assertion_present(sentence, conflict)
-                for conflict in conflicts
+                item["field"] != "核实结果" for item, _, _ in all_candidates
             ):
+                candidates = [
+                    candidate
+                    for candidate in candidates
+                    if candidate[0]["field"] != "核实结果"
+                ]
+                negative_candidates = [
+                    candidate
+                    for candidate in negative_candidates
+                    if candidate[0]["field"] != "核实结果"
+                ]
+            if negative_candidates:
+                best_negative_score = max(
+                    score for _, _, score in negative_candidates
+                )
+                selected_negative = [
+                    (item, negated)
+                    for item, negated, score in negative_candidates
+                    if score == best_negative_score
+                ]
+                if any(
+                    item["label"] == negated
+                    for item, negated in selected_negative
+                ):
+                    return False
+            if not candidates:
+                if (
+                    matching
+                    and not _critical_tokens(clause)[1]
+                    and _looks_like_status_claim(clause)
+                ):
+                    return False
+                continue
+            best_score = max(score for _, _, score in candidates)
+            selected = [
+                (item, asserted)
+                for item, asserted, score in candidates
+                if score == best_score
+            ]
+            if any(item["label"] != asserted for item, asserted in selected):
                 return False
+
+    required_no_data_sources = {
+        index for index, source in enumerate(sources) if source["status"] == "no_data"
+    }
+    if not required_no_data_sources.issubset(seen_no_data_sources):
+        return False
 
     if require_all:
         for index, (required_identifiers, required_numbers) in enumerate(source_tokens):
@@ -551,18 +1231,7 @@ def answer_preserves_critical_values(
 
 
 def _status_assertion_present(sentence: str, label: str) -> bool:
-    aliases = _STATUS_ASSERTION_ALIASES.get(label, (label,))
-    for alias in aliases:
-        start = 0
-        while True:
-            position = sentence.find(alias, start)
-            if position < 0:
-                break
-            prefix = sentence[max(0, position - 4) : position]
-            if not re.search(r"(?:不|未|没有|暂无|无法|不能|并非|不是)\s*$", prefix):
-                return True
-            start = position + len(alias)
-    return False
+    return label in _asserted_status_labels(sentence, frozenset({label}))
 
 
 def observation_summary(product_view: dict[str, Any]) -> str:
@@ -631,8 +1300,11 @@ def _workspace_facts(observation: dict[str, Any]) -> list[str]:
     counts = _dict(overview.get("counts"))
     if counts:
         facts.append(
-            f"知识学习候选有 {_number(counts.get('pending_learning'))} 条，质检待复核有 "
-            f"{_number(counts.get('pending_qa_reviews'))} 条。"
+            "，".join(
+                f"{display}有 {_number(counts.get(key))} 条"
+                for key, _, display in _WORKSPACE_OVERVIEW_COUNT_FIELDS
+            )
+            + "。"
         )
     return facts
 
@@ -693,7 +1365,11 @@ def _module_facts(observation: dict[str, Any]) -> list[str]:
 
 def _operations_facts(observation: dict[str, Any]) -> list[str]:
     summary = [str(item) for item in _list(observation.get("summary")) if str(item).strip()]
-    findings = _list(observation.get("findings"))
+    findings = [
+        item
+        for item in _list(observation.get("findings"))
+        if str(_dict(item).get("code") or "") != "no_data"
+    ]
     facts = summary[:4]
     if findings:
         facts.append(f"分析中发现 {len(findings)} 个值得关注的经营信号。")
@@ -789,7 +1465,7 @@ def _competitive_facts(observation: dict[str, Any]) -> list[str]:
     trends = _list(observation.get("trends"))
     eligible = _number(_dict(observation.get("quality_gate")).get("eligible_competitors"), len(observations))
     facts = [f"本次有 {eligible} 个已核实竞品可用于比较，另有 {len(alerts)} 个价格提醒。"]
-    lower = summary.get("lower_price_competitors") or summary.get("competitor_lower_price_count")
+    lower = _lower_priced_competitor_count(observation)
     if lower is not None:
         facts.append(f"其中有 {_number(lower)} 个竞品价格低于本品。")
     if trends:

@@ -38,6 +38,18 @@ from .workspace_conversations import (
 logger = logging.getLogger("ecommerce_agent.workspace_api")
 
 
+def _redact_workspace_event(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _redact_workspace_event(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_workspace_event(item) for item in value]
+    if isinstance(value, tuple):
+        return [_redact_workspace_event(item) for item in value]
+    if isinstance(value, str):
+        return redact_sensitive(value)[0]
+    return value
+
+
 class WorkspaceConversationCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -294,7 +306,8 @@ def build_workspace_router(
                 )
 
             try:
-                for event in agent.stream(request, admin):
+                for raw_event in agent.stream(request, admin):
+                    event = _redact_workspace_event(raw_event)
                     event_name = event.get("event")
                     if event_name == "status":
                         save_message(

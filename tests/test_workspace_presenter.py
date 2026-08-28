@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 import json
+from typing import get_args
 
+from ecommerce_agent.business.catalog import CatalogStatus
+from ecommerce_agent.business.orders import LogisticsStatus, OrderStatus, PaymentStatus
+from ecommerce_agent.product_lifecycle.schemas import RecommendationState
+from ecommerce_agent.traffic_lab.models import TrafficExperimentTransition
 from ecommerce_agent.workspace_presenter import (
+    STATUS_LABELS,
     TOOL_LABELS,
     answer_preserves_critical_values,
     critical_fact_values,
@@ -113,6 +119,38 @@ def test_customer_service_is_expressed_as_people_and_work_not_internal_fields() 
     assert "available" not in rendered
     assert "operators" not in rendered
     assert observation_summary(view).startswith("总共 5 位客服")
+
+
+def test_workspace_pending_counts_are_bound_to_their_fields() -> None:
+    view = present_observation(
+        "get_workspace_overview",
+        {
+            "ready": True,
+            "overview": {
+                "counts": {
+                    "pending_learning": 2,
+                    "pending_qa_reviews": 5,
+                }
+            },
+        },
+    )
+    result = {
+        "status": "success",
+        "objective": "查看工作区待办",
+        "tool_label": "经营全局概况",
+        "result": view,
+    }
+
+    assert answer_preserves_critical_values(
+        "知识学习候选有 2 条，质检待复核有 5 条。",
+        [result],
+        require_all=False,
+    )
+    assert not answer_preserves_critical_values(
+        "知识学习候选有 5 条，质检待复核有 2 条。",
+        [result],
+        require_all=False,
+    )
 
 
 def test_every_workspace_tool_has_a_customer_facing_chinese_label() -> None:
@@ -352,6 +390,21 @@ def test_operations_report_does_not_forward_long_model_narrative() -> None:
     assert "分析中发现 1 个值得关注的经营信号" in rendered
 
 
+def test_operations_report_uses_record_count_as_the_no_data_contract() -> None:
+    observation = {
+        "summary": ["统计范围内没有运营数据。"],
+        "findings": [{"code": "no_data", "message": "没有运营数据"}],
+        "data_quality": {"record_count": 0},
+    }
+
+    view = present_observation("get_operations_assistant_report", observation)
+    rendered = json.dumps(view, ensure_ascii=False)
+
+    assert observation_data_status("get_operations_assistant_report", observation) == "no_data"
+    assert view["已核实信息"] == ["当前查询范围内暂无数据。"]
+    assert "值得关注的经营信号" not in rendered
+
+
 def test_verified_fact_guard_keeps_values_with_their_source_and_closes_statuses() -> None:
     inventory = {
         "status": "success",
@@ -381,6 +434,9 @@ def test_verified_fact_guard_keeps_values_with_their_source_and_closes_statuses(
         "最近收入为零。", [no_data], require_all=False
     )
     assert not answer_preserves_critical_values(
+        "最近收入正常。", [no_data], require_all=False
+    )
+    assert not answer_preserves_critical_values(
         "库存风险正常。",
         [
             {
@@ -395,6 +451,11 @@ def test_verified_fact_guard_keeps_values_with_their_source_and_closes_statuses(
         "库存有 10 条记录，其中 4 条需要关注；收入为 4181.00 元。",
         [inventory, revenue],
         require_all=False,
+    )
+    assert not answer_preserves_critical_values(
+        "库存有 10 条记录，其中 4 条需要关注。",
+        [inventory, no_data],
+        require_all=True,
     )
 
 
@@ -443,3 +504,220 @@ def test_traffic_status_reads_nested_quality_gate_and_domain_statuses_are_transl
         ),
         ensure_ascii=False,
     )
+
+    result = {
+        "status": "success",
+        "objective": "查看流量实验",
+        "tool_label": "流量实验洞察",
+        "result": view,
+    }
+    assert answer_preserves_critical_values(
+        "实验 exp-001 已完成，质量门禁被阻断，证据当前有效。",
+        [result],
+        require_all=False,
+    )
+    assert not answer_preserves_critical_values(
+        "实验 exp-001 已完成，质量门禁通过，证据当前有效。",
+        [result],
+        require_all=False,
+    )
+
+
+def test_order_status_claims_are_bound_to_the_order_and_field() -> None:
+    view = present_observation(
+        "get_order_facts",
+        {
+            "orders": [
+                {
+                    "order_id": "ORDER-001",
+                    "order_status": "fulfilling",
+                    "payment_status": "paid",
+                    "total_amount": "1.00",
+                    "lines": [],
+                    "logistics": {"status": "in_transit"},
+                }
+            ]
+        },
+    )
+    result = {
+        "status": "success",
+        "objective": "查看订单状态",
+        "tool_label": "订单与物流信息",
+        "result": view,
+    }
+
+    assert answer_preserves_critical_values(
+        "订单 ORDER-001 正在履约，已经支付，物流运输中，金额 1.00 元。",
+        [result],
+        require_all=False,
+    )
+    assert not answer_preserves_critical_values(
+        "订单 ORDER-001 已取消，已经支付，物流运输中，金额 1.00 元。",
+        [result],
+        require_all=False,
+    )
+
+
+def test_order_amount_claim_cannot_borrow_another_orders_value() -> None:
+    view = present_observation(
+        "get_order_facts",
+        {
+            "orders": [
+                {
+                    "order_id": "ORDER-001",
+                    "order_status": "fulfilling",
+                    "payment_status": "paid",
+                    "total_amount": "1.00",
+                    "lines": [],
+                },
+                {
+                    "order_id": "ORDER-002",
+                    "order_status": "canceled",
+                    "payment_status": "closed",
+                    "total_amount": "2.00",
+                    "lines": [],
+                },
+            ]
+        },
+    )
+    result = {
+        "status": "success",
+        "objective": "查看订单金额",
+        "tool_label": "订单与物流信息",
+        "result": view,
+    }
+
+    assert not answer_preserves_critical_values(
+        "订单 ORDER-001 的金额为 2.00 元。",
+        [result],
+        require_all=False,
+    )
+
+
+def test_order_status_claim_cannot_borrow_another_entity_or_field() -> None:
+    view = present_observation(
+        "get_order_facts",
+        {
+            "orders": [
+                {
+                    "order_id": "ORDER-001",
+                    "order_status": "fulfilling",
+                    "payment_status": "paid",
+                    "total_amount": "1.00",
+                    "lines": [],
+                },
+                {
+                    "order_id": "ORDER-002",
+                    "order_status": "canceled",
+                    "payment_status": "closed",
+                    "total_amount": "2.00",
+                    "lines": [],
+                },
+            ]
+        },
+    )
+    result = {
+        "status": "success",
+        "objective": "查看订单状态",
+        "tool_label": "订单与物流信息",
+        "result": view,
+    }
+
+    assert not answer_preserves_critical_values(
+        "订单 ORDER-001 已取消。",
+        [result],
+        require_all=False,
+    )
+    assert not answer_preserves_critical_values(
+        "订单 ORDER-001 的订单状态已关闭。",
+        [result],
+        require_all=False,
+    )
+    assert not answer_preserves_critical_values(
+        "订单 ORDER-001 已作废，金额 1.00 元。",
+        [result],
+        require_all=False,
+    )
+    assert not answer_preserves_critical_values(
+        "订单 ORDER-001 不能认为是履约中，金额 1.00 元。",
+        [result],
+        require_all=False,
+    )
+    assert not answer_preserves_critical_values(
+        "订单 ORDER-001 不能仅凭当前信息认定其订单状态仍然是履约中，金额 1.00 元。",
+        [result],
+        require_all=False,
+    )
+    assert not answer_preserves_critical_values(
+        "订单 ORDER-001 已冻结，金额 1.00 元。",
+        [result],
+        require_all=False,
+    )
+
+
+def test_inventory_plan_statuses_are_checked_in_their_own_fields() -> None:
+    view = present_observation(
+        "get_inventory_plan",
+        {
+            "inventory_plan": {
+                "sku_id": "YP-SKU-001",
+                "recommended_order_qty": "12",
+                "plan_quality": "valid",
+                "freshness": {"status": "stale"},
+            }
+        },
+    )
+    result = {
+        "status": "success",
+        "objective": "查看库存计划",
+        "tool_label": "库存计划",
+        "result": view,
+    }
+
+    assert answer_preserves_critical_values(
+        "库存计划 YP-SKU-001 的计划质量有效，证据已过期，建议数量 12。",
+        [result],
+        require_all=False,
+    )
+
+
+def test_competitive_presenter_uses_current_price_position_contract() -> None:
+    view = present_observation(
+        "get_competitive_intelligence",
+        {
+            "summary": {
+                "our_price_lower": 1,
+                "our_price_higher": 2,
+                "same_price": 1,
+            },
+            "quality_gate": {"eligible_competitors": 4},
+            "alerts": [],
+        },
+    )
+
+    rendered = json.dumps(view, ensure_ascii=False)
+    assert "其中有 2 个竞品价格低于本品" in rendered
+    assert {
+        "实体": "竞品分析",
+        "实体标识": "competitive",
+        "字段": "低价竞品数",
+        "字段语义": "低价竞品数",
+        "数值": "2",
+    } in view["已核实字段"]
+
+
+def test_workspace_status_labels_cover_authoritative_domain_enums() -> None:
+    traffic_statuses = get_args(
+        TrafficExperimentTransition.model_fields["status"].annotation
+    )
+    recommendation_statuses = [item.value for item in RecommendationState]
+    authoritative = {
+        *get_args(CatalogStatus),
+        *get_args(OrderStatus),
+        *get_args(PaymentStatus),
+        *get_args(LogisticsStatus),
+        *traffic_statuses,
+        *recommendation_statuses,
+    }
+
+    assert authoritative <= set(STATUS_LABELS)

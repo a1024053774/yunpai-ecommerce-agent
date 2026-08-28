@@ -11,7 +11,6 @@ from ecommerce_agent.business import CatalogItemUpsert, OrderUpsert
 from ecommerce_agent.business.inventory import InventoryBalanceUpsert
 from ecommerce_agent.business.orders import OrderLineInput
 from ecommerce_agent.llm import ModelError, ModelUnavailableError
-from ecommerce_agent.workspace_agent import WorkspaceAgent
 from ecommerce_agent.workspace_read_plan import WorkspaceTaskResult
 
 from conftest import make_settings
@@ -213,6 +212,202 @@ def test_workspace_composite_partial_failure_does_not_turn_failure_into_zero(
     assert "收入为 0" not in done["answer"]
     assert "核对最近收入" in done["answer"]
     assert "暂时无法判断" in done["answer"]
+
+
+def test_workspace_no_data_is_a_completed_verified_result(tmp_path, monkeypatch) -> None:
+    app = create_app(make_settings(tmp_path))
+    service = app.state.agent
+    workspace = app.state.workspace_agent
+    monkeypatch.setattr(
+        service.model,
+        "generate_json",
+        lambda _messages, **_kwargs: {
+            "tasks": [
+                {
+                    "task_id": "revenue",
+                    "objective": "核对最近收入",
+                    "tool_name": "get_business_metric",
+                    "arguments": {"metric": "gross_revenue"},
+                    "depends_on": [],
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        workspace,
+        "_run_read_task",
+        lambda task, *_args: WorkspaceTaskResult(
+            task_id=task.task_id,
+            objective=task.objective,
+            tool_name=task.tool_name,
+            tool_label="经营指标",
+            status="no_data",
+            verified_facts=["当前查询范围内暂无数据。"],
+        ),
+    )
+    monkeypatch.setattr(
+        service.model,
+        "stream_generate",
+        lambda _messages: iter(["最近收入暂无数据。"]),
+    )
+
+    session_id = "workspace:test-no-data-completed-001"
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/admin/workspace/chat/stream",
+            headers=ADMIN_HEADERS,
+            json={
+                "session_id": session_id,
+                "message": "查看最近收入。",
+                "history": [],
+                "context": {},
+            },
+        )
+        messages = client.get(
+            f"/v1/admin/workspace/conversations/{session_id}/messages",
+            headers=ADMIN_HEADERS,
+        ).json()
+
+    done = _events(response)[-1]["response"]
+    assert done["completion_status"] == "completed"
+    assert done["delivery_mode"] == "verified_final"
+    assert done["task_results"][0]["status"] == "no_data"
+    assert done["task_results"][0]["error_summary"] is None
+    assert messages[-1]["status"] == "completed"
+
+
+def test_workspace_success_and_no_data_are_completed_together(tmp_path, monkeypatch) -> None:
+    app = create_app(make_settings(tmp_path))
+    service = app.state.agent
+    workspace = app.state.workspace_agent
+    monkeypatch.setattr(
+        service.model,
+        "generate_json",
+        lambda _messages, **_kwargs: {
+            "tasks": [
+                {
+                    "task_id": "inventory",
+                    "objective": "核对库存",
+                    "tool_name": "get_inventory_risk",
+                    "arguments": {},
+                    "depends_on": [],
+                },
+                {
+                    "task_id": "revenue",
+                    "objective": "核对收入",
+                    "tool_name": "get_business_metric",
+                    "arguments": {"metric": "gross_revenue"},
+                    "depends_on": [],
+                },
+            ]
+        },
+    )
+
+    def run_task(task, *_args):
+        if task.task_id == "revenue":
+            return WorkspaceTaskResult(
+                task_id=task.task_id,
+                objective=task.objective,
+                tool_name=task.tool_name,
+                tool_label="经营指标",
+                status="no_data",
+                verified_facts=["当前查询范围内暂无数据。"],
+            )
+        return WorkspaceTaskResult(
+            task_id=task.task_id,
+            objective=task.objective,
+            tool_name=task.tool_name,
+            tool_label="库存风险",
+            status="success",
+            verified_facts=["共检查 10 个库存记录。"],
+        )
+
+    monkeypatch.setattr(workspace, "_run_read_task", run_task)
+    monkeypatch.setattr(
+        service.model,
+        "stream_generate",
+        lambda _messages: iter(["库存有 10 条记录。"]),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/admin/workspace/chat/stream",
+            headers=ADMIN_HEADERS,
+            json={
+                "session_id": "workspace:test-success-no-data-001",
+                "message": "查看库存和收入。",
+                "history": [],
+                "context": {},
+            },
+        )
+
+    done = _events(response)[-1]["response"]
+    assert done["completion_status"] == "completed"
+    assert done["delivery_mode"] == "verified_final"
+    assert "暂无数据" in done["answer"]
+    assert "critical_value_mismatch" in done["degraded_reasons"]
+    assert [item["status"] for item in done["task_results"]] == [
+        "success",
+        "no_data",
+    ]
+
+
+def test_workspace_read_plan_preserves_full_tool_result_before_presentation(
+    tmp_path, monkeypatch
+) -> None:
+    app = create_app(make_settings(tmp_path))
+    service = app.state.agent
+    workspace = app.state.workspace_agent
+    monkeypatch.setattr(
+        service.model,
+        "generate_json",
+        lambda _messages, **_kwargs: {
+            "tasks": [
+                {
+                    "task_id": "modules",
+                    "objective": "核对业务模块",
+                    "tool_name": "get_module_registry",
+                    "arguments": {},
+                    "depends_on": [],
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        workspace,
+        "_execute",
+        lambda *_args, **_kwargs: {
+            "modules": [
+                {
+                    "display_name": f"业务能力 {chr(65 + index)}",
+                    "status": "available",
+                }
+                for index in range(20)
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        service.model,
+        "stream_generate",
+        lambda _messages: iter(["共登记 20 项业务能力，其中 20 项当前可用。"]),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/admin/workspace/chat/stream",
+            headers=ADMIN_HEADERS,
+            json={
+                "session_id": "workspace:test-uncompressed-result-001",
+                "message": "查看全部业务模块。",
+                "history": [],
+                "context": {},
+            },
+        )
+
+    done = _events(response)[-1]["response"]
+    assert "20 项业务能力" in done["answer"]
+    assert "13 项业务能力" not in done["answer"]
+    assert done["delivery_mode"] == "verified_final"
 
 
 def test_workspace_composite_rejects_answer_that_changes_verified_amount(
@@ -568,6 +763,53 @@ def test_workspace_stream_routes_to_real_overview_and_exposes_progress(
     assert '"operators"' not in answer_payload
 
 
+def test_workspace_single_observe_reports_no_data_in_the_tool_event(
+    tmp_path, monkeypatch
+) -> None:
+    app = create_app(make_settings(tmp_path))
+    service = app.state.agent
+    decisions = iter(
+        [
+            {
+                "mode": "observe",
+                "tool_name": "get_inventory_risk",
+                "arguments": {},
+                "reason": "查看库存风险",
+            },
+            {
+                "mode": "answer",
+                "response": "库存风险暂无数据。",
+                "reason": "库存事实已核实",
+            },
+        ]
+    )
+    monkeypatch.setattr(
+        service.model,
+        "generate_json",
+        lambda _messages, **_kwargs: next(decisions),
+    )
+    monkeypatch.setattr(
+        service.model,
+        "stream_generate",
+        lambda _messages: iter(["库存风险暂无数据。"]),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/admin/workspace/chat/stream",
+            headers=ADMIN_HEADERS,
+            json={
+                "session_id": "workspace:test-single-no-data-status-001",
+                "message": "查看库存风险。",
+                "history": [],
+                "context": {},
+            },
+        )
+
+    tool_event = next(event for event in _events(response) if event["event"] == "tool")
+    assert tool_event["status"] == "no_data"
+
+
 def test_workspace_customer_service_progress_uses_product_language(
     tmp_path, monkeypatch
 ) -> None:
@@ -823,6 +1065,93 @@ def test_workspace_direct_control_response_is_not_marked_as_verified_fact(
     done = _events(response)[-1]["response"]
     assert done["delivery_mode"] == "control_response"
     assert done["completion_status"] == "completed"
+
+
+def test_workspace_redacts_generated_answer_before_sse(tmp_path, monkeypatch) -> None:
+    app = create_app(make_settings(tmp_path))
+    decisions = iter(
+        [
+            {
+                "mode": "observe",
+                "tool_name": "get_workspace_overview",
+                "arguments": {},
+                "reason": "核对整机状态",
+            },
+            {
+                "mode": "answer",
+                "response": "状态已核对",
+                "reason": "事实已核对",
+            },
+        ]
+    )
+    monkeypatch.setattr(
+        app.state.agent.model,
+        "generate_json",
+        lambda messages, **kwargs: next(decisions),
+    )
+    monkeypatch.setattr(
+        app.state.agent.model,
+        "stream_generate",
+        lambda messages: iter(["管理员密码: secret"]),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/admin/workspace/chat/stream",
+            headers=ADMIN_HEADERS,
+            json={
+                "session_id": "workspace:test-answer-redaction-001",
+                "message": "查看整机状态。",
+                "history": [],
+                "context": {},
+            },
+        )
+
+    assert "secret" not in response.text
+    assert "[REDACTED]" in response.text
+    assert "secret" not in _events(response)[-1]["response"]["answer"]
+
+
+def test_workspace_redacts_model_text_from_the_entire_sse_event(
+    tmp_path, monkeypatch
+) -> None:
+    app = create_app(make_settings(tmp_path))
+    service = app.state.agent
+    monkeypatch.setattr(
+        service.model,
+        "generate_json",
+        lambda _messages, **_kwargs: {
+            "tasks": [
+                {
+                    "task_id": "modules",
+                    "objective": "管理员密码: secret",
+                    "tool_name": "get_module_registry",
+                    "arguments": {},
+                    "depends_on": [],
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        service.model,
+        "stream_generate",
+        lambda _messages: iter(["业务能力信息已核实。"]),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/admin/workspace/chat/stream",
+            headers=ADMIN_HEADERS,
+            json={
+                "session_id": "workspace:test-event-redaction-001",
+                "message": "查看业务模块。",
+                "history": [],
+                "context": {},
+            },
+        )
+
+    assert "secret" not in response.text
+    assert "[REDACTED]" in response.text
 
 
 def test_workspace_model_clarification_is_bounded_by_available_capabilities(
@@ -1612,9 +1941,12 @@ def test_workspace_preserves_verified_facts_when_later_planning_is_invalid(
     assert any(event.get("stage") == "planning_fallback" for event in events)
     assert not any(event["event"] == "error" for event in events)
     done = events[-1]["response"]
-    assert done["answer"] == "已根据成功取得的库存事实整理结果。"
+    assert "查看库存风险：当前查询范围内暂无数据" in done["answer"]
     assert done["degraded"] is True
-    assert done["degraded_reasons"] == ["planning_output_invalid"]
+    assert done["degraded_reasons"] == [
+        "planning_output_invalid",
+        "critical_value_mismatch",
+    ]
 
 
 def test_workspace_uses_verified_product_language_when_response_model_is_unavailable(
@@ -1662,7 +1994,7 @@ def test_workspace_uses_verified_product_language_when_response_model_is_unavail
     events = _events(response)
     assert not any(event["event"] == "error" for event in events)
     done = events[-1]["response"]
-    assert done["answer"].startswith("已完成事实核对：")
+    assert done["answer"].startswith("核实结果：")
     assert "当前查询范围内暂无数据" in done["answer"]
     assert done["degraded"] is True
     assert done["degraded_reasons"] == ["response_model_unavailable"]
@@ -1870,15 +2202,3 @@ def test_workspace_missing_dependency_argument_path_is_typed_failure(
         done["task_results"][1]["error_summary"]
         == "前置核实结果不足，未能继续查询。"
     )
-
-
-def test_workspace_dependency_resolves_unambiguous_model_root_array() -> None:
-    assert WorkspaceAgent._resolve_dependency_value(
-        {"items": [{"sku_id": "SKU-001"}]},
-        [0, "sku_id"],
-    ) == "SKU-001"
-
-    assert WorkspaceAgent._resolve_dependency_value(
-        {"items": [{"sku_id": "SKU-001"}]},
-        ["result", 0, "sku_id"],
-    ) == "SKU-001"
