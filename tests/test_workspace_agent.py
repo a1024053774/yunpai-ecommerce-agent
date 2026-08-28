@@ -502,7 +502,7 @@ def test_workspace_deterministic_answer_distinguishes_inventory_warehouses() -> 
             "risks": [
                 {
                     "sku_id": "SKU-001",
-                    "warehouse_id": "WH-001",
+                    "warehouse_id": "QC-WH-HZ",
                     "risk_code": "stockout_risk",
                     "risk_level": "high",
                     "available": "4.00",
@@ -511,7 +511,7 @@ def test_workspace_deterministic_answer_distinguishes_inventory_warehouses() -> 
                 },
                 {
                     "sku_id": "SKU-001",
-                    "warehouse_id": "WH-002",
+                    "warehouse_id": "QC-WH-WH",
                     "risk_code": "replenishment_due",
                     "risk_level": "medium",
                     "available": "15.00",
@@ -532,8 +532,45 @@ def test_workspace_deterministic_answer_distinguishes_inventory_warehouses() -> 
 
     answer = WorkspaceAgent._deterministic_answer(observations, [])
 
-    assert "仓库 WH-001" in answer
-    assert "仓库 WH-002" in answer
+    assert "仓库 QC-WH-HZ" in answer
+    assert "仓库 QC-WH-WH" in answer
+    assert answer_preserves_critical_values(answer, observations, require_all=True)
+
+
+def test_workspace_deterministic_answer_preserves_order_summary_and_logistics() -> None:
+    view = present_observation(
+        "get_order_facts",
+        {
+            "orders": [
+                {
+                    "order_id": "QC-ORDER-1001",
+                    "order_status": "shipped",
+                    "payment_status": "paid",
+                    "total_amount": "499.00",
+                    "currency": "CNY",
+                    "lines": [{}],
+                    "logistics": {
+                        "carrier": "圆通",
+                        "status": "in_transit",
+                        "last_event": "已到达南京转运中心",
+                    },
+                }
+            ]
+        },
+    )
+    observations = [
+        {
+            "status": "success",
+            "tool_name": "get_order_facts",
+            "tool_label": "订单与物流信息",
+            "result": view,
+        }
+    ]
+
+    answer = WorkspaceAgent._deterministic_answer(observations, [])
+
+    assert "共找到 1 个订单" in answer
+    assert "当前运输中" in answer
     assert answer_preserves_critical_values(answer, observations, require_all=True)
 
 

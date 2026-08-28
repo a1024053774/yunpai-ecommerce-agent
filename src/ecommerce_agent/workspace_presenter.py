@@ -405,7 +405,13 @@ def critical_fact_claims(
             )
     if tool_name in {"get_order_management_status", "get_order_facts"}:
         orders = _list(observation.get("orders"))
-        add("订单汇总", "orders", "订单数量", len(orders))
+        add(
+            "订单汇总",
+            "orders",
+            "订单数量",
+            len(orders),
+            field_terms="订单数量 共找到 订单数",
+        )
         for item in orders[:8]:
             value = _dict(item)
             order_id = value.get("order_id")
@@ -554,7 +560,9 @@ def critical_fact_claims(
 
 def critical_fact_values(product_view: dict[str, Any]) -> list[str]:
     values: list[str] = []
-    identifier_pattern = re.compile(r"\b(?=[A-Za-z0-9-]*\d)[A-Za-z][A-Za-z0-9-]*\b")
+    identifier_pattern = re.compile(
+        r"\b(?=[A-Za-z0-9-]*(?:\d|-))[A-Za-z][A-Za-z0-9-]*\b"
+    )
     number_pattern = re.compile(
         r"(?<![A-Za-z0-9-])[+-]?\d+(?:\.\d+)?(?![A-Za-z0-9-])"
     )
