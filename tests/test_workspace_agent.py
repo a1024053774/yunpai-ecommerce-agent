@@ -574,6 +574,107 @@ def test_workspace_deterministic_answer_preserves_order_summary_and_logistics() 
     assert answer_preserves_critical_values(answer, observations, require_all=True)
 
 
+def test_workspace_deterministic_answer_preserves_marketing_and_profit_fields() -> None:
+    marketing_view = present_observation(
+        "get_marketing_diagnosis",
+        {
+            "totals": {
+                "spend": "275.00",
+                "attributed_orders": 2,
+                "attributed_revenue": "720.00",
+                "roas": "2.62",
+                "ctr": "0.015",
+            },
+            "findings": [
+                {"recommendation": "停止或调整投放前需人工审批"},
+                {"recommendation": "建议生成内容草稿并进行人工事实审核"},
+            ],
+        },
+    )
+    finance_view = present_observation(
+        "get_profit_reconciliation",
+        {
+            "profit": {
+                "currency": "CNY",
+                "gross_sales": "4181.00",
+                "approved_refunds": "30.00",
+                "expense_total": "2660.00",
+                "management_profit": "1491.00",
+            },
+            "reconciliation_tasks": [{}],
+        },
+    )
+    observations = [
+        {
+            "status": "success",
+            "tool_name": "get_marketing_diagnosis",
+            "tool_label": "营销投放诊断",
+            "result": marketing_view,
+        },
+        {
+            "status": "success",
+            "tool_name": "get_profit_reconciliation",
+            "tool_label": "利润与结算核对",
+            "result": finance_view,
+        },
+    ]
+
+    answer = WorkspaceAgent._deterministic_answer(observations, [])
+
+    assert "带来 2 个归因订单" in answer
+    assert "预计利润 1491.00 CNY" in answer
+    assert answer_preserves_critical_values(answer, observations, require_all=True)
+
+
+def test_workspace_deterministic_answer_preserves_traffic_evidence() -> None:
+    view = present_observation(
+        "get_listing_traffic_insights",
+        {
+            "sku_id": "YP-SKU-TRAFFIC-001",
+            "insights": [
+                {
+                    "experiment": {
+                        "experiment_id": "exp-traffic-001",
+                        "status": "completed",
+                        "primary_metric": "ctr",
+                    },
+                    "analysis": {
+                        "evidence": {
+                            "effect": {
+                                "absolute": "0.015",
+                                "direction": "positive",
+                            },
+                            "confidence_interval": {
+                                "low": "0.005",
+                                "high": "0.025",
+                            },
+                            "quality_gate": {"status": "passed"},
+                            "statistical_conclusion": "positive_effect",
+                        }
+                    },
+                    "freshness": {"status": "current"},
+                }
+            ],
+            "freshness": {"status": "current"},
+        },
+    )
+    observations = [
+        {
+            "status": "success",
+            "tool_name": "get_listing_traffic_insights",
+            "tool_label": "流量实验洞察",
+            "result": view,
+        }
+    ]
+
+    answer = WorkspaceAgent._deterministic_answer(observations, [])
+
+    assert "质量门禁为通过" in answer
+    assert "统计结论为正向变化" in answer
+    assert "可信区间下限为 0.005，上限为 0.025" in answer
+    assert answer_preserves_critical_values(answer, observations, require_all=True)
+
+
 def test_workspace_composite_rejects_answer_that_changes_verified_amount(
     tmp_path, monkeypatch
 ) -> None:

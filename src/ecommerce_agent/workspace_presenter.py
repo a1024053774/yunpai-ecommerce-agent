@@ -123,6 +123,10 @@ STATUS_LABELS: dict[str, str] = {
     "positive_effect": "正向变化",
     "negative_effect": "负向变化",
     "no_detectable_effect": "未检测到明确差异",
+    "positive": "正向",
+    "negative": "负向",
+    "neutral": "无明显方向",
+    "flat": "无明显变化",
 }
 
 
@@ -480,11 +484,41 @@ def critical_fact_claims(
         )
     if tool_name == "get_marketing_diagnosis":
         totals = _dict(observation.get("totals"))
-        add("营销投放", "marketing", "投放花费", totals.get("spend"))
-        add("营销投放", "marketing", "归因订单数", totals.get("attributed_orders"))
-        add("营销投放", "marketing", "归因收入", totals.get("attributed_revenue"))
-        add("营销投放", "marketing", "投放回报", totals.get("roas"))
-        add("营销投放", "marketing", "点击率", totals.get("ctr"))
+        add(
+            "营销投放",
+            "marketing",
+            "投放花费",
+            totals.get("spend"),
+            field_terms="投放花费 花费",
+        )
+        add(
+            "营销投放",
+            "marketing",
+            "归因订单数",
+            totals.get("attributed_orders"),
+            field_terms="归因订单数 归因订单 带来",
+        )
+        add(
+            "营销投放",
+            "marketing",
+            "归因收入",
+            totals.get("attributed_revenue"),
+            field_terms="归因收入",
+        )
+        add(
+            "营销投放",
+            "marketing",
+            "投放回报",
+            totals.get("roas"),
+            field_terms="投放回报 ROAS",
+        )
+        add(
+            "营销投放",
+            "marketing",
+            "点击率",
+            totals.get("ctr"),
+            field_terms="点击率 CTR",
+        )
     if tool_name == "get_profit_reconciliation":
         profit = _dict(observation.get("profit"))
         add("利润核对", "profit", "销售额", profit.get("gross_sales"))
@@ -1253,6 +1287,7 @@ def answer_preserves_critical_values(
             if not candidates:
                 if (
                     matching
+                    and any(item["field"] != "核实结果" for item in matching)
                     and not _critical_tokens(clause)[1]
                     and _looks_like_status_claim(clause)
                 ):
@@ -1577,13 +1612,23 @@ def _traffic_insight_facts(observation: dict[str, Any]) -> list[str]:
         effect = _dict(evidence.get("effect"))
         interval = _dict(evidence.get("confidence_interval"))
         effect_text = effect.get("absolute")
-        direction = str(effect.get("direction") or "暂无明确方向")
+        direction = _status(effect.get("direction") or "neutral")
+        experiment_status = _status(experiment.get("status"))
+        quality_status = _status(_dict(evidence.get("quality_gate")).get("status"))
+        conclusion = _status(evidence.get("statistical_conclusion"))
+        freshness = _status(
+            _dict(insight.get("freshness") or analysis.get("freshness")).get("status")
+        )
         interval_text = ""
         if interval.get("low") is not None and interval.get("high") is not None:
-            interval_text = f"，可信区间为 {interval.get('low')} 到 {interval.get('high')}"
+            interval_text = (
+                f"，可信区间下限为 {interval.get('low')}，"
+                f"上限为 {interval.get('high')}"
+            )
         facts.append(
-            f"实验 {experiment.get('experiment_id') or '未提供编号'} 关注"
-            f"{experiment.get('primary_metric') or '流量指标'}，当前方向为 {direction}"
+            f"实验 {experiment.get('experiment_id') or '未提供编号'} 状态为{experiment_status}，"
+            f"质量门禁为{quality_status}，统计结论为{conclusion}，证据新鲜度为{freshness}；"
+            f"关注{experiment.get('primary_metric') or '流量指标'}，当前方向为 {direction}"
             f"，变化值为 {effect_text if effect_text is not None else '暂无'}{interval_text}。"
         )
     facts.append("以上只复述已固化的统计证据，不会重算统计，也不代表平台权重或因果机制。")
