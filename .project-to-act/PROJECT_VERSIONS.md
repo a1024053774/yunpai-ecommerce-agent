@@ -10,7 +10,9 @@
   提交没有同步提升运行时包版本，因此不得把历史内部候选标签 `0.31.0`～`0.33.0` 写成
   当前运行时版本。生产放行继续阻塞。
 - 公网产品测试部署：服务器唯一电商实例现运行 `main@b77dfeb` 加多模态/客服 UI 适配树，
-  源码哈希 `f04655bc44c9bc5702215ebd73cb12731a461ff7ae58f8150fe0f26d28b376f8`；该实现已固化为
+  原部署源码哈希 `f04655bc44c9bc5702215ebd73cb12731a461ff7ae58f8150fe0f26d28b376f8`，并叠加
+  Qwen/vLLM 网关修复提交 `7d5d8eb525e73fce5a7cf5f0a4c7f1d92c8e706b`（服务器
+  `llm.py` SHA-256 `a4cc44cd3019b116b71372cacc8433fddf40bb6bda316f603fca675265bc5596`）；原实现已固化为
   GitHub 提交 `f647cfe204ea9dd842da7b1009bdc9426a77cf06` 并推送到
   `origin/demo/main-multimodal-product-demo`；原
   `origin/codex/main-multimodal-product-demo` 已按用户要求删除，
@@ -42,8 +44,10 @@
 - additive 契约：新增可选 Vision/Polish 配置、受控聊天媒体、显式 virtual 演示对象和
   `verified_final` SSE 语义；`delta` 名称为兼容保留，但每轮只发送一条已核验、已持久化
   完整回复。正式 `/v1/chat*`、产品测试入口和 LangGraph 复用共享 generation/SSE 事实源。
-- 模型与配置：真实运行使用 DeepSeek `deepseek-v4-flash`、Qwen
-  `qwen3-14b-rag-polish`、Qwen-VL `Qwen/Qwen2.5-VL-7B-Instruct`；密钥仅在服务器
+- 模型与配置：DeepSeek key 于 2026-08-28 返回 402 `Insufficient Balance`，已退出公网
+  主链路；真实运行改用 4090 `qwen3.6-35b-a3b-fp8-gpu0-200k` 负责规划与最终生成，Qwen
+  `qwen3-14b-rag-polish` 继续受事实锚保护地润色，Qwen-VL
+  `Qwen/Qwen2.5-VL-7B-Instruct` 继续生成非权威图片观察。密钥仅在服务器
   0600 `.env`，未进入仓库或台账。应用监听 `127.0.0.1:8767`，公网只经 Nginx 8800 TLS；
   随机访问链接只保存在服务器 0600 文件并关闭该路径访问日志，Cookie 门覆盖 Admin、客服
   页面和电商 API，后端管理员免登录只接受回环请求。
@@ -53,7 +57,8 @@
   库存、订单和图片真实调用均为 HTTP 200；访问链接/Cookie、Admin 无二次登录、商品库存/
   订单页面、客服模型就绪、AgentLoop 与端口隔离复验通过，详情见 E-20260828-001、
   E-20260828-002；实现提交、密钥扫描与 GitHub 分支推送见 E-20260828-003 /
-  G-PRODUCT-DEMO-001，分支改名见 E-20260828-004。
+  G-PRODUCT-DEMO-001，分支改名见 E-20260828-004；DeepSeek 402 根因、Qwen thinking
+  契约红绿测试、35B 切换和公网/浏览器复验见 E-20260828-005。
 
 ## M7-R WP5 独立验收与整链合入（未单独升应用版）
 
