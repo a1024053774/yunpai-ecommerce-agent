@@ -12,7 +12,8 @@
 - 公网产品测试部署：服务器唯一电商实例现运行 `main@b77dfeb` 加多模态/客服 UI 适配树，
   源码哈希 `f04655bc44c9bc5702215ebd73cb12731a461ff7ae58f8150fe0f26d28b376f8`；该实现已固化为
   GitHub 提交 `f647cfe204ea9dd842da7b1009bdc9426a77cf06` 并推送到
-  `origin/codex/main-multimodal-product-demo`，
+  `origin/demo/main-multimodal-product-demo`；原
+  `origin/codex/main-multimodal-product-demo` 已按用户要求删除，
   schema v39、包版本仍为 `0.30.0`。该实例通过首次访问链接签发 7 天
   Secure/HttpOnly/SameSite=Lax Cookie，只放行 virtual `/admin`、`/customer-test` 与对应
   电商 API；不再使用用户名/密码，也不是新的语义版本、正式生产发布或 `G-PROD-001`
@@ -52,7 +53,7 @@
   库存、订单和图片真实调用均为 HTTP 200；访问链接/Cookie、Admin 无二次登录、商品库存/
   订单页面、客服模型就绪、AgentLoop 与端口隔离复验通过，详情见 E-20260828-001、
   E-20260828-002；实现提交、密钥扫描与 GitHub 分支推送见 E-20260828-003 /
-  G-PRODUCT-DEMO-001。
+  G-PRODUCT-DEMO-001，分支改名见 E-20260828-004。
 
 ## M7-R WP5 独立验收与整链合入（未单独升应用版）
 

@@ -16,10 +16,12 @@
   范围；真实淘宝/天猫字段全量确认、真实经营结论、生产发布/权限/写能力与 M8-R～M10-R
   仍未放行。
 - 最新 `main` + 多模态/Qwen/新版客服界面的公网产品测试部署证据统一见
-  E-20260828-001、E-20260828-002、E-20260828-003 / G-PRODUCT-DEMO-001；当前 `/admin` 与
+  E-20260828-001、E-20260828-002、E-20260828-003、E-20260828-004 /
+  G-PRODUCT-DEMO-001；当前 `/admin` 与
   `/customer-test` 共用首次访问链接写入的 7 天安全 Cookie，不再要求用户名/密码。该记录
   只说明受鉴权 virtual Demo 可供产品测试；对应实现已推送 GitHub 分支
-  `codex/main-multimodal-product-demo`，未修改 `main`、未创建或合并 PR。实时服务状态仍以
+  `demo/main-multimodal-product-demo`，旧 `codex/` 分支已删除；未修改 `main`、未创建或
+  合并 PR。实时服务状态仍以
   服务器和负责人工作台为准，且不替代 `G-PROD-001`。
 
 ## 阻塞项
