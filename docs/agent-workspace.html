@@ -133,6 +133,24 @@
     .context-grid input { width: 100%; min-width: 0; height: 34px; padding: 0 10px; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--ink); }
     .compose-box { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: end; }
     .compose-box textarea { width: 100%; min-height: 48px; max-height: 150px; resize: none; padding: 13px 14px; border: 1px solid var(--line-strong); border-radius: 16px; background: #fff; color: var(--ink); }
+    .image-preview { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; padding: 8px; border: 1px solid #b7ddd7; border-radius: 6px; background: var(--green-soft); }
+    .image-preview[hidden] { display: none; }
+    .image-preview img { width: 52px; height: 52px; flex: 0 0 auto; border: 1px solid var(--line); border-radius: 5px; background: #fff; object-fit: cover; }
+    .image-preview-copy { min-width: 0; flex: 1; color: var(--muted); font-size: 11px; }
+    .image-preview-copy strong, .image-preview-copy span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .image-preview-copy strong { color: var(--ink); font-size: 12px; }
+    .image-preview-copy span { margin-top: 2px; }
+    .image-preview-remove { min-height: 29px; padding: 0 9px; border: 1px solid var(--line); border-radius: 5px; background: #fff; color: var(--muted); font-size: 11px; }
+    .image-preview-remove:hover { border-color: var(--red); color: var(--red); }
+    .compose-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 7px; }
+    .compose-tools .button { min-height: 29px; }
+    .compose-hint { margin: 0 3px; color: var(--muted); font-size: 10px; }
+    .image-input-status { min-height: 16px; margin: 3px 3px 0; color: var(--red); font-size: 10px; }
+    .image-input-status:empty { display: none; }
+    .message-image { display: block; width: min(180px, 100%); max-height: 160px; margin-bottom: 8px; border: 1px solid var(--line); border-radius: 5px; object-fit: contain; background: #fff; }
+    .message-image-badge, .vision-status { display: inline-flex; align-items: center; gap: 5px; margin-bottom: 7px; padding: 3px 7px; border-radius: 4px; background: var(--blue-soft); color: var(--blue); font-size: 10px; }
+    .vision-status.ok { background: var(--green-soft); color: var(--green); }
+    .vision-status.warn { background: var(--amber-soft); color: var(--amber-dark); }
     .send { width: 48px; height: 48px; padding: 0; border: 0; border-radius: 15px; background: var(--amber); color: #fff; font-size: 20px; }
     .send:hover { background: var(--amber-dark); }
     .send:disabled { opacity: .45; cursor: not-allowed; }
@@ -506,6 +524,7 @@
     .customer-extension-copy strong { display: block; color: var(--ink); font-size: 12px; }
     .customer-extension-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
     .customer-extension-actions .button { background: #fff; }
+    .image-preview { border-color: #b7ddd7; background: var(--green-soft); }
     .insight-label { margin-bottom: 10px; color: var(--muted); font-size: 11px; }
     .metric-grid { gap: 7px; }
     .metric {
@@ -622,7 +641,7 @@
           <div class="message-row assistant">
             <span class="avatar">Y</span>
             <div class="message-card">
-              <div class="bubble">我已经接入当前一体机的经营与客服模块。你可以让我汇总全店状态、查库存风险、看营销和利润，或检查客服与知识库。需要改变业务状态的操作，我会先给你确认卡片。</div>
+              <div class="bubble">我已经接入当前一体机的经营与客服模块。你可以让我汇总全店状态、查库存风险、看营销和利润，或检查客服与知识库；也可以直接把图片粘贴到下方输入框，我会先做图片观察，再结合业务数据核对。需要改变业务状态的操作，我会先给你确认卡片。</div>
               <div class="quick-prompts">
                 <button class="prompt-chip" data-prompt="帮我汇总当前整机状态和最需要处理的三件事">查看全局态势</button>
                 <button class="prompt-chip" data-prompt="现在有哪些客服或人工接管待办？">检查客服待办</button>
@@ -644,11 +663,21 @@
                 <label>订单 ID<input id="orderId" placeholder="查询订单时填写"></label>
               </div>
             </details>
+            <div class="image-preview" id="workspaceImagePreview" hidden aria-live="polite">
+              <img id="workspaceImagePreviewImg" alt="已粘贴图片预览">
+              <div class="image-preview-copy"><strong id="workspaceImagePreviewTitle">已粘贴图片</strong><span id="workspaceImagePreviewInfo"></span></div>
+              <button class="image-preview-remove" id="clearWorkspaceImageButton" type="button">移除</button>
+            </div>
             <div class="compose-box">
-              <textarea id="messageInput" rows="1" placeholder="例如：汇总今天的经营风险，并告诉我先处理什么" aria-label="发送给统筹 Agent 的消息" required></textarea>
+              <textarea id="messageInput" rows="1" placeholder="例如：汇总今天的经营风险，并告诉我先处理什么" aria-label="发送给统筹 Agent 的消息，可直接粘贴图片" aria-describedby="composeHint"></textarea>
               <button class="send" id="sendButton" type="submit" aria-label="发送">↑</button>
             </div>
-            <div class="compose-hint">Enter 发送 · Shift + Enter 换行 · 写操作不会被静默执行</div>
+            <div class="compose-tools">
+              <button class="button small" id="chooseWorkspaceImageButton" type="button">选择图片（可选）</button>
+              <input id="workspaceImageInput" type="file" accept="image/png,image/jpeg,image/webp" hidden>
+              <span class="compose-hint" id="composeHint">可直接在输入框按 Ctrl/⌘+V 粘贴图片；不需要上传即可驱动图片观察 · Enter 发送 · Shift + Enter 换行</span>
+            </div>
+            <div class="image-input-status" id="workspaceImageStatus" role="status" aria-live="polite"></div>
           </form>
         </div>
       </section>
@@ -669,7 +698,7 @@
         </article>
         <article class="insight-card customer-extension-card" id="customerServiceCard">
           <div class="insight-label"><span>客服增强</span><span id="customerServiceMode">读取中</span></div>
-          <div class="customer-extension-copy" id="customerServiceStatus"><strong>图片识别与润色</strong>正在读取当前后端能力…</div>
+          <div class="customer-extension-copy" id="customerServiceStatus"><strong>统筹图片观察 + 客服润色</strong>正在读取当前后端能力…</div>
           <div class="customer-extension-actions">
             <a class="button small primary" id="openCustomerTest" href="/customer-test">打开客服体验 ↗</a>
             <a class="button small" href="/admin/advanced">查看高级后台 ↗</a>
@@ -708,8 +737,8 @@
       adminId: sessionStorage.getItem('yunpai.adminId') || '',
       adminKey: sessionStorage.getItem('yunpai.adminKey') || '',
       adminAuthRequired: true, sessionId: '', history: [], messages: [], conversations: [],
-      running: false, startedAt: 0, timer: null, currentMeta: null, currentTool: null,
-      customerServiceCapabilities: null
+      running: false, startedAt: 0, timer: null, currentMeta: null, currentTool: null, currentVision: null,
+      customerServiceCapabilities: null, image: null, imageTypes: ['image/png','image/jpeg','image/webp'], maxImageBytes: 5 * 1024 * 1024
     };
     const eventLabels = {
       'chat.completed':'客服完成回复', 'evolution.approved':'新知识已批准', 'evolution.evaluated':'知识候选已评估',
@@ -721,9 +750,44 @@
       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
       .replace(/\n/g, '<br>');
     const formatTime = (value) => value ? new Date(value).toLocaleString('zh-CN', {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}) : '—';
+    const formatBytes = (value) => value < 1024 ? `${value} B` : value < 1024 * 1024 ? `${(value / 1024).toFixed(1)} KiB` : `${(value / 1024 / 1024).toFixed(2)} MiB`;
+    const visionStatusLabel = (status) => ({applied:'已解析',disabled:'未启用',misconfigured:'配置不完整',error:'调用失败'}[status] || status || '未知');
 
     const newWorkspaceSessionId = () => `workspace:${crypto.randomUUID ? crypto.randomUUID() : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`}`;
     function clearRenderedMessages() { $('messageList').innerHTML = ''; }
+    function setImageStatus(message) { $('workspaceImageStatus').textContent = message || ''; }
+    async function imagePayloadFromFile(file) {
+      if (!file || !state.imageTypes.includes(file.type)) throw new Error('仅支持 PNG、JPEG 或 WebP 图片');
+      if (file.size > state.maxImageBytes) throw new Error(`图片不能超过 ${formatBytes(state.maxImageBytes)}`);
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      let binary = '';
+      for (let offset = 0; offset < bytes.length; offset += 0x8000) binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+      return { mime_type: file.type, data_base64: btoa(binary), previewUrl: URL.createObjectURL(file), name: file.name || '已粘贴图片', size: file.size };
+    }
+    async function setWorkspaceImage(file) {
+      try {
+        const image = await imagePayloadFromFile(file);
+        if (state.image?.previewUrl) URL.revokeObjectURL(state.image.previewUrl);
+        state.image = image;
+        $('workspaceImagePreviewImg').src = image.previewUrl;
+        $('workspaceImagePreviewTitle').textContent = image.name;
+        $('workspaceImagePreviewInfo').textContent = `${image.mime_type.replace('image/','').toUpperCase()} · ${formatBytes(image.size)} · 已准备好，直接发送即可`;
+        $('workspaceImagePreview').hidden = false;
+        setImageStatus('图片已就绪；可以只粘贴图片后直接发送，也可以继续补充文字。');
+        $('messageInput').focus();
+      } catch (error) {
+        setImageStatus(error.message || '图片读取失败');
+      }
+    }
+    function clearWorkspaceImage(revoke = true) {
+      if (revoke && state.image?.previewUrl) URL.revokeObjectURL(state.image.previewUrl);
+      state.image = null;
+      $('workspaceImagePreview').hidden = true;
+      $('workspaceImagePreviewImg').removeAttribute('src');
+      $('workspaceImagePreviewTitle').textContent = '已粘贴图片';
+      $('workspaceImagePreviewInfo').textContent = '';
+      setImageStatus('');
+    }
     function renderConversationList() {
       $('conversationList').innerHTML = state.conversations.length ? state.conversations.map((item) =>
         `<button class="conversation-item ${item.id === state.sessionId ? 'active' : ''}" data-conversation-id="${escapeHtml(item.id)}" type="button"><strong>${escapeHtml(item.title)}</strong><span>${item.message_count} 条消息 · ${escapeHtml(formatTime(item.updated_at))}</span></button>`
@@ -744,12 +808,17 @@
       state.sessionId = conversationId; state.messages = messages; state.history = messages.filter((item) => ['user','assistant'].includes(item.role)).slice(-12).map((item) => ({role:item.role, content:item.content}));
       clearRenderedMessages(); state.messages.forEach((item) => {
         const processing = item.processing || {};
-        appendMessage(item.role, item.content, {
-          toolLabel: item.tool_label ?? processing.tool_label,
-          toolSummary: item.tool_summary ?? processing.tool_summary,
-          requiresConfirmation: item.requires_confirmation ?? processing.requires_confirmation,
-          actionSummary: item.action_summary ?? processing.action_summary,
-        }, false);
+          appendMessage(item.role, item.content, {
+            toolLabel: item.tool_label ?? processing.tool_label,
+            toolSummary: item.tool_summary ?? processing.tool_summary,
+            requiresConfirmation: item.requires_confirmation ?? processing.requires_confirmation,
+            actionSummary: item.action_summary ?? processing.action_summary,
+            imageAttached: Boolean(processing.image_attached),
+            visionStatus: processing.vision_status,
+            visionApplied: processing.vision_applied,
+            visionModel: processing.vision_model,
+            visionLatencyMs: processing.vision_latency_ms,
+          }, false);
       });
       if (refreshList) renderConversationList();
     }
@@ -802,9 +871,11 @@
       const row = document.createElement('div'); row.className = `message-row ${role}`;
       const avatar = role === 'assistant' ? '<span class="avatar">Y</span>' : '';
       const message = role === 'assistant' ? formatAgentText(content) : escapeHtml(content);
+      const image = details.imageUrl ? `<img class="message-image" alt="本轮粘贴的图片" src="${escapeHtml(details.imageUrl)}">` : (details.imageAttached ? '<span class="message-image-badge">已附图片</span>' : '');
+      const vision = details.visionStatus && details.visionStatus !== 'not_applicable' ? `<span class="vision-status ${details.visionApplied ? 'ok' : 'warn'}">图片观察：${escapeHtml(visionStatusLabel(details.visionStatus))}${details.visionModel ? ` · ${escapeHtml(details.visionModel)}` : ''}${Number.isInteger(details.visionLatencyMs) ? ` · ${details.visionLatencyMs}ms` : ''}</span>` : '';
       const trace = role === 'assistant' && (details.toolLabel || details.toolSummary) ? `<details class="trace"><summary>查看处理过程</summary><div class="trace-body"><span><strong>查看内容：</strong>${escapeHtml(details.toolLabel || '业务信息')}</span>${details.toolSummary ? `<span><strong>核对结果：</strong>${escapeHtml(details.toolSummary)}</span>` : ''}</div></details>` : '';
       const action = details.requiresConfirmation ? `<div class="action-card"><strong>需要你确认后再执行</strong><p>${escapeHtml(details.actionSummary || '该请求会改变业务状态。')}</p><a class="button small" href="/admin/advanced">进入高级管理确认 ↗</a></div>` : '';
-      row.innerHTML = `${avatar}<div class="message-card"><div class="bubble">${message}</div><div class="message-meta">${role === 'assistant' ? '统筹 Agent' : '你'} · ${new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',hour12:false})}</div>${trace}${action}</div>`;
+      row.innerHTML = `${avatar}<div class="message-card"><div class="bubble">${image}${message}</div><div class="message-meta">${role === 'assistant' ? '统筹 Agent' : '你'} · ${new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',hour12:false})}</div>${vision}${trace}${action}</div>`;
       $('messageList').appendChild(row); $('messageList').scrollTop = $('messageList').scrollHeight; return row.querySelector('.bubble');
     }
 
@@ -816,26 +887,35 @@
     function finishWork() { state.running = false; $('sendButton').disabled = false; $('agentOrbit').classList.remove('active'); clearInterval(state.timer); state.timer = null; setTimeout(() => $('workStatus').hidden = true, 900); }
 
     async function sendMessage(message) {
-      if (state.running || !message.trim()) return;
-      appendMessage('user', message); state.messages.push({role:'user', content:message}); state.history.push({role:'user', content:message}); state.history = state.history.slice(-10);
-      $('messageInput').value = ''; $('messageInput').style.height = '48px'; state.currentMeta = null; state.currentTool = null;
+      const text = String(message || '').trim();
+      const image = state.image;
+      if (state.running) return;
+      if (!text && !image) { setImageStatus('请输入经营目标，或先在输入框粘贴一张图片。'); $('messageInput').focus(); return; }
+      const displayText = image ? (text || '请根据图片说明相关信息。') : text;
+      const imagePreviewUrl = image?.previewUrl || '';
+      appendMessage('user', displayText, {imageUrl:imagePreviewUrl}); state.messages.push({role:'user', content:displayText}); state.history.push({role:'user', content:displayText}); state.history = state.history.slice(-10);
+      $('messageInput').value = ''; $('messageInput').style.height = '48px'; state.currentMeta = null; state.currentTool = null; state.currentVision = null;
       startWork(); let answer = ''; let bubble = null;
       const context = Object.fromEntries([['store_id',$('storeId').value.trim()],['sku_id',$('skuId').value.trim()],['order_id',$('orderId').value.trim()]].filter(([,value]) => value));
+      const imagePayload = image ? {mime_type:image.mime_type, data_base64:image.data_base64} : null;
+      clearWorkspaceImage(false);
       try {
-        await streamWorkspace({message,context}, (event) => {
+        await streamWorkspace({message:text,context,...(imagePayload ? {image:imagePayload} : {})}, (event) => {
           if (event.event === 'status') setWork(event.message || 'Agent 正在工作');
           if (event.event === 'meta') state.currentMeta = event;
           if (event.event === 'tool') state.currentTool = event;
+          if (event.event === 'vision') { state.currentVision = event; setWork(event.message || '正在读取图片'); }
           if (event.event === 'delta') { answer += event.text || ''; if (!bubble) bubble = appendMessage('assistant',''); bubble.textContent = answer; $('messageList').scrollTop = $('messageList').scrollHeight; }
           if (event.event === 'error') throw new Error(event.message || 'Agent 处理失败');
           if (event.event === 'done') {
             const result = event.response || {}; if (!bubble) { answer = result.answer || ''; bubble = appendMessage('assistant', answer); }
             else { bubble.innerHTML = formatAgentText(answer); }
             const card = bubble.closest('.message-card');
-            const details = {toolLabel:result.tool_label || state.currentTool?.tool_label,toolSummary:state.currentTool?.summary,requiresConfirmation:result.requires_confirmation,actionSummary:result.action_summary};
+            const details = {toolLabel:result.tool_label || state.currentTool?.tool_label,toolSummary:state.currentTool?.summary,requiresConfirmation:result.requires_confirmation,actionSummary:result.action_summary,visionStatus:result.vision_status || state.currentVision?.status,visionApplied:result.vision_applied ?? state.currentVision?.applied,visionModel:result.vision_model || state.currentVision?.model,visionLatencyMs:result.vision_latency_ms ?? state.currentVision?.latency_ms};
             if (details.toolLabel || details.toolSummary) card.insertAdjacentHTML('beforeend', `<details class="trace"><summary>查看处理过程</summary><div class="trace-body"><span><strong>查看内容：</strong>${escapeHtml(details.toolLabel || '业务信息')}</span>${details.toolSummary ? `<span><strong>核对结果：</strong>${escapeHtml(details.toolSummary)}</span>` : ''}</div></details>`);
+            if (details.visionStatus && details.visionStatus !== 'not_applicable') card.insertAdjacentHTML('beforeend', `<span class="vision-status ${details.visionApplied ? 'ok' : 'warn'}">图片观察：${escapeHtml(visionStatusLabel(details.visionStatus))}${details.visionModel ? ` · ${escapeHtml(details.visionModel)}` : ''}${Number.isInteger(details.visionLatencyMs) ? ` · ${details.visionLatencyMs}ms` : ''}</span>`);
             if (details.requiresConfirmation) card.insertAdjacentHTML('beforeend', `<div class="action-card"><strong>需要你确认后再执行</strong><p>${escapeHtml(details.actionSummary || '该请求会改变业务状态。')}</p><a class="button small" href="/admin/advanced">进入高级管理确认 ↗</a></div>`);
-            const savedDetails = {toolLabel:details.toolLabel, toolSummary:details.toolSummary, requiresConfirmation:details.requiresConfirmation, actionSummary:details.actionSummary};
+            const savedDetails = {toolLabel:details.toolLabel, toolSummary:details.toolSummary, requiresConfirmation:details.requiresConfirmation, actionSummary:details.actionSummary, visionStatus:details.visionStatus, visionApplied:details.visionApplied, visionModel:details.visionModel, visionLatencyMs:details.visionLatencyMs};
             state.messages.push({role:'assistant', content:answer, details:savedDetails});
             state.history.push({role:'assistant',content:answer}); state.history = state.history.slice(-10);
           }
@@ -880,15 +960,28 @@
       $('customerServiceMode').textContent = enabled ? '已接入' : '可按需启用';
       const vision = multimodal.enabled ? ('图片识别：' + (multimodal.ready ? '可用' : '已配置但未就绪')) : '图片识别：未启用';
       const polishText = polish.enabled ? ('润色：' + (polish.ready ? '可用' : '已配置但未就绪')) : '润色：未启用';
-      $('customerServiceStatus').innerHTML = '<strong>图片客服 + Qwen 润色</strong>' + escapeHtml(vision) + ' · ' + escapeHtml(polishText) + '。仅用于受控客服测试，不会直接发送平台消息。';
+      $('customerServiceStatus').innerHTML = '<strong>统筹图片观察 + 客服润色</strong>' + escapeHtml(vision) + ' · ' + escapeHtml(polishText) + '。统筹入口可直接粘贴图片；客服润色仍在受控测试范围内，不会直接发送平台消息。';
     }
 
     async function loadCapabilities() {
       const data = await api('/v1/admin/workspace/capabilities');
+      const workspace = data.workspace_multimodal || {};
+      if (Array.isArray(workspace.image_mime_types) && workspace.image_mime_types.length) state.imageTypes = workspace.image_mime_types;
+      if (Number.isFinite(Number(workspace.max_image_bytes)) && Number(workspace.max_image_bytes) > 0) state.maxImageBytes = Number(workspace.max_image_bytes);
       renderCustomerServiceCapabilities(data);
     }
 
     $('composer').addEventListener('submit', (event) => { event.preventDefault(); sendMessage($('messageInput').value); });
+    $('chooseWorkspaceImageButton').addEventListener('click', () => $('workspaceImageInput').click());
+    $('clearWorkspaceImageButton').addEventListener('click', () => clearWorkspaceImage());
+    $('workspaceImageInput').addEventListener('change', (event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) setWorkspaceImage(file); });
+    $('messageInput').addEventListener('paste', (event) => {
+      const item = Array.from(event.clipboardData?.items || []).find((entry) => state.imageTypes.includes(entry.type));
+      const file = item?.getAsFile();
+      if (!file) return;
+      event.preventDefault();
+      setWorkspaceImage(file);
+    });
     $('newConversationButton').addEventListener('click', () => createConversation().catch((error) => appendMessage('assistant', `新建会话失败：${error.message}`)));
     $('conversationList').addEventListener('click', (event) => {
       const item = event.target.closest('[data-conversation-id]');

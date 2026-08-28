@@ -10,12 +10,15 @@ from pydantic import BaseModel, ConfigDict, Field
 from fastapi.responses import StreamingResponse
 
 from .auth import AdminPrincipal
+from .schemas import ALLOWED_CHAT_IMAGE_MIME_TYPES, MAX_CHAT_IMAGE_BYTES
 from .text_utils import redact_sensitive
 from .workspace_agent import (
     WorkspaceAgent,
     WorkspaceChatRequest,
     WorkspaceContext,
     WorkspaceHistoryItem,
+    WorkspaceMessageContent,
+    WORKSPACE_IMAGE_ONLY_MESSAGE,
 )
 from .workspace_conversations import derive_workspace_title, redact_workspace_title
 
@@ -29,10 +32,7 @@ class WorkspaceConversationCreateRequest(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=120)
 
 
-class WorkspaceConversationChatRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    message: str = Field(min_length=1, max_length=4000)
+class WorkspaceConversationChatRequest(WorkspaceMessageContent):
     context: WorkspaceContext = Field(default_factory=WorkspaceContext)
 
 
@@ -147,6 +147,13 @@ def build_workspace_router(
             "automatic_writes": False,
             "write_requests": "confirmation_required",
             "tools": agent.tool_catalog(),
+            "workspace_multimodal": {
+                "entrypoint": "/admin",
+                "paste_supported": True,
+                "optional_file_selection": True,
+                "image_mime_types": list(ALLOWED_CHAT_IMAGE_MIME_TYPES),
+                "max_image_bytes": MAX_CHAT_IMAGE_BYTES,
+            },
             "customer_service": {
                 "entrypoint": "/customer-test",
                 "stream_entrypoint": "/v1/test/customer-chat/stream",
@@ -187,6 +194,13 @@ def build_workspace_router(
             conversation_id=conversation_id,
         )
         safe_message, _ = redact_sensitive(payload.message)
+        safe_message = safe_message.strip()
+        effective_message = safe_message or WORKSPACE_IMAGE_ONLY_MESSAGE
+        persisted_message = (
+            f"（已粘贴图片）{effective_message}"
+            if payload.image is not None
+            else effective_message
+        )
         persisted = db.list_workspace_messages(
             tenant_id=admin.tenant_id,
             admin_id=admin.admin_id,
@@ -204,20 +218,25 @@ def build_workspace_router(
                 tenant_id=admin.tenant_id,
                 admin_id=admin.admin_id,
                 conversation_id=conversation_id,
-                title=safe_title(safe_message, derive=True),
+                title=safe_title(
+                    safe_message or "图片咨询",
+                    derive=True,
+                ),
             )
         db.append_workspace_message(
             tenant_id=admin.tenant_id,
             admin_id=admin.admin_id,
             conversation_id=conversation_id,
             role="user",
-            content=safe_message,
+            content=persisted_message,
+            processing={"image_attached": payload.image is not None},
         )
         request = WorkspaceChatRequest(
             session_id=conversation_id,
-            message=safe_message,
+            message=effective_message,
             history=history,
             context=payload.context,
+            image=payload.image,
         )
 
         def events():
@@ -267,6 +286,11 @@ def build_workspace_router(
                                     result.get("requires_confirmation")
                                 ),
                                 "action_summary": result.get("action_summary"),
+                                "image_attached": bool(result.get("image_attached")),
+                                "vision_status": result.get("vision_status"),
+                                "vision_applied": bool(result.get("vision_applied")),
+                                "vision_model": result.get("vision_model"),
+                                "vision_latency_ms": result.get("vision_latency_ms"),
                             },
                             processing={
                                 "stage": message_status,
@@ -276,6 +300,11 @@ def build_workspace_router(
                                 "tool_summary": latest_tool.get("summary"),
                                 "requires_confirmation": bool(result.get("requires_confirmation")),
                                 "action_summary": result.get("action_summary"),
+                                "image_attached": bool(result.get("image_attached")),
+                                "vision_status": result.get("vision_status"),
+                                "vision_applied": bool(result.get("vision_applied")),
+                                "vision_model": result.get("vision_model"),
+                                "vision_latency_ms": result.get("vision_latency_ms"),
                             },
                         )
                     encoded = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
@@ -329,12 +358,16 @@ def build_workspace_router(
         admin: AdminPrincipal = Depends(require_admin),
     ) -> StreamingResponse:
         safe_message, _ = redact_sensitive(payload.message)
+        safe_message = safe_message.strip()
         try:
             agent.service.db.get_or_create_workspace_conversation(
                 tenant_id=admin.tenant_id,
                 admin_id=admin.admin_id,
                 conversation_id=payload.session_id,
-                title=safe_title(safe_message, derive=True),
+                title=safe_title(
+                    safe_message or "图片咨询",
+                    derive=True,
+                ),
             )
         except KeyError:
             raise HTTPException(
@@ -348,6 +381,7 @@ def build_workspace_router(
             WorkspaceConversationChatRequest(
                 message=payload.message,
                 context=payload.context,
+                image=payload.image,
             ),
             admin,
         )

@@ -141,7 +141,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "/v1/chat/stream",
                 "/v1/test/customer-chat",
                 "/v1/test/customer-chat/stream",
-            } or (path.startswith("/v1/chat/sessions/") and path.endswith("/messages"))
+                "/v1/admin/workspace/chat/stream",
+            } or (
+                path.startswith("/v1/admin/workspace/conversations/")
+                and path.endswith("/chat/stream")
+            ) or (
+                path.startswith("/v1/chat/sessions/")
+                and path.endswith("/messages")
+            )
             if not image_chat_path or int(content_length) > MAX_CHAT_IMAGE_REQUEST_BODY_BYTES:
                 return JSONResponse(status_code=413, content={"detail": "request body too large"})
             body = await request.body()

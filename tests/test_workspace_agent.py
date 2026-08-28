@@ -344,6 +344,10 @@ def test_workspace_replaces_default_admin_page_and_preserves_advanced_console(tm
         assert "追踪：</strong>" not in workspace.text
         assert "result.tool_name" not in workspace.text
         assert "/admin/advanced" in workspace.text
+        assert 'id="workspaceImageInput"' in workspace.text
+        assert 'id="clearWorkspaceImageButton"' in workspace.text
+        assert "clipboardData" in workspace.text
+        assert "不需要上传即可驱动图片观察" in workspace.text
 
         advanced = client.get("/admin/advanced")
         assert advanced.status_code == 200
