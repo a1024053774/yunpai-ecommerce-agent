@@ -330,6 +330,65 @@ def test_workspace_single_observe_rejects_answer_that_changes_verified_count(
     assert "critical_value_mismatch" in done["degraded_reasons"]
 
 
+def test_workspace_composite_rejects_answer_that_adds_conflicting_verified_count(
+    tmp_path, monkeypatch
+) -> None:
+    app = create_app(make_settings(tmp_path))
+    service = app.state.agent
+    workspace = app.state.workspace_agent
+    monkeypatch.setattr(
+        service.model,
+        "generate_json",
+        lambda _messages, **_kwargs: {
+            "tasks": [
+                {
+                    "task_id": "modules",
+                    "objective": "核对业务模块",
+                    "tool_name": "get_module_registry",
+                    "arguments": {},
+                    "depends_on": [],
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        workspace,
+        "_run_read_task",
+        lambda task, *_args: WorkspaceTaskResult(
+            task_id=task.task_id,
+            objective=task.objective,
+            tool_name=task.tool_name,
+            tool_label="业务能力情况",
+            status="success",
+            verified_facts=["共登记 13 项业务能力，其中 13 项当前可用。"],
+            critical_values=["13"],
+            structured_data={},
+        ),
+    )
+    monkeypatch.setattr(
+        service.model,
+        "stream_generate",
+        lambda _messages: iter(["当前共登记 13 项业务能力，其中 12 项当前可用。"]),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/admin/workspace/chat/stream",
+            headers=ADMIN_HEADERS,
+            json={
+                "session_id": "workspace:test-composite-conflicting-count-001",
+                "message": "查看当前业务模块。",
+                "history": [],
+                "context": {},
+            },
+        )
+
+    done = _events(response)[-1]["response"]
+    assert "12 项" not in done["answer"]
+    assert "13 项" in done["answer"]
+    assert "critical_value_mismatch" in done["degraded_reasons"]
+
+
 def test_workspace_composite_no_data_cannot_be_rewritten_as_zero(
     tmp_path, monkeypatch
 ) -> None:

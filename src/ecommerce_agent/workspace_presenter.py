@@ -206,8 +206,6 @@ def answer_preserves_critical_values(
         for value in critical_fact_values({"已核实信息": [fact]})
         if str(value)
     }
-    if require_all:
-        return all(value in answer for value in required)
     if not required:
         return True
 
@@ -228,7 +226,9 @@ def answer_preserves_critical_values(
                 continue
             if any(value not in fact_values for value in answer_values):
                 return False
-    return True
+    if not require_all:
+        return True
+    return all(value in answer for value in required)
 
 
 def observation_summary(product_view: dict[str, Any]) -> str:
