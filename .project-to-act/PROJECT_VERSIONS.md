@@ -4,6 +4,8 @@
 
 ## 当前版本
 
+- 当前公网统一 Demo（2026-08-28）：代码提交 51f517423afde667c0664621ed42fb60fb85034b 已推送到 origin/demo/main-multimodal-product-demo，并部署到服务器 /opt/yunpai-ecommerce-agent。/admin、/admin/advanced、/customer-test、持久统筹会话、预测/库存计划/生命周期建议工具、图片 Vision 和 Qwen Polish 均由同一服务提供；schema v39、包版本 0.30.0 保持不变。Nginx 已补齐 /admin/advanced 的受保护 location，执行前后源码/数据备份和发布后备份均已验证。公网只放行受鉴权 virtual 产品测试，不代表生产发布。
+- 下方此前公网产品测试部署条目保留为历史阶段证据；当前代码与服务器状态以本条和 E-20260828-006 为准。
 - 版本号：`0.30.0`。权威来源为 `pyproject.toml` 的 `[project].version` 与
   `src/ecommerce_agent/__init__.py::__version__`；两处必须一致。
 - 发布状态：`main` 已包含 0.30.0 之后的客服、M5-R、M6-R、F-322、知识库和 M7-R WP1～WP4 增量，但这些
@@ -38,6 +40,7 @@
 
 ## 公网产品测试部署候选（未单独升应用版）
 
+- 2026-08-28 统一统筹 Agent 发布：部署对象为 GitHub demo/main-multimodal-product-demo@51f5174；统筹前端、最新商品/预测/库存/生命周期后端和多模态客服共用一个 FastAPI 服务、SQLite 数据库与安全边界。/admin 为主入口，/admin/advanced 为高级后台，/customer-test 为受控图片客服；旧 workspace stream 仅作持久会话兼容入口。Nginx 受保护白名单已包含 /admin/advanced；发布前后备份、服务健康、公网 SSE、Vision/Polish、浏览器桌面/390px 和 console 检查均通过。证据 E-20260828-006；不豁免真实平台、写动作、完整媒体灾备、长稳或生产 Gate。
 - 运行核心：只使用最新电商 `main` 的 M7/M9/schema v39 路径；独立客服仓库只提供新版 UI
   和适用修复来源，不形成第二套业务事实、Agent 路由或数据库。旧 8768/schema v28 实例已
   停止、禁用并删除，数据和源码环境保留加密/受控归档。

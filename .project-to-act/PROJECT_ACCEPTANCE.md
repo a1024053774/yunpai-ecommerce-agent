@@ -5,6 +5,20 @@
 
 ## 当前验收结论
 
+- 结论：2026-08-28 已将最新多模态 Demo 后端与统筹 Agent 前端整合，并把提交
+  51f517423afde667c0664621ed42fb60fb85034b 推送到
+  origin/demo/main-multimodal-product-demo 后部署到公网。/admin 现在是统筹 Agent 主入口，
+  /admin/advanced 是高级后台，/customer-test 保留图片识别与 Qwen 润色体验；统筹工具目录已
+  包含需求预测、库存计划、商品经营建议和建议审计。服务端会话持久化、复合查询失败收口、
+  旧流式入口兼容委托和会话标题脱敏均已纳入实现。代码全量 1473 passed, 1 skipped
+  （344.65 秒），compileall、diff check、managed 台账校验和独立 design-integrity review
+  均通过；唯一 skip 是项目 venv 未安装 Playwright 的既有浏览器测试，另以浏览器运行时完成
+  桌面/390px 页面检查，console error/warning 均为 0。公网有效访问 Cookie 下三个页面、
+  health/ready、统筹能力 API 和客服 profile 均 200；统筹真实 SSE 持久会话、图片 Vision
+  applied、verified_final SSE 和润色安全回退均验证通过。发布前/后加密备份、旧源码归档、
+  systemd、Nginx（补齐 /admin/advanced location）、4090 隧道和端口隔离均复核通过。证据为
+  E-20260828-006；本结论只放行受鉴权 virtual 产品测试，不豁免真实平台渠道/数据/写权限、
+  完整媒体异机灾备、长稳、正式 M8-R WP5 或 G-PROD-001。
 - 结论：2026-08-28 已修复用户在其他电脑看到的统一 `model_unavailable`，证据 ID 为
   E-20260828-005，继续归 G-PRODUCT-DEMO-001。截图会话、同期公网非流式/SSE 与服务器
   直接探针共同确认 DeepSeek `deepseek-v4-flash` 返回 HTTP 402
@@ -678,6 +692,17 @@
 
 ## 证据索引
 
+- E-20260828-006：统筹 Agent 与多模态 Demo 的最终整合、提交、GitHub 推送和公网发布。
+  以红灯复现会话标题隐私、复合读取全失败空历史和旧流式入口不持久化三项问题，修复后
+  hardening 4 passed、工作区相关 81 passed、多模态/M9 相关回归通过，最终全量
+  1473 passed, 1 skipped。提交 51f5174 普通 fast-forward 推送到
+  origin/demo/main-multimodal-product-demo；服务器以临时发布目录切换，保留现有
+  .env、.venv 与数据，schema v39 前向初始化成功。发布前在线/停机备份和发布后备份均
+  通过 backup-verify，Nginx 补齐 /admin/advanced 保护 location。公网无 Cookie 仍 403，
+  有效 Cookie 下页面/API 200；统筹 SSE 持久消息、PNG 图片 Vision、verified_final、
+  Qwen Polish 状态、桌面/390px 浏览器和 console 均通过。服务端关键源码/页面哈希与本地
+  提交一致；独立复审结论为 review passed。本证据不把 virtual Demo 写成真实平台或生产
+  Gate。
 - E-20260825-002：PR #19 对 `8e7ede34225e080f8343138c7060aa216832009f` 最新独立复验
   单一阻断的修复与负责人式开发侧复核。实现提交为
   `f23dba31de755ee7df5dbc0cde894d41c06b47ad`，tree 为
@@ -812,6 +837,7 @@
 
 | 证据 ID | 时间 | 方法或命令 | 退出状态 | 版本或文件哈希 | 结果摘要 | 证据位置 | 有效期 |
 |---|---|---|---|---|---|---|---|
+| E-20260828-006 | 2026-08-28 | 统筹 Agent 与多模态 Demo 的最终整合、提交、GitHub 推送和公网发布；红灯复现并修复标题隐私、复合读取全失败空历史、旧流式入口不持久化；运行 workspace/multimodal/M9 回归、全量 pytest、compileall、diff check、managed 台账校验和独立 design-integrity review；服务器以临时发布目录切换，保留环境/数据，执行前后加密备份；补齐 Nginx /admin/advanced 保护 location；通过公网 Cookie、SSE、图片 Vision、Polish、浏览器桌面/390px 和端口隔离探针 | 全部适用命令退出 0；pytest 1473 passed, 1 skipped，唯一 skip 为项目 venv 未安装 Playwright 的既有测试；独立复审 review passed；Nginx test/reload、服务启动和备份 verify 均通过 | 提交 51f517423afde667c0664621ed42fb60fb85034b；origin/demo/main-multimodal-product-demo；schema v39；包版本 0.30.0；关键服务器源码/页面哈希与提交一致 | /admin、/admin/advanced、/customer-test、health/ready 和能力 API 在有效 Cookie 下 200；统筹 SSE 持久会话无 error；图片请求 verified_final 200、Vision applied；Polish 调用状态可见并在语义保护失败时保留原文；浏览器 console 0 error/warning、390px 无横向溢出；无 Cookie 仍 403 | 本地临时 worktree；服务器 /opt/yunpai-ecommerce-agent、/opt/yunpai-ecommerce-agent-backups、/opt/yunpai-ecommerce-agent-releases、/etc/nginx/snippets/yunpai-product-demo-locations.conf；公网 https://129.211.3.209:8800/ | 仅放行受鉴权 virtual 产品测试；不豁免真实平台渠道/数据/写权限、完整媒体异机灾备、长稳、正式 M8-R WP5 或 G-PROD-001；访问 token 不写入台账 |
 | E-20260828-005 | 2026-08-28 | 以用户截图的会话和两句原话为入口，核对 Nginx/journal/SQLite：SSE 均 HTTP 200 但消息 `route_reason=model_unavailable`。从公网同时重放非流式与 SSE，均稳定 fallback；在服务器用相同 `ModelGateway` 分别做结构化决策与普通生成，均立即得到 DeepSeek HTTP 402，并读取脱敏 provider 错误为 `Insufficient Balance`。检查既有 4090 隧道：18085 为 Qwen3.6-35B，58080 为 Qwen3-14B 润色，58081 为 Qwen2.5-VL。35B 流式 JSON 正常，但普通生成在旧网关下泄漏 thinking；为文本/结构化生成与 probe 各建 Qwen payload 反例，再由单一 `_apply_thinking_config` 映射 `chat_template_kwargs.enable_thinking`。运行聚焦/相关 pytest，并对提交范围做独立只读 design-integrity 复审，推送实现提交；安全转移 35B key 到服务器 0600 文件，备份代码/环境/部署回执后原子切换，只有 gateway probe 与真实商品 smoke 通过才保留。最后从公网按截图原话运行库存/订单 SSE，并在真实浏览器新会话发送库存问题、检查模型行、消息徽章与 console | 用户截图与公网双通道红态稳定；两个新增单例旧代码均 `1 failed`（缺 `chat_template_kwargs`），修复后 `tests/test_llm.py` `26 passed`，模型/流式/集成/API 相关 `44 passed`；独立复审 PASS，扫描器无风险标记。4090 35B thinking-disabled 原生探针、部署 gateway probe、回环商品 smoke、公网两条 SSE 与浏览器均退出 0；收尾再次经公网 Cookie 门发送库存 SSE，得到完整事件且 `model_fallback=false`。一次公网探针因猜错 `demo_subject_id` 返回 SSE error，读取 profile 的权威 ID 后重跑通过；未修改产品代码掩盖探针错误 | 实现提交 `7d5d8eb525e73fce5a7cf5f0a4c7f1d92c8e706b`；父节点 `2960de00c23f47838617578f37a4929a53ec1d9d`；服务器 `llm.py` SHA-256 `a4cc44cd3019b116b71372cacc8433fddf40bb6bda316f603fca675265bc5596`，测试 SHA-256 `9daab23aa0adfb06ee55e21d1e33b900d8a13b8559f1d22dcadb444e09ee71be`；schema v39、包 0.30.0 | DeepSeek 直连为 HTTP 402 `Insufficient Balance`。切换后 health 为 provider `qwen`、主模型 Qwen3.6-35B、thinking false、streaming true；14B polish 与 Qwen-VL 保持 enabled。回环商品 smoke 无 fallback 且命中价格事实；公网库存/订单 SSE 均 200、`model_fallback=false`、3 来源，订单返回 `shipped + exception + 派送地址待核实`。浏览器顶部显示 35B/14B/VL，库存消息无 `model_unavailable` 或兜底，console 0 error/warning。API key 与 `.env` 均 0600；服务/隧道/Nginx/certbot active。Neo4j 可选图谱仍连接拒绝，不影响 SQLite RAG 客服 | 本地 `/Users/luckye/Documents/Code/yunpai-ecommerce-agent-product-demo`；GitHub `origin/demo/main-multimodal-product-demo@7d5d8eb`；服务器 `/opt/yunpai-ecommerce-agent/{.env,.deploy-revision,src/ecommerce_agent/llm.py}`、`/etc/yunpai-product-demo/qwen35b-api-key`；回滚备份 `/var/backups/yunpai-product-demo/qwen35b-switch-20260828T030303Z`；公网 `/customer-test` | Qwen 网关契约、主模型/凭据、4090 18085 服务、隧道、服务器代码或配置、Demo 数据/API/UI 变化前；公网/浏览器为 2026-08-28 瞬时证据。不豁免长稳、真实渠道、正式 Eval、完整媒体灾备、M8-R WP5 或生产 Gate |
 | E-20260828-004 | 2026-08-28 | 读取本地与远端分支状态，确认工作树干净、旧 `codex/main-multimodal-product-demo` 与本地 Head 一致、目标 `demo/main-multimodal-product-demo` 不存在。以 `git branch -m` 改本地名，先用非强制 push + upstream 创建新远端分支；再次用 `ls-remote` 比对新分支与本地 Head 完全一致后，显式删除旧远端分支并 fetch/prune，最后同时查询新旧 refs 与本地 tracking 状态 | 分支检查、本地 rename、新分支 push、Head 比对、旧分支 delete、fetch/prune 与最终核对均退出 0 | 改名前后代码 Head `4f3323abec18afb56ce181cf009e3c2938f89b1e`；实现提交仍为 `f647cfe204ea9dd842da7b1009bdc9426a77cf06`；`origin/main` 仍为 `b77dfeb97583084214afc726ade367f3a7d99cea` | 新远端 `refs/heads/demo/main-multimodal-product-demo` 精确指向 `4f3323a`；旧 `refs/heads/codex/main-multimodal-product-demo` 无结果；本地分支与 upstream 均改为 `demo/main-multimodal-product-demo`。没有改代码、服务器、`main` 或 PR 状态 | 本地 `/Users/luckye/Documents/Code/yunpai-ecommerce-agent-product-demo`；远端 `origin/demo/main-multimodal-product-demo` | 分支名称、远端 ref、提交历史或台账内容变化前；只记录 Git 引用改名，不改变产品 Demo 或生产 Gate |
 | E-20260828-003 | 2026-08-28 | 读取服务器 `.deploy-revision`，确认 base `b77dfeb` 与部署源码树 SHA-256；fetch 最新 origin，确认 `origin/main` 未前移且目标远端分支不存在。全仓 rsync dry-run 首次被一个不属于本次变更、服务器未部署的历史中文文件阻断，随后只对本次 33 个修改文件与 4 个新增文件做 checksum dry-run，除部署后新增的 `.project-to-act` 台账外无差异。`git add -A` 后检查 staged 文件、`.env.example`、禁止凭据文件扩展、高置信度 GitHub/AWS/OpenAI key、私钥头、用户提供密码及公网访问链接；运行 `git diff --cached --check`、project-to-act validate，创建实现提交并以非强制 push 新分支，再用 `git ls-remote` 核对远端 | fetch、范围内 checksum、密钥扫描、diff check、台账 validate、commit、push 与远端核对均退出 0；全仓首次 rsync 因无关历史文件缺失非 0，缩小到本次提交精确文件集后通过。未重复运行 pytest，沿用完全相同运行代码的 E-20260828-001 全量证据 | 实现提交 `f647cfe204ea9dd842da7b1009bdc9426a77cf06`；父节点及 `origin/main` `b77dfeb97583084214afc726ade367f3a7d99cea`；部署源码树 SHA-256 `f04655bc44c9bc5702215ebd73cb12731a461ff7ae58f8150fe0f26d28b376f8` | 37 个文件、6108 insertions、628 deletions 已形成内聚实现提交；远端 `refs/heads/codex/main-multimodal-product-demo` 精确指向 `f647cfe`。未暂存 `.env`、私钥、访问凭证或用户密码；`.env.example` 的 Qwen/视觉 key 为空。GitHub `main` 未改变，无 PR/merge | 本地 `/Users/luckye/Documents/Code/yunpai-ecommerce-agent-product-demo`；远端 `origin/codex/main-multimodal-product-demo`；服务器 `/opt/yunpai-ecommerce-agent/.deploy-revision` | 实现提交、远端分支、部署源码、测试证据或台账内容变化前；只证明源码已安全推送，不扩大 E-20260828-001/002 的产品 Demo 放行范围 |
@@ -944,6 +970,7 @@
 
 | Gate ID | 日期 | Gate | 对象 | 结果 | 证据 ID | 豁免与确认人 |
 |---|---|---|---|---|---|---|
+| G-UNIFIED-AGENT-DEMO-001 | 2026-08-28 | 统筹 Agent 与多模态 Demo 公网发布门 | 提交 51f5174；/admin 统筹入口；/admin/advanced 高级后台；/customer-test 图片客服；预测/库存计划/生命周期建议工具；持久会话与 verified_final SSE；Vision/Polish；Nginx/systemd/备份/端口隔离 | 通过；可交付的受鉴权 virtual 产品测试 | E-20260828-006 | 不豁免真实平台渠道/数据/写权限、完整媒体异机灾备、24/72 小时长稳、正式 M8-R WP5 或 G-PROD-001；访问凭据不写入台账 |
 | G-PRODUCT-DEMO-001 | 2026-08-28 | 公网产品测试部署门 | 最新 main M7/M9/schema v39、多模态媒体、4090 Qwen3.6-35B/Qwen3-14B/Qwen2.5-VL、新版客服 UI、商品/库存/订单、7 天访问链接 Cookie、Admin 回环免二次登录、`verified_final` SSE、备份/旧实例/端口/AgentLoop/证书、GitHub 可追溯 Demo 分支 | 通过；可交产品在受鉴权 virtual 环境测试 | E-20260828-001 至 E-20260828-005 | 仅放行该公网 Demo；DeepSeek 当前余额不足且已退出主链路；不豁免真实平台渠道/数据/写权限、正式 M8-R WP5、完整媒体灾备、24/72h 长稳或 G-PROD-001 |
 | G-M7R-ALL-001 | 2026-08-20 | M7-R WP1～WP4 完整代码级本机门 | v34 统一导入/隐私/来源/证据、八类报表规范化、v35 商品身份与对账、readiness API/页面、显式隔离 Demo、WP5 独立报告与 merge-tip 回归 | 通过；PR #20 已合入并在 `f6bb47c` 复验 | E-20260820-001 | 仅关闭 F-323 代码级本机里程碑；不豁免真实平台字段/数据、真实经营结论、生产发布/权限/写能力或 M8-R～M10-R |
 | G-M7R-WP5-001 | 2026-08-20 | M7-R WP5 独立验收与合入后复验门 | 原独立报告与 6 项探针、补充验收矩阵、mutation 红→绿、桌面/390px、报告/截图哈希 double-check、精确 merge-tip 聚焦/全量/静态门禁 | 通过；独立签署原件保持不变，补充证据不代签 | E-20260820-001 | 只签署已验证代码对象和本机技术 Gate；真实平台接入、业务签署与生产 Gate 无豁免 |
