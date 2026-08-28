@@ -42,7 +42,7 @@
 | F-118 人工接管队列与 SLA | P0 | 已完成 | F-005、F-109、F-115 | 租户队列、确定性路由、优先级、原子认领、容量、负责人门、状态机、转派、备注、L1/L2 SLA、不可变事件历史、worker、API 和后台具备本地并发/迁移/浏览器证据 | schema v19、`src/ecommerce_agent/handoff.py`、`tests/test_handoff_workbench.py`、E-20260722-005 |
 | F-119 坐席调度与智能分配 | P0 | 已完成 | F-002、F-109、F-118 | 凭据、档案、在线租约、队列技能、主队列、全局/队列容量分别建模；领取/转派/自动分配统一校验并原子记录任务和审计；API、迁移和响应式后台有本地证据 | schema v20、`src/ecommerce_agent/handoff_staffing.py`、`tests/test_handoff_staffing.py`、E-20260722-006 |
 | F-120 值守排班与持久自动派单 | P0 | 已完成 | F-115、F-118、F-119 | automatic/manual 与 scheduled/unrestricted 分离；显式 session/连续心跳、UTC 绝对班次、任务/job 同事务、租约并发/恢复、等待/失败、持久告警、管理 API/后台和 health/ready 具备本地证据 | schema v21、`src/ecommerce_agent/handoff_dispatch.py`、`tests/test_handoff_dispatch.py`、E-20260722-007 |
-| F-121 关联虚拟店铺与跨模块场景验收 | P0 | 已完成 | F-117、F-120、F-301 至 F-310 | 显式 virtual 的关联商品/库存/订单/竞品/知识只经公开领域服务导入；全部 available 模块必须有通过场景；重复运行幂等；合成评测隔离；planned 模块和生产边界不虚报 | `fixtures/virtual_store_v1.json`、`simulation.py`、`simulation_api.py`、`tests/test_virtual_store_simulation.py`、E-20260722-008、E-20260810-002 |
+| F-121 关联虚拟店铺与跨模块场景验收 | P0 | 已完成 | F-117、F-120、F-301 至 F-310 | 显式 virtual 的关联商品/库存/订单/竞品/知识只经公开领域服务导入；全部 available 模块必须有通过场景；重复运行幂等；合成评测隔离；planned 模块和生产边界不虚报 | `fixtures/virtual_store_v1.json`、`simulation.py`、`simulation_api.py`、`tests/test_virtual_store_simulation.py`；`simulate-store --load-only` 可只装载同一 fixture 供干净交测库使用，不运行场景验收，见 E-20260722-008、E-20260810-002、E-20260820-006 |
 | F-122 逐场景输入输出证据工作台 | P0 | 已完成 | F-121、F-310 | 每项场景在运行前展示固定调用输入和预期，运行后展示逐项断言与实际领域/Agent/工具输出；页面不自动产生运行副作用，支持模块/状态筛选和桌面/移动阅读 | `simulation-evidence-v1`、`docs/admin-console.html`、`docs/VIRTUAL_STORE_EVIDENCE_0.22.1.md`、E-20260722-009 |
 | F-123 本机顾客对话测试入口 | P1 | 已完成 | F-002、F-109、F-310 | 默认关闭；启用后仅回环客户端可访问；原后台智能客服页可无客户端密钥直测，提供案例和手输消息，复用实际 `AgentService.chat`，显示回答、意图、风险、来源、转人工、会话/追踪号；会话固定写入 simulation 范围；可显式用标准 Chat Completions 测试真实 GLM 模型 | `src/ecommerce_agent/customer_test_api.py`、`src/ecommerce_agent/llm.py`、`docs/admin-console.html`、`docs/TEST_REPORT_0.22.5.md`、`tests/test_llm.py`、`tests/test_admin_console.py`、`tests/test_api.py`、E-20260723-003 |
 | F-201 平台资质与权限审计 | P0 | 进行中 | 目标平台、企业主体、应用类型 | 逐平台确认开发者/服务商资质、可申请权限、审核材料、测试环境、费用、限制和 Owner，并以官方证据标注可信度 | 淘宝：`docs/taobao-api-access-application.md`；全平台：`云湃电商后台接入与客服接管执行调研报告_20260721.md` |
@@ -88,6 +88,10 @@
 
 ## 功能变更历史
 
+- 2026-08-20：F-121 增加 `simulate-store --load-only`。交测启动模板默认在每位测试者自己的
+  Git-ignored SQLite 中幂等装载仓库内置“晴川生活电器旗舰店” fixture，不复制维护者本机
+  数据，也不把完整场景验收或模型调用变成服务启动前置。旧代码反证、`14 passed` 相邻回归、
+  6 商品/10 库存/8 订单隔离库 smoke 及分发边界见 E-20260820-006。
 - 2026-08-20：关闭 F-323 的代码级、本机技术里程碑。WP1 因是 M7-R 与 M8-R～M10-R
   共用基建而先行合入；WP2～WP4 经 PR #20 head `ece61e1` 完成独立 WP5，并合入 `main`
   为 `f6bb47c`。缪海南原报告保持原文归档，实施方补充报告只补齐固定对象、WP1～WP4

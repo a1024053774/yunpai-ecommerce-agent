@@ -404,7 +404,7 @@ def test_endpoints_require_admin(tmp_path) -> None:
 
 
 class _WorkbenchConsoleStructure(HTMLParser):
-    """解析 /admin 页面，收集 M9-R 工作台视图的 id / 导航 / API 引用。"""
+    """解析高级管理页面，收集 M9-R 工作台视图的 id / 导航 / API 引用。"""
 
     def __init__(self) -> None:
         super().__init__()
@@ -420,7 +420,7 @@ class _WorkbenchConsoleStructure(HTMLParser):
 
 
 def test_admin_console_has_m9r_workbench_view(tmp_path) -> None:
-    """P1-3 反例：/admin 页面含「商品经营」工作台视图（真实页面非 dict 冒充）。
+    """P1-3 反例：/admin/advanced 页面含「商品经营」工作台视图（真实页面非 dict 冒充）。
 
     复验指出「WP4 尚无可验收页面，浏览器验收脚本是假绿」——本测试锁定
     admin 页面实际渲染 M9-R 工作台：导航项 + 输入框 + 查询按钮 + loader
@@ -428,7 +428,7 @@ def test_admin_console_has_m9r_workbench_view(tmp_path) -> None:
     """
     app = create_app(make_settings(tmp_path))
     with TestClient(app) as client:
-        page = client.get("/admin")
+        page = client.get("/admin/advanced")
     assert page.status_code == 200
     structure = _WorkbenchConsoleStructure()
     structure.feed(page.text)

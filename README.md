@@ -318,6 +318,8 @@ POST /v1/integrations/taobao/agent-jobs/run
 `repeat_every_weeks`（1–4）和 `occurrences`（2–26）。服务端将其展开为独立的
 UTC 绝对班次；只要任一期与现有有效班次重叠，整批请求就会回滚。
 
+统筹 Agent、多模态客服体验和公网交接入口见 docs/handoff/unified-agent-multimodal-demo.md。
+
 ### 营销与利润模块
 
 ```text

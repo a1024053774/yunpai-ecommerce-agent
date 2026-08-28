@@ -14,6 +14,8 @@ _skill_test/
 .idea/
 env.md
 env_polish.md
+workspace-env.md
+data-workspace-agent/
 
 # 个人排期与执行计划，不随仓库分发
 docs/tasks_intro/
