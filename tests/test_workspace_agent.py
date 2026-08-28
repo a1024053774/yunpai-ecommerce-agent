@@ -11,6 +11,11 @@ from ecommerce_agent.business import CatalogItemUpsert, OrderUpsert
 from ecommerce_agent.business.inventory import InventoryBalanceUpsert
 from ecommerce_agent.business.orders import OrderLineInput
 from ecommerce_agent.llm import ModelError, ModelUnavailableError
+from ecommerce_agent.workspace_agent import WorkspaceAgent
+from ecommerce_agent.workspace_presenter import (
+    answer_preserves_critical_values,
+    present_observation,
+)
 from ecommerce_agent.workspace_read_plan import WorkspaceTaskResult
 
 from conftest import make_settings
@@ -408,6 +413,55 @@ def test_workspace_read_plan_preserves_full_tool_result_before_presentation(
     assert "20 项业务能力" in done["answer"]
     assert "13 项业务能力" not in done["answer"]
     assert done["delivery_mode"] == "verified_final"
+
+
+def test_workspace_deterministic_answer_preserves_every_verified_fact() -> None:
+    forecast_view = present_observation(
+        "get_demand_forecast",
+        {
+            "forecast": {
+                "sku_id": "YP-SKU-001",
+                "status": "degraded",
+                "champion_model": "last_value",
+                "points": [{"p50": "3", "p80": "4", "p95": "5"}],
+            },
+            "freshness": {"status": "stale"},
+        },
+    )
+    plan_view = present_observation(
+        "get_inventory_plan",
+        {
+            "inventory_plan": {
+                "sku_id": "YP-SKU-001",
+                "risk_level": "medium",
+                "recommended_order_qty": "0",
+                "plan_quality": "valid",
+                "action_mode": "advisory_only",
+                "freshness": {"status": "stale"},
+            }
+        },
+    )
+    observations = [
+        {
+            "status": "success",
+            "objective": "核对需求预测",
+            "tool_label": "需求预测",
+            "result": forecast_view,
+        },
+        {
+            "status": "success",
+            "objective": "核对库存计划",
+            "tool_label": "库存计划",
+            "result": plan_view,
+        },
+    ]
+
+    answer = WorkspaceAgent._deterministic_answer(observations, [])
+
+    assert "P50 为 3，P80 为 4，P95 为 5" in answer
+    assert "库存计划质量为有效" in answer
+    assert "库存计划证据新鲜度为已过期" in answer
+    assert answer_preserves_critical_values(answer, observations, require_all=True)
 
 
 def test_workspace_composite_rejects_answer_that_changes_verified_amount(

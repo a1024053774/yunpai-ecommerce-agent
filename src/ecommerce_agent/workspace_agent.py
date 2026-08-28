@@ -1513,14 +1513,13 @@ class WorkspaceAgent:
             result = observation.get("result")
             if not isinstance(result, dict):
                 continue
-            first_fact = ""
+            facts: list[str] = []
             for fact in result.get("已核实信息") or []:
                 text = str(fact).strip()
                 if text:
-                    first_fact = text
-                    break
-            if first_fact:
-                sections.append(f"{objective}：{first_fact}")
+                    facts.append(text)
+            if facts:
+                sections.append(f"{objective}：{' '.join(facts)}")
         if not sections:
             note = next(
                 (

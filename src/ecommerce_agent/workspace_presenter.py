@@ -824,6 +824,10 @@ def _status_label_mentions(
                 position = text.find(alias, start)
                 if position < 0:
                     break
+                following = text[position + len(alias) : position + len(alias) + 1]
+                if following in {"度", "性"}:
+                    start = position + len(alias)
+                    continue
                 prefix = text[:position]
                 negated = bool(
                     re.search(
@@ -887,6 +891,7 @@ def answer_preserves_critical_values(
         f"{source['objective']} {source['tool_label']}" for source in sources
     ]
     source_tokens: list[tuple[set[str], set[Decimal]]] = []
+    required_source_tokens: list[tuple[set[str], set[Decimal]]] = []
     for source in sources:
         identifiers, _ = _critical_tokens(
             " ".join(
@@ -908,9 +913,13 @@ def answer_preserves_critical_values(
             )
         )
         numbers: set[Decimal] = set()
+        required_identifiers: set[str] = set()
+        required_numbers: set[Decimal] = set()
         if source["status"] == "success":
             for fact in source["facts"]:
-                _, fact_numbers = _critical_tokens(fact)
+                fact_identifiers, fact_numbers = _critical_tokens(fact)
+                required_identifiers.update(fact_identifiers)
+                required_numbers.update(fact_numbers)
                 numbers.update(fact_numbers)
         for item in source["field_claims"]:
             if not isinstance(item, dict):
@@ -929,6 +938,7 @@ def answer_preserves_critical_values(
             )
             identifiers.update(claim_identifiers)
         source_tokens.append((identifiers, numbers))
+        required_source_tokens.append((required_identifiers, required_numbers))
 
     seen_tokens: list[tuple[set[str], set[Decimal]]] = [(set(), set()) for _ in sources]
     seen_no_data_sources: set[int] = set()
@@ -1219,7 +1229,9 @@ def answer_preserves_critical_values(
         return False
 
     if require_all:
-        for index, (required_identifiers, required_numbers) in enumerate(source_tokens):
+        for index, (required_identifiers, required_numbers) in enumerate(
+            required_source_tokens
+        ):
             if sources[index]["status"] != "success":
                 continue
             seen_identifiers, seen_numbers = seen_tokens[index]
@@ -1543,8 +1555,8 @@ def _forecast_facts(observation: dict[str, Any]) -> list[str]:
     if points:
         first = _dict(points[0])
         facts.append(
-            f"已固化 {len(points)} 个预测日，首日 P50/P80/P95 为 "
-            f"{first.get('p50', '未知')} / {first.get('p80', '未知')} / {first.get('p95', '未知')}。"
+            f"已固化 {len(points)} 个预测日，首日 P50 为 {first.get('p50', '未知')}，"
+            f"P80 为 {first.get('p80', '未知')}，P95 为 {first.get('p95', '未知')}。"
         )
     freshness = _dict(observation.get("freshness"))
     if freshness:
