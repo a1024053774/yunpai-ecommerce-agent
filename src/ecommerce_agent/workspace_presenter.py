@@ -176,6 +176,7 @@ _STATUS_LABELS_BY_FIELD: dict[str, frozenset[str]] = {
     "统计结论": frozenset(
         {"正向变化", "负向变化", "未检测到明确差异", "暂不能下结论", "被阻断"}
     ),
+    "变化方向": frozenset({"正向", "负向", "无明显方向"}),
     "建议状态": frozenset(
         {"草稿", "待审核", "已批准", "已驳回", "观察中", "已过期", "已关闭"}
     ),
@@ -538,9 +539,7 @@ def critical_fact_claims(
             insight = _dict(item)
             experiment = _dict(insight.get("experiment"))
             experiment_id = experiment.get("experiment_id")
-            evidence = _dict(_dict(insight.get("analysis")).get("evidence"))
-            effect = _dict(evidence.get("effect"))
-            interval = _dict(evidence.get("confidence_interval"))
+            effect, interval = _traffic_effect_fields(_dict(insight.get("analysis")))
             entity = f"实验 {experiment_id or '未提供编号'}"
             add(entity, experiment_id, "变化值", effect.get("absolute"))
             add(entity, experiment_id, "可信区间下限", interval.get("low"))
@@ -736,6 +735,8 @@ def _status_facts(tool_name: str, observation: dict[str, Any]) -> list[dict[str,
                 "证据新鲜度",
                 _dict(insight.get("freshness") or analysis.get("freshness")).get("status"),
             )
+            effect, _ = _traffic_effect_fields(analysis)
+            add(entity, "变化方向", effect.get("direction"))
     elif tool_name in {"list_recommendations", "get_recommendation_audit_trail"}:
         for item in _list(observation.get("items"))[:6]:
             value = _dict(item)
@@ -1597,6 +1598,15 @@ def _finance_facts(observation: dict[str, Any]) -> list[str]:
     return facts
 
 
+def _traffic_effect_fields(
+    analysis: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    return (
+        _dict(analysis.get("effect_estimate")),
+        _dict(analysis.get("confidence_interval")),
+    )
+
+
 def _traffic_insight_facts(observation: dict[str, Any]) -> list[str]:
     sku_id = str(observation.get("sku_id") or "未提供编号")
     insights = _list(observation.get("insights"))
@@ -1609,8 +1619,7 @@ def _traffic_insight_facts(observation: dict[str, Any]) -> list[str]:
         experiment = _dict(insight.get("experiment"))
         analysis = _dict(insight.get("analysis"))
         evidence = _dict(analysis.get("evidence"))
-        effect = _dict(evidence.get("effect"))
-        interval = _dict(evidence.get("confidence_interval"))
+        effect, interval = _traffic_effect_fields(analysis)
         effect_text = effect.get("absolute")
         direction = _status(effect.get("direction") or "neutral")
         experiment_status = _status(experiment.get("status"))

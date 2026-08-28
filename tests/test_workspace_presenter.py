@@ -472,6 +472,14 @@ def test_traffic_status_reads_nested_quality_gate_and_domain_statuses_are_transl
                     },
                     "freshness": {"status": "current"},
                     "analysis": {
+                        "effect_estimate": {
+                            "absolute": 0.03,
+                            "direction": "positive",
+                        },
+                        "confidence_interval": {
+                            "low": 0.019,
+                            "high": 0.041,
+                        },
                         "evidence": {
                             "quality_gate": {"status": "blocked"},
                             "statistical_conclusion": "inconclusive",
@@ -487,6 +495,9 @@ def test_traffic_status_reads_nested_quality_gate_and_domain_statuses_are_transl
     assert "当前有效" in rendered
     assert "被阻断" in rendered
     assert "暂不能下结论" in rendered
+    assert "当前方向为 正向" in rendered
+    assert "变化值为 0.03" in rendered
+    assert "可信区间下限为 0.019，上限为 0.041" in rendered
     assert "fulfilling" not in json.dumps(
         present_observation(
             "get_order_facts",
@@ -513,6 +524,18 @@ def test_traffic_status_reads_nested_quality_gate_and_domain_statuses_are_transl
     }
     assert answer_preserves_critical_values(
         "实验 exp-001 已完成，质量门禁被阻断，证据当前有效。",
+        [result],
+        require_all=False,
+    )
+    assert answer_preserves_critical_values(
+        "实验 exp-001 当前方向正向，变化值为 0.03，"
+        "可信区间下限为 0.019，上限为 0.041。",
+        [result],
+        require_all=False,
+    )
+    assert not answer_preserves_critical_values(
+        "实验 exp-001 当前方向负向，变化值为 0.04，"
+        "可信区间下限为 0.019，上限为 0.041。",
         [result],
         require_all=False,
     )

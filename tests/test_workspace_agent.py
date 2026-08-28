@@ -639,15 +639,15 @@ def test_workspace_deterministic_answer_preserves_traffic_evidence() -> None:
                         "primary_metric": "ctr",
                     },
                     "analysis": {
+                        "effect_estimate": {
+                            "absolute": "0.015",
+                            "direction": "positive",
+                        },
+                        "confidence_interval": {
+                            "low": "0.005",
+                            "high": "0.025",
+                        },
                         "evidence": {
-                            "effect": {
-                                "absolute": "0.015",
-                                "direction": "positive",
-                            },
-                            "confidence_interval": {
-                                "low": "0.005",
-                                "high": "0.025",
-                            },
                             "quality_gate": {"status": "passed"},
                             "statistical_conclusion": "positive_effect",
                         }
