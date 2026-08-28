@@ -4,11 +4,13 @@ import json
 
 from ecommerce_agent.workspace_presenter import (
     TOOL_LABELS,
+    answer_preserves_critical_values,
     critical_fact_values,
     observation_data_status,
     observation_summary,
     present_observation,
 )
+from ecommerce_agent.workspace_read_plan import WorkspaceTaskResult
 
 
 def test_metric_presenter_distinguishes_no_data_from_verified_zero() -> None:
@@ -246,6 +248,88 @@ def test_forecast_and_plan_presenters_hide_internal_status_values() -> None:
     assert "stale" not in forecast_text
     assert "仅建议" in plan_text
     assert "advisory_only" not in plan_text
+
+
+def test_verified_fact_guard_uses_one_contract_for_single_and_composite_results() -> None:
+    ordinary_fact = {
+        "status": "success",
+        "objective": "核对最近收入",
+        "tool_label": "经营指标",
+        "result": {"已核实信息": ["已支付且未取消订单金额为 4181.00 元。"]},
+    }
+    signed_fact = {
+        "status": "success",
+        "objective": "核对预计利润",
+        "tool_label": "利润与结算核对",
+        "result": {"已核实信息": ["预计利润为 -501.00 元。"]},
+    }
+    no_data = {
+        "status": "no_data",
+        "objective": "核对最近收入",
+        "tool_label": "经营指标",
+        "result": {"已核实信息": ["当前查询范围内暂无数据。"]},
+    }
+
+    assert not answer_preserves_critical_values(
+        "最近收入为 4811.00 元。", [ordinary_fact], require_all=False
+    )
+    assert not answer_preserves_critical_values(
+        "预计利润为 501.00 元。", [signed_fact], require_all=False
+    )
+    assert not answer_preserves_critical_values(
+        "最近收入为 0.00 元。", [no_data], require_all=False
+    )
+
+    inventory = WorkspaceTaskResult(
+        task_id="inventory",
+        objective="核对库存",
+        tool_name="get_inventory_risk",
+        tool_label="库存风险",
+        status="success",
+        verified_facts=["共检查 10 个库存记录，其中 4 个需要优先关注。"],
+    )
+    revenue = WorkspaceTaskResult(
+        task_id="revenue",
+        objective="核对收入",
+        tool_name="get_business_metric",
+        tool_label="经营指标",
+        status="success",
+        verified_facts=["已支付收入为 4181.00 元。"],
+    )
+    assert answer_preserves_critical_values(
+        "库存有 10 条记录，其中 4 条需要关注；收入为 4181.00 元。",
+        [inventory, revenue],
+        require_all=False,
+    )
+
+
+def test_verified_fact_guard_rejects_status_reversal_and_maps_current_runtime_values() -> None:
+    view = present_observation(
+        "get_demand_forecast",
+        {
+            "forecast": {
+                "status": "degraded",
+                "champion_model": "rolling_mean",
+            },
+            "freshness": {"status": "superseded"},
+        },
+    )
+    rendered = json.dumps(view, ensure_ascii=False)
+    assert "已降级" in rendered
+    assert "滚动均值模型" in rendered
+    assert "已被新证据替代" in rendered
+    assert "rolling_mean" not in rendered
+    assert "superseded" not in rendered
+
+    result = {
+        "status": "success",
+        "objective": "查看需求预测",
+        "tool_label": "需求预测",
+        "result": view,
+    }
+    assert not answer_preserves_critical_values(
+        "需求预测正常，预测证据新鲜。", [result], require_all=False
+    )
 
 
 def test_operations_report_does_not_forward_long_model_narrative() -> None:

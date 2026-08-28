@@ -151,6 +151,9 @@
     .message-image-badge, .vision-status { display: inline-flex; align-items: center; gap: 5px; margin-bottom: 7px; padding: 3px 7px; border-radius: 4px; background: var(--blue-soft); color: var(--blue); font-size: 10px; }
     .vision-status.ok { background: var(--green-soft); color: var(--green); }
     .vision-status.warn { background: var(--amber-soft); color: var(--amber-dark); }
+    .verified-status { display: inline-flex; align-items: center; gap: 5px; margin: 0 6px 7px 0; padding: 3px 7px; border-radius: 4px; background: var(--blue-soft); color: var(--blue); font-size: 10px; }
+    .verified-status.ok { background: var(--green-soft); color: var(--green); }
+    .verified-status.warn { background: var(--amber-soft); color: var(--amber-dark); }
     .send { width: 48px; height: 48px; padding: 0; border: 0; border-radius: 15px; background: var(--amber); color: #fff; font-size: 20px; }
     .send:hover { background: var(--amber-dark); }
     .send:disabled { opacity: .45; cursor: not-allowed; }
@@ -752,6 +755,8 @@
     const formatTime = (value) => value ? new Date(value).toLocaleString('zh-CN', {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}) : '—';
     const formatBytes = (value) => value < 1024 ? `${value} B` : value < 1024 * 1024 ? `${(value / 1024).toFixed(1)} KiB` : `${(value / 1024 / 1024).toFixed(2)} MiB`;
     const visionStatusLabel = (status) => ({applied:'已解析',disabled:'未启用',misconfigured:'配置不完整',error:'调用失败'}[status] || status || '未知');
+    const degradationLabels = {response_stream_failed:'流式回复中断后已切换稳定模式',response_model_unavailable:'回复模型暂时不可用',response_generation_failed:'回复生成失败后已使用稳定摘要',critical_value_mismatch:'模型数字或状态与已核实事实不一致',planning_model_unavailable:'后续规划模型暂时不可用',planning_output_invalid:'后续规划结果不完整',read_plan_all_failed:'复合核实任务全部失败'};
+    const degradationText = (reasons) => (reasons || []).map((reason) => degradationLabels[reason] || '本轮使用了安全降级').filter((value,index,array) => array.indexOf(value) === index).join('；');
 
     const newWorkspaceSessionId = () => `workspace:${crypto.randomUUID ? crypto.randomUUID() : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`}`;
     function clearRenderedMessages() {
@@ -823,6 +828,10 @@
             visionApplied: processing.vision_applied,
             visionModel: processing.vision_model,
             visionLatencyMs: processing.vision_latency_ms,
+            deliveryMode: processing.delivery_mode,
+            degraded: Boolean(processing.degraded),
+            degradedReasons: processing.degraded_reasons || [],
+            completionStatus: processing.completion_status,
           }, false);
       });
       if (refreshList) renderConversationList();
@@ -873,6 +882,12 @@
       if (buffer.trim()) emit(buffer);
     }
 
+    function appendMessageBadges(card, details) {
+      if (!card || details.deliveryMode !== 'verified_final' && !details.degraded) return;
+      if (details.deliveryMode === 'verified_final') card.insertAdjacentHTML('beforeend', '<span class="verified-status ok">回复已完成事实校验</span>');
+      if (details.degraded) card.insertAdjacentHTML('beforeend', '<span class="verified-status warn">安全降级：' + escapeHtml(degradationText(details.degradedReasons) || '本轮未使用原始模型回复') + '</span>');
+    }
+
     function appendMessage(role, content, details = {}, persist = false) {
       const row = document.createElement('div'); row.className = `message-row ${role}`;
       const avatar = role === 'assistant' ? '<span class="avatar">Y</span>' : '';
@@ -883,6 +898,7 @@
       const trace = role === 'assistant' && (details.toolLabel || details.toolSummary) ? `<details class="trace"><summary>查看处理过程</summary><div class="trace-body"><span><strong>查看内容：</strong>${escapeHtml(details.toolLabel || '业务信息')}</span>${details.toolSummary ? `<span><strong>核对结果：</strong>${escapeHtml(details.toolSummary)}</span>` : ''}</div></details>` : '';
       const action = details.requiresConfirmation ? `<div class="action-card"><strong>需要你确认后再执行</strong><p>${escapeHtml(details.actionSummary || '该请求会改变业务状态。')}</p><a class="button small" href="/admin/advanced">进入高级管理确认 ↗</a></div>` : '';
       row.innerHTML = `${avatar}<div class="message-card"><div class="bubble">${image}${message}</div><div class="message-meta">${role === 'assistant' ? '统筹 Agent' : '你'} · ${new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',hour12:false})}</div>${vision}${trace}${action}</div>`;
+      appendMessageBadges(row.querySelector('.message-card'), details);
       $('messageList').appendChild(row); $('messageList').scrollTop = $('messageList').scrollHeight; return row.querySelector('.bubble');
     }
 
@@ -919,10 +935,11 @@
             else { bubble.innerHTML = formatAgentText(answer); }
             const card = bubble.closest('.message-card');
             const details = {toolLabel:result.tool_label || state.currentTool?.tool_label,toolSummary:state.currentTool?.summary,requiresConfirmation:result.requires_confirmation,actionSummary:result.action_summary,visionStatus:result.vision_status || state.currentVision?.status,visionApplied:result.vision_applied ?? state.currentVision?.applied,visionModel:result.vision_model || state.currentVision?.model,visionLatencyMs:result.vision_latency_ms ?? state.currentVision?.latency_ms};
+            appendMessageBadges(card, {deliveryMode:result.delivery_mode, degraded:result.degraded, degradedReasons:result.degraded_reasons || []});
             if (details.toolLabel || details.toolSummary) card.insertAdjacentHTML('beforeend', `<details class="trace"><summary>查看处理过程</summary><div class="trace-body"><span><strong>查看内容：</strong>${escapeHtml(details.toolLabel || '业务信息')}</span>${details.toolSummary ? `<span><strong>核对结果：</strong>${escapeHtml(details.toolSummary)}</span>` : ''}</div></details>`);
             if (details.visionStatus && details.visionStatus !== 'not_applicable') card.insertAdjacentHTML('beforeend', `<span class="vision-status ${details.visionApplied ? 'ok' : 'warn'}">图片观察：${escapeHtml(visionStatusLabel(details.visionStatus))}${details.visionModel ? ` · ${escapeHtml(details.visionModel)}` : ''}${Number.isInteger(details.visionLatencyMs) ? ` · ${details.visionLatencyMs}ms` : ''}</span>`);
             if (details.requiresConfirmation) card.insertAdjacentHTML('beforeend', `<div class="action-card"><strong>需要你确认后再执行</strong><p>${escapeHtml(details.actionSummary || '该请求会改变业务状态。')}</p><a class="button small" href="/admin/advanced">进入高级管理确认 ↗</a></div>`);
-            const savedDetails = {toolLabel:details.toolLabel, toolSummary:details.toolSummary, requiresConfirmation:details.requiresConfirmation, actionSummary:details.actionSummary, visionStatus:details.visionStatus, visionApplied:details.visionApplied, visionModel:details.visionModel, visionLatencyMs:details.visionLatencyMs};
+            const savedDetails = {toolLabel:details.toolLabel, toolSummary:details.toolSummary, requiresConfirmation:details.requiresConfirmation, actionSummary:details.actionSummary, visionStatus:details.visionStatus, visionApplied:details.visionApplied, visionModel:details.visionModel, visionLatencyMs:details.visionLatencyMs, deliveryMode:result.delivery_mode, degraded:result.degraded, degradedReasons:result.degraded_reasons || [], completionStatus:result.completion_status};
             state.messages.push({role:'assistant', content:answer, details:savedDetails});
             state.history.push({role:'assistant',content:answer}); state.history = state.history.slice(-10);
           }

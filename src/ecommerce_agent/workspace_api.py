@@ -4,6 +4,7 @@ import json
 import logging
 import uuid
 from collections.abc import Callable
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
@@ -11,6 +12,7 @@ from fastapi.responses import StreamingResponse
 
 from .auth import AdminPrincipal
 from .schemas import ALLOWED_CHAT_IMAGE_MIME_TYPES, MAX_CHAT_IMAGE_BYTES
+from .service import VERIFIED_FINAL_DELIVERY_MODE
 from .text_utils import redact_sensitive
 from .workspace_agent import (
     WorkspaceAgent,
@@ -248,6 +250,11 @@ def build_workspace_router(
 
         def events():
             latest_tool: dict = {}
+            processing: dict[str, Any] = {
+                "stage": "generating",
+                "delivery_mode": VERIFIED_FINAL_DELIVERY_MODE,
+            }
+            current_status = "generating"
             placeholder = db.append_workspace_message(
                 tenant_id=admin.tenant_id,
                 admin_id=admin.admin_id,
@@ -255,13 +262,66 @@ def build_workspace_router(
                 role="assistant",
                 content="",
                 status="generating",
-                processing={"stage": "generating"},
+                processing=processing,
             )
             message_id = placeholder["id"]
+
+            def save_message(
+                updates: dict[str, Any],
+                *,
+                status: str | None = None,
+                content: str | None = None,
+                metadata: dict[str, Any] | None = None,
+            ) -> None:
+                nonlocal current_status
+                processing.update(updates)
+                if status is not None:
+                    current_status = status
+                db.update_workspace_message(
+                    tenant_id=admin.tenant_id,
+                    admin_id=admin.admin_id,
+                    conversation_id=conversation_id,
+                    message_id=message_id,
+                    status=current_status,
+                    content=content,
+                    processing=dict(processing),
+                    metadata=metadata,
+                )
+
             try:
                 for event in agent.stream(request, admin):
+                    event_name = event.get("event")
+                    if event_name == "status":
+                        save_message(
+                            {
+                                "stage": str(event.get("stage") or "processing"),
+                                "status_message": redact_sensitive(
+                                    str(event.get("message") or "")
+                                )[0][:500],
+                            }
+                        )
                     if event.get("event") == "tool":
                         latest_tool = event
+                        tool_event = {
+                            "tool_name": event.get("tool_name"),
+                            "tool_label": event.get("tool_label"),
+                            "status": event.get("status"),
+                            "summary": redact_sensitive(
+                                str(event.get("summary") or "")
+                            )[0][:1200],
+                            "task_id": event.get("task_id"),
+                        }
+                        tool_events = list(processing.get("tool_events") or [])
+                        tool_events.append(tool_event)
+                        save_message(
+                            {
+                                "stage": "observing",
+                                "tool_name": event.get("tool_name"),
+                                "tool_label": event.get("tool_label"),
+                                "tool_summary": tool_event["summary"],
+                                "tool_events": tool_events[-12:],
+                            }
+                        )
                     if event.get("event") == "vision":
                         db.update_workspace_message(
                             tenant_id=admin.tenant_id,
@@ -270,6 +330,23 @@ def build_workspace_router(
                             message_id=user_message_id,
                             status="completed",
                             processing=workspace_vision_processing(event),
+                        )
+                    if event_name == "error":
+                        error_code = str(event.get("code") or "workspace_error")[:120]
+                        error_message = redact_sensitive(
+                            str(event.get("message") or "本轮回答未完成，请稍后重试。")
+                        )[0][:500]
+                        save_message(
+                            {
+                                "stage": "error",
+                                "error_code": error_code,
+                                "error_message": error_message,
+                                "retry_advised": bool(event.get("retry_advised")),
+                                "trace_id": event.get("trace_id"),
+                            },
+                            status="incomplete",
+                            content="本轮回答未完成，请稍后重试。",
+                            metadata={"trace_id": event.get("trace_id")},
                         )
                     if event.get("event") == "done":
                         result = event.get("response") or {}
@@ -286,6 +363,38 @@ def build_workspace_router(
                         )
                         if not safe_answer.strip():
                             safe_answer = "本轮核实未完成，请稍后重试。"
+                        degraded_reasons = [
+                            redact_sensitive(str(item))[0][:120]
+                            for item in (result.get("degraded_reasons") or [])
+                            if str(item).strip()
+                        ]
+                        processing_updates = {
+                            "stage": message_status,
+                            "delivery_mode": str(
+                                result.get("delivery_mode")
+                                or VERIFIED_FINAL_DELIVERY_MODE
+                            ),
+                            "trace_id": result.get("trace_id"),
+                            "tool_name": result.get("tool_name"),
+                            "tool_label": result.get("tool_label"),
+                            "tool_summary": latest_tool.get("summary"),
+                            "requires_confirmation": bool(
+                                result.get("requires_confirmation")
+                            ),
+                            "action_summary": result.get("action_summary"),
+                            "image_attached": bool(result.get("image_attached")),
+                            "vision_status": result.get("vision_status"),
+                            "vision_applied": bool(result.get("vision_applied")),
+                            "vision_model": result.get("vision_model"),
+                            "vision_latency_ms": result.get("vision_latency_ms"),
+                            "completion_status": completion_status,
+                            "degraded": bool(result.get("degraded")),
+                            "degraded_reasons": degraded_reasons,
+                            "decision_steps": result.get("decision_steps"),
+                            "limit_reached": bool(result.get("limit_reached")),
+                            "mode": result.get("mode"),
+                            "reason": result.get("reason"),
+                        }
                         db.update_workspace_message(
                             tenant_id=admin.tenant_id,
                             admin_id=admin.admin_id,
@@ -308,21 +417,10 @@ def build_workspace_router(
                                 "vision_model": result.get("vision_model"),
                                 "vision_latency_ms": result.get("vision_latency_ms"),
                             },
-                            processing={
-                                "stage": message_status,
-                                "trace_id": result.get("trace_id"),
-                                "tool_name": result.get("tool_name"),
-                                "tool_label": result.get("tool_label"),
-                                "tool_summary": latest_tool.get("summary"),
-                                "requires_confirmation": bool(result.get("requires_confirmation")),
-                                "action_summary": result.get("action_summary"),
-                                "image_attached": bool(result.get("image_attached")),
-                                "vision_status": result.get("vision_status"),
-                                "vision_applied": bool(result.get("vision_applied")),
-                                "vision_model": result.get("vision_model"),
-                                "vision_latency_ms": result.get("vision_latency_ms"),
-                            },
+                            processing={**processing, **processing_updates},
                         )
+                        processing.update(processing_updates)
+                        current_status = message_status
                     encoded = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
                     yield f"data: {encoded}\n\n"
             except Exception as exc:
@@ -334,14 +432,17 @@ def build_workspace_router(
                     type(exc).__name__,
                     redact_sensitive(str(exc))[0],
                 )
-                db.update_workspace_message(
-                    tenant_id=admin.tenant_id,
-                    admin_id=admin.admin_id,
-                    conversation_id=conversation_id,
-                    message_id=message_id,
+                save_message(
+                    {
+                        "stage": "error",
+                        "error_code": "workspace_stream_failed",
+                        "error_type": type(exc).__name__,
+                        "error_message": message,
+                        "trace_id": trace_id,
+                    },
                     status="incomplete",
                     content=message,
-                    processing={"stage": "error", "error_type": type(exc).__name__},
+                    metadata={"trace_id": trace_id},
                 )
                 yield f"data: {json.dumps({'event': 'error', 'code': 'workspace_stream_failed', 'message': message, 'trace_id': trace_id}, ensure_ascii=False)}\n\n"
             finally:
@@ -352,14 +453,15 @@ def build_workspace_router(
                     message_id=message_id,
                 )
                 if current is not None and current["status"] == "generating":
-                    db.update_workspace_message(
-                        tenant_id=admin.tenant_id,
-                        admin_id=admin.admin_id,
-                        conversation_id=conversation_id,
-                        message_id=message_id,
+                    save_message(
+                        {
+                            "stage": "error",
+                            "error_code": "generator_exit",
+                            "error_type": "generator_exit",
+                            "error_message": "本轮回答未完成，请稍后重试。",
+                        },
                         status="incomplete",
                         content="本轮回答未完成，请稍后重试。",
-                        processing={"stage": "error", "error_type": "generator_exit"},
                     )
 
         return StreamingResponse(

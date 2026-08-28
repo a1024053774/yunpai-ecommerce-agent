@@ -21,7 +21,7 @@ from .evolution import EvolutionService
 from .llm import ModelError, ModelUnavailableError
 from .policy import is_business_action_request
 from .schemas import ChatImageInput, ChatMessageContent
-from .service import AgentService
+from .service import AgentService, VERIFIED_FINAL_DELIVERY_MODE
 from .text_utils import redact_sensitive
 from .tools import ToolExecutionContext
 from .workspace_presenter import (
@@ -466,6 +466,7 @@ class WorkspaceAgent:
             yield {
                 "event": "meta",
                 "trace_id": trace_id,
+                "delivery_mode": VERIFIED_FINAL_DELIVERY_MODE,
                 "prompt_version": WORKSPACE_PROMPT_VERSION,
                 "decision_step": decision_steps,
                 "plan": {
@@ -534,12 +535,16 @@ class WorkspaceAgent:
                 continue
 
             product_view = present_observation(plan.tool_name, observation)
+            observation_status = observation_data_status(plan.tool_name or "", observation)
             observations.append(
                 {
                     "tool_name": plan.tool_name,
                     "tool_label": selected_label,
                     "arguments": plan.arguments,
                     "result": product_view,
+                    "status": observation_status,
+                    "objective": plan.reason,
+                    "status_facts": product_view.get("已核实状态", []),
                 }
             )
             yield {
@@ -615,9 +620,7 @@ class WorkspaceAgent:
                 candidate_answer = "".join(
                     self.service.model.stream_generate(messages)
                 )
-                if answer_preserves_critical_values(
-                    candidate_answer, observations, require_all=False
-                ):
+                if answer_preserves_critical_values(candidate_answer, observations):
                     answer = candidate_answer
                 else:
                     degraded_reasons.append("critical_value_mismatch")
@@ -634,6 +637,7 @@ class WorkspaceAgent:
                 }
                 yield {"event": "delta", "text": answer}
             except ModelError:
+                degraded_reasons.append("response_stream_failed")
                 if answer:
                     yield {
                         "event": "error",
@@ -649,9 +653,7 @@ class WorkspaceAgent:
                 }
                 try:
                     candidate_answer = self.service.model.generate(messages).strip()
-                    if answer_preserves_critical_values(
-                        candidate_answer, observations, require_all=False
-                    ):
+                    if answer_preserves_critical_values(candidate_answer, observations):
                         answer = candidate_answer
                     else:
                         degraded_reasons.append("critical_value_mismatch")
@@ -681,6 +683,7 @@ class WorkspaceAgent:
             "response": {
                 "answer": answer.strip(),
                 "trace_id": trace_id,
+                "delivery_mode": VERIFIED_FINAL_DELIVERY_MODE,
                 "mode": plan.mode,
                 "tool_name": selected_name,
                 "tool_label": selected_label,
@@ -858,6 +861,7 @@ class WorkspaceAgent:
         yield {
             "event": "meta",
             "trace_id": trace_id,
+            "delivery_mode": VERIFIED_FINAL_DELIVERY_MODE,
             "prompt_version": WORKSPACE_PROMPT_VERSION,
             "decision_step": 1,
             "plan": {
@@ -875,6 +879,7 @@ class WorkspaceAgent:
                 "response": {
                     "answer": answer,
                     "trace_id": trace_id,
+                    "delivery_mode": VERIFIED_FINAL_DELIVERY_MODE,
                     "mode": "answer",
                     "tool_name": None,
                     "tool_label": tool_label(None),
@@ -938,6 +943,7 @@ class WorkspaceAgent:
                     "result": {
                         "查询内容": result.tool_label,
                         "已核实信息": result.verified_facts,
+                        "已核实状态": result.status_facts,
                     },
                     "task_id": result.task_id,
                     "objective": result.objective,
@@ -956,6 +962,7 @@ class WorkspaceAgent:
                 "response": {
                     "answer": "所有核实任务均未完成，请稍后重试。",
                     "trace_id": trace_id,
+                    "delivery_mode": VERIFIED_FINAL_DELIVERY_MODE,
                     "mode": "answer",
                     "tool_name": None,
                     "tool_label": tool_label(None),
@@ -1022,6 +1029,7 @@ class WorkspaceAgent:
             "response": {
                 "answer": answer.strip(),
                 "trace_id": trace_id,
+                "delivery_mode": VERIFIED_FINAL_DELIVERY_MODE,
                 "mode": "answer",
                 "tool_name": last_tool,
                 "tool_label": tool_label(last_tool),
@@ -1099,6 +1107,11 @@ class WorkspaceAgent:
             critical_values=(
                 critical_fact_values(product_view) if status == "success" else []
             ),
+            status_facts=[
+                item
+                for item in product_view.get("已核实状态") or []
+                if isinstance(item, dict)
+            ],
             structured_data=observation,
         )
 

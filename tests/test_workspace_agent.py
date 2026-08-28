@@ -558,6 +558,8 @@ def test_workspace_stream_routes_to_real_overview_and_exposes_progress(
     assert done["tool_label"] == "经营全局概况"
     assert done["requires_confirmation"] is False
     assert done["trace_id"].startswith("workspace-")
+    meta = next(event for event in events if event["event"] == "meta")
+    assert meta["delivery_mode"] == "verified_final"
     answer_payload = response_messages[-1]["content"]
     assert '"已核实结果"' in answer_payload
     assert '"verified_result"' not in answer_payload
@@ -654,6 +656,94 @@ def test_workspace_falls_back_when_stream_fails_before_any_delta(
     )
     assert not any(event["event"] == "error" for event in events)
     assert events[-1]["response"]["answer"] == "整机状态已经核实。"
+
+
+def test_workspace_persists_fallback_reason_in_processing_history(tmp_path, monkeypatch) -> None:
+    app = create_app(make_settings(tmp_path))
+    service = app.state.agent
+    monkeypatch.setattr(
+        service.model,
+        "generate_json",
+        lambda messages, **kwargs: {
+            "mode": "observe",
+            "tool_name": "get_workspace_overview",
+            "arguments": {},
+            "reason": "核对整机状态",
+        },
+    )
+
+    def broken_stream(messages):
+        raise ModelError("empty stream")
+        yield ""
+
+    monkeypatch.setattr(service.model, "stream_generate", broken_stream)
+    monkeypatch.setattr(service.model, "generate", lambda messages: "整机状态已经核实。")
+
+    with TestClient(app) as client:
+        conversation = client.post(
+            "/v1/admin/workspace/conversations", headers=ADMIN_HEADERS
+        ).json()
+        response = client.post(
+            f"/v1/admin/workspace/conversations/{conversation['id']}/chat/stream",
+            headers=ADMIN_HEADERS,
+            json={"message": "现在系统怎么样？", "context": {}},
+        )
+        messages = client.get(
+            f"/v1/admin/workspace/conversations/{conversation['id']}/messages",
+            headers=ADMIN_HEADERS,
+        ).json()
+
+    assert response.status_code == 200
+    processing = messages[-1]["processing"]
+    assert "response_stream_failed" in processing["degraded_reasons"]
+
+
+def test_workspace_persists_fact_conflict_reason_in_processing_history(tmp_path, monkeypatch) -> None:
+    app = create_app(make_settings(tmp_path))
+    service = app.state.agent
+    workspace = app.state.workspace_agent
+    monkeypatch.setattr(
+        service.model,
+        "generate_json",
+        lambda messages, **kwargs: {
+            "mode": "observe",
+            "tool_name": "get_module_registry",
+            "arguments": {},
+            "reason": "核对业务模块",
+        },
+    )
+    monkeypatch.setattr(
+        service.model,
+        "stream_generate",
+        lambda messages: iter(["当前共登记 13 项业务能力，其中 12 项当前可用。"]),
+    )
+    monkeypatch.setattr(
+        workspace,
+        "_execute",
+        lambda *_args, **_kwargs: {
+            "modules": [
+                {"display_name": "商品管理", "status": "available"}
+                for _ in range(13)
+            ]
+        },
+    )
+
+    with TestClient(app) as client:
+        conversation = client.post(
+            "/v1/admin/workspace/conversations", headers=ADMIN_HEADERS
+        ).json()
+        response = client.post(
+            f"/v1/admin/workspace/conversations/{conversation['id']}/chat/stream",
+            headers=ADMIN_HEADERS,
+            json={"message": "查看当前业务模块。", "context": {}},
+        )
+        messages = client.get(
+            f"/v1/admin/workspace/conversations/{conversation['id']}/messages",
+            headers=ADMIN_HEADERS,
+        ).json()
+
+    assert response.status_code == 200
+    assert "critical_value_mismatch" in messages[-1]["processing"]["degraded_reasons"]
 
 
 def test_workspace_never_executes_write_requests_without_confirmation(

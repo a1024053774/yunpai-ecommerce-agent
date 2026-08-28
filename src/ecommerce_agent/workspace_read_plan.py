@@ -44,6 +44,7 @@ class WorkspaceTaskResult(BaseModel):
     status: Literal["success", "no_data", "failed", "skipped"]
     verified_facts: list[str] = Field(default_factory=list)
     critical_values: list[str] = Field(default_factory=list)
+    status_facts: list[dict[str, str]] = Field(default_factory=list)
     error_summary: str | None = None
     data_as_of: str | None = None
     structured_data: dict[str, Any] = Field(default_factory=dict, exclude=True)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 
@@ -68,11 +69,80 @@ STATUS_LABELS: dict[str, str] = {
     "unknown": "未知",
     "degraded": "已降级",
     "fresh": "新鲜",
+    "current": "当前有效",
     "stale": "已过期",
+    "superseded": "已被新证据替代",
+    "future": "未来数据",
     "last_value": "最近值模型",
+    "seasonal_naive_7": "七日季节性模型",
+    "rolling_mean": "滚动均值模型",
+    "weighted_moving_average": "加权移动平均模型",
+    "ewma": "指数加权模型",
+    "croston": "Croston 间歇需求模型",
+    "tsb": "TSB 间歇需求模型",
+    "尚未选定": "尚未选定",
+    "standard": "标准",
+    "withheld": "暂不提供",
+    "failed": "失败",
+    "partial": "部分完成",
+    "passed": "通过",
+    "blocked": "被阻断",
+    "missing": "缺失",
+    "not_required": "无需运行",
+    "not_generated": "尚未生成",
+    "unavailable": "不可用",
+    "generated": "已生成",
+    "not_applicable": "不适用",
+    "inconclusive": "暂不能下结论",
+    "supported": "支持",
+    "ready": "就绪",
+    "running": "运行中",
+    "paused": "已暂停",
+    "invalid": "无效",
+    "limited_passed": "有限通过",
+    "needs_review": "待复核",
+    "unpaid": "未支付",
+    "collected": "已揽收",
+    "in_transit": "运输中",
+    "exception": "物流异常",
+    "open": "待处理",
+    "reviewing": "复核中",
+    "ignored": "已忽略",
+    "ended": "已结束",
+    "true": "是",
+    "false": "否",
     "advisory": "仅建议",
     "advisory_only": "仅建议",
 }
+
+
+STATUS_CONFLICTS: dict[str, frozenset[str]] = {
+    "已降级": frozenset({"正常", "标准", "通过", "新鲜", "当前有效", "已完成", "可用", "就绪"}),
+    "失败": frozenset({"正常", "标准", "通过", "已完成", "可用", "就绪"}),
+    "不可用": frozenset({"正常", "标准", "通过", "已完成", "可用", "就绪", "新鲜"}),
+    "缺失": frozenset({"正常", "标准", "通过", "已完成", "可用", "就绪", "新鲜"}),
+    "被阻断": frozenset({"正常", "标准", "通过", "已完成", "可用", "就绪"}),
+    "已过期": frozenset({"新鲜", "当前有效", "正常", "通过"}),
+    "已被新证据替代": frozenset({"新鲜", "当前有效", "正常", "通过"}),
+    "新鲜": frozenset({"已过期", "已被新证据替代", "已降级"}),
+    "当前有效": frozenset({"已过期", "已被新证据替代", "已降级"}),
+    "严重": frozenset({"低", "正常", "健康", "无风险"}),
+    "高": frozenset({"低", "正常", "健康", "无风险"}),
+    "低": frozenset({"高", "严重", "临近缺货", "需要补货"}),
+}
+
+
+MODEL_LABELS = frozenset(
+    {
+        "最近值模型",
+        "七日季节性模型",
+        "滚动均值模型",
+        "加权移动平均模型",
+        "指数加权模型",
+        "Croston 间歇需求模型",
+        "TSB 间歇需求模型",
+    }
+)
 
 
 def tool_label(tool_name: str | None) -> str:
@@ -121,6 +191,7 @@ def present_observation(tool_name: str | None, observation: dict[str, Any]) -> d
     return {
         "查询内容": tool_label(tool_name),
         "已核实信息": facts or ["目前没有查到对应记录。"],
+        "已核实状态": _status_facts(tool_name or "", observation),
     }
 
 
@@ -130,7 +201,11 @@ def observation_data_status(
     if tool_name == "get_business_metric":
         quality = str(observation.get("quality") or "")
         evidence_count = _number(observation.get("evidence_count"))
-        if quality == "no_data" or evidence_count == 0:
+        if (
+            quality in {"no_data", "missing"}
+            or evidence_count == 0
+            or observation.get("value") is None
+        ):
             return "no_data"
     if tool_name == "get_inventory_risk" and not _list(observation.get("risks")):
         return "no_data"
@@ -148,7 +223,9 @@ def observation_data_status(
 def critical_fact_values(product_view: dict[str, Any]) -> list[str]:
     values: list[str] = []
     identifier_pattern = re.compile(r"\b(?=[A-Za-z0-9-]*\d)[A-Za-z][A-Za-z0-9-]*\b")
-    number_pattern = re.compile(r"(?<![A-Za-z0-9])\d+(?:\.\d+)?")
+    number_pattern = re.compile(
+        r"(?<![A-Za-z0-9-])[+-]?\d+(?:\.\d+)?(?![A-Za-z0-9-])"
+    )
     for fact in product_view.get("已核实信息") or []:
         text = str(fact)
         for match in [*identifier_pattern.findall(text), *number_pattern.findall(text)]:
@@ -157,17 +234,104 @@ def critical_fact_values(product_view: dict[str, Any]) -> list[str]:
     return values
 
 
-def _verified_fact_sentences(result: Any) -> list[str]:
+def _numeric_key(value: str) -> Decimal | None:
+    try:
+        return Decimal(value.replace(",", ""))
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def _critical_tokens(text: str) -> tuple[set[str], set[Decimal]]:
+    values = {str(value) for value in critical_fact_values({"已核实信息": [text]})}
+    identifiers = {
+        value
+        for value in values
+        if re.fullmatch(r"[A-Za-z][A-Za-z0-9-]*", value)
+    }
+    numbers = {
+        number
+        for value in values - identifiers
+        if (number := _numeric_key(value)) is not None
+    }
+    return identifiers, numbers
+
+
+def _status_facts(tool_name: str, observation: dict[str, Any]) -> list[dict[str, str]]:
+    facts: list[dict[str, str]] = []
+
+    def add(subject: str, value: Any) -> None:
+        if value in (None, ""):
+            return
+        facts.append({"主题": subject, "状态": _status(value)})
+
+    if tool_name == "get_demand_forecast":
+        forecast = _dict(observation.get("forecast"))
+        add("需求预测", forecast.get("status"))
+        add("预测模型", forecast.get("champion_model"))
+        freshness = _dict(observation.get("freshness"))
+        add("预测证据新鲜度", freshness.get("status"))
+    elif tool_name == "get_inventory_plan":
+        plan = _dict(observation.get("inventory_plan"))
+        add("库存计划风险", plan.get("risk_level"))
+        add(
+            "库存计划质量",
+            plan.get("effective_plan_quality") or plan.get("plan_quality"),
+        )
+        add(
+            "库存计划建议",
+            plan.get("quantity_status") or plan.get("action_mode"),
+        )
+        freshness = _dict(plan.get("freshness") or observation.get("freshness"))
+        add("库存计划证据新鲜度", freshness.get("status"))
+    elif tool_name == "get_business_metric":
+        add("经营指标质量", observation.get("quality"))
+    elif tool_name in {
+        "get_listing_traffic_insights",
+        "get_competitive_intelligence",
+        "get_competitor_price_analysis",
+    }:
+        add("业务分析状态", observation.get("status"))
+        add("分析证据新鲜度", _dict(observation.get("freshness")).get("status"))
+        add("质量门禁", _dict(observation.get("quality_gate")).get("status"))
+    elif tool_name in {"list_recommendations", "get_recommendation_audit_trail"}:
+        for item in _list(observation.get("items"))[:6]:
+            value = _dict(item)
+            identifier = str(
+                value.get("recommendation_id") or value.get("id") or "建议"
+            )
+            add(f"商品经营建议 {identifier}", value.get("state"))
+            if value.get("degraded"):
+                add(f"商品经营建议 {identifier} 的证据", "degraded")
+    return facts
+
+
+def _verified_source(result: Any) -> dict[str, Any]:
     if isinstance(result, dict):
-        if str(result.get("status") or "success") != "success":
-            return []
         product_view = result.get("result")
         if not isinstance(product_view, dict):
-            return []
-        return [str(fact) for fact in product_view.get("已核实信息") or []]
-    if getattr(result, "status", None) != "success":
-        return []
-    return [str(fact) for fact in getattr(result, "verified_facts", []) if str(fact)]
+            product_view = {}
+        return {
+            "status": str(result.get("status") or "success"),
+            "objective": str(result.get("objective") or ""),
+            "tool_label": str(result.get("tool_label") or ""),
+            "facts": [str(fact) for fact in product_view.get("已核实信息") or []],
+            "status_facts": list(
+                product_view.get("已核实状态")
+                or result.get("status_facts")
+                or []
+            ),
+        }
+    return {
+        "status": str(getattr(result, "status", "success")),
+        "objective": str(getattr(result, "objective", "")),
+        "tool_label": str(getattr(result, "tool_label", "")),
+        "facts": [
+            str(fact)
+            for fact in getattr(result, "verified_facts", [])
+            if str(fact)
+        ],
+        "status_facts": list(getattr(result, "status_facts", []) or []),
+    }
 
 
 def _semantic_words(value: str) -> set[str]:
@@ -194,41 +358,63 @@ def _answer_sentences(answer: str) -> list[str]:
 def answer_preserves_critical_values(
     answer: str, results: list[Any], *, require_all: bool = True
 ) -> bool:
-    fact_sentences = [
-        fact
-        for result in results
-        for fact in _verified_fact_sentences(result)
-        if fact.strip()
-    ]
-    required = {
-        value
-        for fact in fact_sentences
-        for value in critical_fact_values({"已核实信息": [fact]})
-        if str(value)
-    }
-    if not required:
-        return True
+    del require_all  # Both plan shapes now use the same omission-tolerant contract.
+    sources = [_verified_source(result) for result in results]
+    allowed_identifiers: set[str] = set()
+    allowed_numbers: set[Decimal] = set()
+    no_data_sources: list[dict[str, Any]] = []
+    status_facts: list[dict[str, str]] = []
+    for source in sources:
+        if source["status"] == "success":
+            for fact in source["facts"]:
+                identifiers, numbers = _critical_tokens(fact)
+                allowed_identifiers.update(identifiers)
+                allowed_numbers.update(numbers)
+        else:
+            no_data_sources.append(source)
+        for item in source["status_facts"]:
+            if isinstance(item, dict):
+                subject = str(item.get("主题") or item.get("subject") or "")
+                label = str(item.get("状态") or item.get("label") or "")
+                if subject and label:
+                    status_facts.append({"subject": subject, "label": label})
 
-    # A concise answer may omit secondary figures. Only reject a response when it
-    # appears to restate a verified fact but substitutes a different value.
-    for fact in fact_sentences:
-        fact_values = set(critical_fact_values({"已核实信息": [fact]}))
-        if not fact_values:
+    for sentence in _answer_sentences(answer):
+        identifiers, numbers = _critical_tokens(sentence)
+        if not identifiers and not numbers:
             continue
-        fact_words = _semantic_words(fact)
-        for sentence in _answer_sentences(answer):
-            answer_values = set(
-                critical_fact_values({"已核实信息": [sentence]})
+        sentence_words = _semantic_words(sentence)
+        if any(
+            len(
+                sentence_words
+                & _semantic_words(
+                    " ".join(
+                        [source["objective"], source["tool_label"], *source["facts"]]
+                    )
+                )
             )
-            if not answer_values:
-                continue
-            if len(fact_words & _semantic_words(sentence)) < 2:
-                continue
-            if any(value not in fact_values for value in answer_values):
+            >= 1
+            for source in no_data_sources
+        ):
+            return False
+        if not identifiers.issubset(allowed_identifiers):
+            return False
+        if not numbers.issubset(allowed_numbers):
+            return False
+
+    for item in status_facts:
+        subject_words = _semantic_words(item["subject"])
+        conflicts = set(STATUS_CONFLICTS.get(item["label"], frozenset()))
+        if item["label"] in MODEL_LABELS:
+            conflicts.update(MODEL_LABELS - {item["label"]})
+        if not conflicts:
+            continue
+        for sentence in _answer_sentences(answer):
+            if subject_words & _semantic_words(sentence) and any(
+                conflict in sentence for conflict in conflicts
+            ):
                 return False
-    if not require_all:
-        return True
-    return all(value in answer for value in required)
+    return True
 
 
 def observation_summary(product_view: dict[str, Any]) -> str:
@@ -254,8 +440,13 @@ def _dict(value: Any) -> dict[str, Any]:
 
 
 def _status(value: Any) -> str:
-    raw = str(value or "未知")
-    return STATUS_LABELS.get(raw, raw)
+    if value is True:
+        raw = "true"
+    elif value is False:
+        raw = "false"
+    else:
+        raw = str(value or "未知").strip()
+    return STATUS_LABELS.get(raw, "未知")
 
 
 def _customer_team_fact(observation: dict[str, Any]) -> str | None:
@@ -547,12 +738,19 @@ def _inventory_plan_facts(observation: dict[str, Any]) -> list[str]:
         quantity = plan.get("recommended_qty")
     quantity_text = "暂不提供" if quantity is None else str(quantity)
     facts = [f"当前库存计划风险为{risk}，建议数量为 {quantity_text}。"]
+    quality = plan.get("effective_plan_quality") or plan.get("plan_quality")
+    if quality:
+        facts.append(f"库存计划质量为{_status(quality)}。")
     if plan.get("expected_stockout_date"):
         facts.append(f"预计缺货日期为 {plan['expected_stockout_date']}。")
-    if plan.get("action_mode"):
+    quantity_status = plan.get("quantity_status") or plan.get("action_mode")
+    if quantity_status:
         facts.append(
-            f"该计划只提供{_status(plan['action_mode'])}建议，不会直接创建采购动作。"
+            f"该计划只提供{_status(quantity_status)}建议，不会直接创建采购动作。"
         )
+    freshness = _dict(plan.get("freshness") or observation.get("freshness"))
+    if freshness.get("status"):
+        facts.append(f"库存计划证据新鲜度为{_status(freshness['status'])}。")
     return facts
 
 
