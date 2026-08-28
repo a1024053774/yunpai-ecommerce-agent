@@ -272,6 +272,64 @@ def test_workspace_composite_rejects_answer_that_changes_verified_amount(
     assert "critical_value_mismatch" in done["degraded_reasons"]
 
 
+def test_workspace_single_observe_rejects_answer_that_changes_verified_count(
+    tmp_path, monkeypatch
+) -> None:
+    app = create_app(make_settings(tmp_path))
+    service = app.state.agent
+    workspace = app.state.workspace_agent
+    decisions = iter(
+        [
+            {
+                "mode": "observe",
+                "tool_name": "get_module_registry",
+                "arguments": {},
+                "reason": "核对业务模块",
+            },
+            {
+                "mode": "answer",
+                "response": "模块信息已核实。",
+                "reason": "业务模块已核实",
+            },
+        ]
+    )
+    monkeypatch.setattr(
+        service.model, "generate_json", lambda _messages, **_kwargs: next(decisions)
+    )
+    monkeypatch.setattr(
+        workspace,
+        "_execute",
+        lambda *_args, **_kwargs: {
+            "modules": [
+                {"display_name": "商品管理", "status": "available"}
+                for _ in range(13)
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        service.model,
+        "stream_generate",
+        lambda _messages: iter(["当前共有 12 项业务能力，其中 12 项当前可用。"]),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/admin/workspace/chat/stream",
+            headers=ADMIN_HEADERS,
+            json={
+                "session_id": "workspace:test-single-observe-number-guard-001",
+                "message": "查看当前业务模块。",
+                "history": [],
+                "context": {},
+            },
+        )
+
+    done = _events(response)[-1]["response"]
+    assert "12 项" not in done["answer"]
+    assert "13 项" in done["answer"]
+    assert "critical_value_mismatch" in done["degraded_reasons"]
+
+
 def test_workspace_composite_no_data_cannot_be_rewritten_as_zero(
     tmp_path, monkeypatch
 ) -> None:

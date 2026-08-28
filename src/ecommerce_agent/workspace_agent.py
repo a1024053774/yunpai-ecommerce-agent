@@ -612,9 +612,18 @@ class WorkspaceAgent:
                 image_observation=image_observation,
             )
             try:
-                for delta in self.service.model.stream_generate(messages):
-                    answer += delta
-                    yield {"event": "delta", "text": delta}
+                candidate_answer = "".join(
+                    self.service.model.stream_generate(messages)
+                )
+                if answer_preserves_critical_values(
+                    candidate_answer, observations, require_all=False
+                ):
+                    answer = candidate_answer
+                else:
+                    degraded_reasons.append("critical_value_mismatch")
+                    answer = self._deterministic_answer(observations, execution_notes)
+                if answer:
+                    yield {"event": "delta", "text": answer}
             except ModelUnavailableError:
                 degraded_reasons.append("response_model_unavailable")
                 answer = self._deterministic_answer(observations, execution_notes)
@@ -639,7 +648,16 @@ class WorkspaceAgent:
                     "message": "流式整理暂时中断，正在切换稳定模式",
                 }
                 try:
-                    answer = self.service.model.generate(messages).strip()
+                    candidate_answer = self.service.model.generate(messages).strip()
+                    if answer_preserves_critical_values(
+                        candidate_answer, observations, require_all=False
+                    ):
+                        answer = candidate_answer
+                    else:
+                        degraded_reasons.append("critical_value_mismatch")
+                        answer = self._deterministic_answer(
+                            observations, execution_notes
+                        )
                 except ModelUnavailableError:
                     degraded_reasons.append("response_model_unavailable")
                     answer = self._deterministic_answer(observations, execution_notes)

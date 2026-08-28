@@ -65,6 +65,13 @@ STATUS_LABELS: dict[str, str] = {
     "observed": "观察中",
     "closed": "已关闭",
     "rejected": "已驳回",
+    "unknown": "未知",
+    "degraded": "已降级",
+    "fresh": "新鲜",
+    "stale": "已过期",
+    "last_value": "最近值模型",
+    "advisory": "仅建议",
+    "advisory_only": "仅建议",
 }
 
 
@@ -150,17 +157,74 @@ def critical_fact_values(product_view: dict[str, Any]) -> list[str]:
     return values
 
 
+def _verified_fact_sentences(result: Any) -> list[str]:
+    if isinstance(result, dict):
+        if str(result.get("status") or "success") != "success":
+            return []
+        product_view = result.get("result")
+        if not isinstance(product_view, dict):
+            return []
+        return [str(fact) for fact in product_view.get("已核实信息") or []]
+    if getattr(result, "status", None) != "success":
+        return []
+    return [str(fact) for fact in getattr(result, "verified_facts", []) if str(fact)]
+
+
+def _semantic_words(value: str) -> set[str]:
+    return {
+        word
+        for word in re.findall(r"[A-Za-z0-9_-]+|[\u4e00-\u9fff]{2,}", value)
+        if word not in {"目前", "当前", "已经", "可以", "相关", "其中"}
+    }
+
+
+def _answer_sentences(answer: str) -> list[str]:
+    sentences: list[str] = []
+    for raw in re.split(r"[。！？!?\n]+", answer):
+        sentence = re.sub(r"^\s*(?:[-*•]|\d+[.)、])\s*", "", raw).strip()
+        if sentence:
+            sentences.append(sentence)
+    return sentences
+
+
 def answer_preserves_critical_values(
-    answer: str, results: list[Any]
+    answer: str, results: list[Any], *, require_all: bool = True
 ) -> bool:
-    required = {
-        str(value)
+    fact_sentences = [
+        fact
         for result in results
-        if getattr(result, "status", None) == "success"
-        for value in getattr(result, "critical_values", [])
+        for fact in _verified_fact_sentences(result)
+        if fact.strip()
+    ]
+    required = {
+        value
+        for fact in fact_sentences
+        for value in critical_fact_values({"已核实信息": [fact]})
         if str(value)
     }
-    return all(value in answer for value in required)
+    if require_all:
+        return all(value in answer for value in required)
+    if not required:
+        return True
+
+    # A concise answer may omit secondary figures. Only reject a response when it
+    # appears to restate a verified fact but substitutes a different value.
+    for fact in fact_sentences:
+        fact_values = set(critical_fact_values({"已核实信息": [fact]}))
+        if not fact_values:
+            continue
+        fact_words = _semantic_words(fact)
+        for sentence in _answer_sentences(answer):
+            answer_values = set(
+                critical_fact_values({"已核实信息": [sentence]})
+            )
+            if not answer_values:
+                continue
+            if len(fact_words & _semantic_words(sentence)) < 2:
+                continue
+            if not (fact_values & answer_values):
+                return False
+    return True
 
 
 def observation_summary(product_view: dict[str, Any]) -> str:
@@ -454,7 +518,7 @@ def _forecast_facts(observation: dict[str, Any]) -> list[str]:
     if not forecast:
         return ["目前没有已固化的需求预测，不能据此判断未来销量。"]
     status = _status(forecast.get("status"))
-    champion = str(forecast.get("champion_model") or "尚未选定")
+    champion = _status(forecast.get("champion_model") or "尚未选定")
     points = _list(forecast.get("points"))
     facts = [f"最新需求预测状态为{status}，当前采用 {champion}。"]
     if points:
@@ -482,7 +546,9 @@ def _inventory_plan_facts(observation: dict[str, Any]) -> list[str]:
     if plan.get("expected_stockout_date"):
         facts.append(f"预计缺货日期为 {plan['expected_stockout_date']}。")
     if plan.get("action_mode"):
-        facts.append(f"该计划只提供{plan['action_mode']}建议，不会直接创建采购动作。")
+        facts.append(
+            f"该计划只提供{_status(plan['action_mode'])}建议，不会直接创建采购动作。"
+        )
     return facts
 
 

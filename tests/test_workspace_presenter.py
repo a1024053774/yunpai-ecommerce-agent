@@ -214,6 +214,40 @@ def test_common_business_results_are_translated_before_reaching_answer_model() -
     assert "management_profit" not in finance
 
 
+def test_forecast_and_plan_presenters_hide_internal_status_values() -> None:
+    forecast = present_observation(
+        "get_demand_forecast",
+        {
+            "forecast": {
+                "status": "degraded",
+                "champion_model": "last_value",
+            },
+            "freshness": {"status": "stale"},
+        },
+    )
+    plan = present_observation(
+        "get_inventory_plan",
+        {
+            "inventory_plan": {
+                "risk_level": "medium",
+                "recommended_order_qty": "0",
+                "action_mode": "advisory_only",
+            }
+        },
+    )
+
+    forecast_text = json.dumps(forecast, ensure_ascii=False)
+    plan_text = json.dumps(plan, ensure_ascii=False)
+    assert "已降级" in forecast_text
+    assert "最近值模型" in forecast_text
+    assert "已过期" in forecast_text
+    assert "degraded" not in forecast_text
+    assert "last_value" not in forecast_text
+    assert "stale" not in forecast_text
+    assert "仅建议" in plan_text
+    assert "advisory_only" not in plan_text
+
+
 def test_operations_report_does_not_forward_long_model_narrative() -> None:
     view = present_observation(
         "get_operations_assistant_report",
