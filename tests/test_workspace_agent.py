@@ -309,7 +309,7 @@ def test_workspace_single_observe_rejects_answer_that_changes_verified_count(
     monkeypatch.setattr(
         service.model,
         "stream_generate",
-        lambda _messages: iter(["当前共有 12 项业务能力，其中 12 项当前可用。"]),
+        lambda _messages: iter(["当前共登记 13 项业务能力，其中 12 项当前可用。"]),
     )
 
     with TestClient(app) as client:

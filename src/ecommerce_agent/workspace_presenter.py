@@ -171,11 +171,15 @@ def _verified_fact_sentences(result: Any) -> list[str]:
 
 
 def _semantic_words(value: str) -> set[str]:
-    return {
-        word
-        for word in re.findall(r"[A-Za-z0-9_-]+|[\u4e00-\u9fff]{2,}", value)
-        if word not in {"目前", "当前", "已经", "可以", "相关", "其中"}
-    }
+    words: set[str] = set()
+    stop_words = {"目前", "当前", "已经", "可以", "相关", "其中"}
+    for word in re.findall(r"[A-Za-z0-9_-]+|[\u4e00-\u9fff]{2,}", value):
+        if word in stop_words:
+            continue
+        words.add(word)
+        if re.fullmatch(r"[\u4e00-\u9fff]+", word):
+            words.update(word[index : index + 2] for index in range(len(word) - 1))
+    return words
 
 
 def _answer_sentences(answer: str) -> list[str]:
@@ -222,7 +226,7 @@ def answer_preserves_critical_values(
                 continue
             if len(fact_words & _semantic_words(sentence)) < 2:
                 continue
-            if not (fact_values & answer_values):
+            if any(value not in fact_values for value in answer_values):
                 return False
     return True
 
