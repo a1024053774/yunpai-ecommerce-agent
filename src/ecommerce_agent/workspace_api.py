@@ -15,6 +15,11 @@ from .schemas import ALLOWED_CHAT_IMAGE_MIME_TYPES, MAX_CHAT_IMAGE_BYTES
 from .service import VERIFIED_FINAL_DELIVERY_MODE
 from .text_utils import redact_sensitive
 from .workspace_agent import (
+    WORKSPACE_CONTROL_DELIVERY_MODE,
+    WORKSPACE_COMPLETION_STATUSES,
+    WORKSPACE_DELIVERY_MODES,
+    WORKSPACE_INCOMPLETE_DELIVERY_MODE,
+    WORKSPACE_PENDING_DELIVERY_MODE,
     WorkspaceAgent,
     WorkspaceChatRequest,
     WorkspaceContext,
@@ -252,7 +257,7 @@ def build_workspace_router(
             latest_tool: dict = {}
             processing: dict[str, Any] = {
                 "stage": "generating",
-                "delivery_mode": VERIFIED_FINAL_DELIVERY_MODE,
+                "delivery_mode": WORKSPACE_PENDING_DELIVERY_MODE,
             }
             current_status = "generating"
             placeholder = db.append_workspace_message(
@@ -339,6 +344,7 @@ def build_workspace_router(
                         save_message(
                             {
                                 "stage": "error",
+                                "delivery_mode": WORKSPACE_INCOMPLETE_DELIVERY_MODE,
                                 "error_code": error_code,
                                 "error_message": error_message,
                                 "retry_advised": bool(event.get("retry_advised")),
@@ -353,12 +359,13 @@ def build_workspace_router(
                         safe_answer, _ = redact_sensitive(
                             str(result.get("answer") or "")
                         )
-                        completion_status = str(
-                            result.get("completion_status") or "completed"
-                        )
+                        completion_status = str(result.get("completion_status") or "")
+                        if completion_status not in WORKSPACE_COMPLETION_STATUSES:
+                            completion_status = "failed"
+                        answer_was_present = bool(safe_answer.strip())
                         message_status = (
                             "incomplete"
-                            if completion_status == "failed" or not safe_answer.strip()
+                            if completion_status != "completed" or not answer_was_present
                             else "completed"
                         )
                         if not safe_answer.strip():
@@ -368,12 +375,25 @@ def build_workspace_router(
                             for item in (result.get("degraded_reasons") or [])
                             if str(item).strip()
                         ]
+                        delivery_mode = str(result.get("delivery_mode") or "")
+                        if delivery_mode not in WORKSPACE_DELIVERY_MODES:
+                            delivery_mode = WORKSPACE_INCOMPLETE_DELIVERY_MODE
+                        if completion_status != "completed" or not answer_was_present:
+                            delivery_mode = WORKSPACE_INCOMPLETE_DELIVERY_MODE
+                        elif delivery_mode == VERIFIED_FINAL_DELIVERY_MODE and not result.get("tools_used"):
+                            delivery_mode = WORKSPACE_CONTROL_DELIVERY_MODE
+                        action_summary = result.get("action_summary")
+                        safe_action_summary = (
+                            redact_sensitive(str(action_summary))[0][:500].strip()
+                            if action_summary is not None
+                            else None
+                        )
+                        safe_reason = redact_sensitive(
+                            str(result.get("reason") or "本轮处理已完成")
+                        )[0][:500].strip()
                         processing_updates = {
                             "stage": message_status,
-                            "delivery_mode": str(
-                                result.get("delivery_mode")
-                                or VERIFIED_FINAL_DELIVERY_MODE
-                            ),
+                            "delivery_mode": delivery_mode,
                             "trace_id": result.get("trace_id"),
                             "tool_name": result.get("tool_name"),
                             "tool_label": result.get("tool_label"),
@@ -381,7 +401,7 @@ def build_workspace_router(
                             "requires_confirmation": bool(
                                 result.get("requires_confirmation")
                             ),
-                            "action_summary": result.get("action_summary"),
+                            "action_summary": safe_action_summary,
                             "image_attached": bool(result.get("image_attached")),
                             "vision_status": result.get("vision_status"),
                             "vision_applied": bool(result.get("vision_applied")),
@@ -393,7 +413,7 @@ def build_workspace_router(
                             "decision_steps": result.get("decision_steps"),
                             "limit_reached": bool(result.get("limit_reached")),
                             "mode": result.get("mode"),
-                            "reason": result.get("reason"),
+                            "reason": safe_reason,
                         }
                         db.update_workspace_message(
                             tenant_id=admin.tenant_id,
@@ -410,7 +430,7 @@ def build_workspace_router(
                                 "requires_confirmation": bool(
                                     result.get("requires_confirmation")
                                 ),
-                                "action_summary": result.get("action_summary"),
+                                "action_summary": safe_action_summary,
                                 "image_attached": bool(result.get("image_attached")),
                                 "vision_status": result.get("vision_status"),
                                 "vision_applied": bool(result.get("vision_applied")),
@@ -435,6 +455,7 @@ def build_workspace_router(
                 save_message(
                     {
                         "stage": "error",
+                        "delivery_mode": WORKSPACE_INCOMPLETE_DELIVERY_MODE,
                         "error_code": "workspace_stream_failed",
                         "error_type": type(exc).__name__,
                         "error_message": message,
@@ -456,6 +477,7 @@ def build_workspace_router(
                     save_message(
                         {
                             "stage": "error",
+                            "delivery_mode": WORKSPACE_INCOMPLETE_DELIVERY_MODE,
                             "error_code": "generator_exit",
                             "error_type": "generator_exit",
                             "error_message": "本轮回答未完成，请稍后重试。",

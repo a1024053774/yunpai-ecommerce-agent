@@ -929,7 +929,7 @@ def test_decision_model_budget_has_safe_defaults_and_env_overrides(monkeypatch) 
 
     defaults = Settings.from_env()
     assert defaults.model_decision_timeout_seconds == 15.0
-    assert defaults.model_decision_max_output_tokens == 300
+    assert defaults.model_decision_max_output_tokens == 800
     assert defaults.model_decision_thinking_enabled is False
 
     monkeypatch.setenv("MODEL_DECISION_TIMEOUT_SECONDS", "12.5")

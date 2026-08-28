@@ -6,6 +6,7 @@ import time
 import pytest
 
 from ecommerce_agent.workspace_read_plan import (
+    WorkspaceArgumentReference,
     WorkspaceReadPlan,
     WorkspaceReadTask,
     WorkspaceTaskResult,
@@ -124,6 +125,17 @@ def test_read_plan_accepts_direct_response_without_tasks() -> None:
     plan = WorkspaceReadPlan(response="No live lookup is needed.")
 
     assert validate_read_plan(plan, readable_tools=READ_TOOLS) is plan
+
+
+def test_argument_reference_accepts_bounded_model_json_path_spelling() -> None:
+    reference = {
+        "task_id": "catalog",
+        "path": "$.items[0].sku_id",
+    }
+
+    parsed = WorkspaceArgumentReference.model_validate(reference)
+
+    assert parsed.path == ["items", 0, "sku_id"]
 
 
 def test_ready_task_batches_caps_independent_queries_at_three() -> None:

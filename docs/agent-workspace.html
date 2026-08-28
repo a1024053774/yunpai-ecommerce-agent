@@ -883,8 +883,10 @@
     }
 
     function appendMessageBadges(card, details) {
-      if (!card || details.deliveryMode !== 'verified_final' && !details.degraded) return;
+      if (!card || (!details.deliveryMode && !details.degraded)) return;
       if (details.deliveryMode === 'verified_final') card.insertAdjacentHTML('beforeend', '<span class="verified-status ok">回复已完成事实校验</span>');
+      if (details.deliveryMode === 'control_response') card.insertAdjacentHTML('beforeend', '<span class="verified-status">流程提示：本轮未查询实时业务事实</span>');
+      if (details.deliveryMode === 'incomplete') card.insertAdjacentHTML('beforeend', '<span class="verified-status warn">本轮未完成全部事实核实</span>');
       if (details.degraded) card.insertAdjacentHTML('beforeend', '<span class="verified-status warn">安全降级：' + escapeHtml(degradationText(details.degradedReasons) || '本轮未使用原始模型回复') + '</span>');
     }
 

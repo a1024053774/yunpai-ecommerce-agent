@@ -191,7 +191,7 @@ class Settings:
                 0.001, float(os.getenv("MODEL_DECISION_TIMEOUT_SECONDS", "15.0"))
             ),
             model_decision_max_output_tokens=max(
-                1, int(os.getenv("MODEL_DECISION_MAX_OUTPUT_TOKENS", "300"))
+                1, int(os.getenv("MODEL_DECISION_MAX_OUTPUT_TOKENS", "800"))
             ),
             model_decision_thinking_enabled=_as_bool(
                 os.getenv("MODEL_DECISION_THINKING_ENABLED"), default=False

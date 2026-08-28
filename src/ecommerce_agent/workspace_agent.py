@@ -113,6 +113,18 @@ WORKSPACE_PROMPT_VERSION = "workspace-router-v4.3"
 WORKSPACE_IMAGE_ONLY_MESSAGE = "请根据我粘贴的图片说明相关信息。"
 WORKSPACE_READ_TASK_TIMEOUT_SECONDS = 20.0
 WORKSPACE_READ_PLAN_TIMEOUT_SECONDS = 90.0
+WORKSPACE_PENDING_DELIVERY_MODE = "pending"
+WORKSPACE_CONTROL_DELIVERY_MODE = "control_response"
+WORKSPACE_INCOMPLETE_DELIVERY_MODE = "incomplete"
+WORKSPACE_DELIVERY_MODES = frozenset(
+    {
+        VERIFIED_FINAL_DELIVERY_MODE,
+        WORKSPACE_PENDING_DELIVERY_MODE,
+        WORKSPACE_CONTROL_DELIVERY_MODE,
+        WORKSPACE_INCOMPLETE_DELIVERY_MODE,
+    }
+)
+WORKSPACE_COMPLETION_STATUSES = frozenset({"completed", "partial", "failed"})
 WORKSPACE_MISSING_INFORMATION_LABELS = {
     "store_id": "店铺编号",
     "sku_id": "商品编号",
@@ -140,7 +152,8 @@ WORKSPACE_READ_SYSTEM_PROMPT = """你是云湃电商一体机的统筹 Agent。�
 1. 最多四个任务；独立子目标分别列出，不遗漏用户明确询问的部分。
 2. 只有后置查询确实需要前置结果时，才在 depends_on 中填写前置 task_id。后置工具需要使用
    前置结果中的标识符时，必须同时用 argument_refs 显式指定目标参数、前置 task_id 和 JSON 路径；
-   禁止从自然语言核实结论中猜测或提取参数。
+   path 必须是指向前置工具原始 JSON 输出的数组，例如商品搜索结果取 SKU 时使用
+   ["items", 0, "sku_id"]；不要使用 "$"、"result" 前缀或自然语言路径。禁止从自然语言核实结论中猜测或提取参数。
 3. 只能选择工具目录中 kind=read 的工具，不得选择生成或写入能力。
 4. 不得虚构数据，不得将无数据表达为数值零。
 5. 涉及改变业务状态的请求不由此计划执行：明确写请求时第一轮就返回 mode=propose_action，
@@ -181,7 +194,7 @@ WORKSPACE_SYSTEM_PROMPT = f"""你是云湃电商一体机的统筹 Agent，服�
 
 规则：
 1. 工具目录只是能力清单。能根据稳定常识或对话上下文可靠回答时直接 answer；问题涉及当前库存、订单、经营数据、系统状态等实时业务事实时，选择与问题直接对应的工具取得证据。
-2. 每次 observe 只选择一个工具。拿到已核实结果后重新判断：证据足够就 answer；证据不足且另一工具能补齐才继续 observe；不得机械地把所有工具都调用一遍。
+2. 每次 observe 只选择一个工具。拿到已核实结果后重新判断：证据足够就 answer；证据不足且另一工具能补齐才继续 observe；不得机械地把所有工具都调用一遍。如果问题或 operator_context 已经给出商品、订单或店铺的稳定编号，直接把该编号放入工具参数；不要先用展示名称猜测店铺 ID，也不要为已有编号额外创建搜索依赖。
 3. 不得把某个模块“没有记录”推断成另一个模块“没有问题”，也不得用整机概览代替库存、订单、利润等专门事实。整机概览只适用于真正询问整体运行情况、综合待办或系统健康的问题。
 4. 工具参数中的筛选条件如果是可选项，不要向用户索要；应在授权范围内查询最宽范围并使用目录给出的默认值。只有缺少真正必填且无法从上下文推断的信息时才 mode=clarify，并把缺失项写入 missing_information；不要在 response 中承诺后续生成、提交或执行。
 5. 涉及退款、赔付、改价、预算、投放发布、采购、调拨、付款、启停发布、审批、回滚、删除、修改权限等写操作，一律 mode=propose_action；当前统筹接口不会直接执行。可执行动作能力目录为空时，不得承诺“确认后我会生成、提交或执行”。如果请求同时需要先核实实时事实，可以先 observe，取得足够事实后再 propose_action。
@@ -331,6 +344,11 @@ def _compact(value: Any, *, depth: int = 0) -> Any:
     return value
 
 
+def _safe_model_text(value: Any, *, limit: int) -> str:
+    safe, _ = redact_sensitive(str(value or ""))
+    return safe.strip()[:limit]
+
+
 class WorkspaceAgent:
     def __init__(self, service: AgentService, evolution: EvolutionService):
         self.service = service
@@ -466,7 +484,7 @@ class WorkspaceAgent:
             yield {
                 "event": "meta",
                 "trace_id": trace_id,
-                "delivery_mode": VERIFIED_FINAL_DELIVERY_MODE,
+                "delivery_mode": WORKSPACE_PENDING_DELIVERY_MODE,
                 "prompt_version": WORKSPACE_PROMPT_VERSION,
                 "decision_step": decision_steps,
                 "plan": {
@@ -601,6 +619,9 @@ class WorkspaceAgent:
             "message": "正在整理结论与下一步",
         }
         answer = ""
+        delivery_mode = WORKSPACE_CONTROL_DELIVERY_MODE
+        completion_status = "completed"
+        facts_validated = False
         if plan.mode == "propose_action":
             answer = self._safe_action_response()
             yield {"event": "delta", "text": answer}
@@ -620,16 +641,25 @@ class WorkspaceAgent:
                 candidate_answer = "".join(
                     self.service.model.stream_generate(messages)
                 )
-                if answer_preserves_critical_values(candidate_answer, observations):
+                if answer_preserves_critical_values(
+                    candidate_answer, observations, require_all=False
+                ):
                     answer = candidate_answer
+                    facts_validated = True
                 else:
                     degraded_reasons.append("critical_value_mismatch")
                     answer = self._deterministic_answer(observations, execution_notes)
+                    facts_validated = answer_preserves_critical_values(
+                        answer, observations, require_all=False
+                    )
                 if answer:
                     yield {"event": "delta", "text": answer}
             except ModelUnavailableError:
                 degraded_reasons.append("response_model_unavailable")
                 answer = self._deterministic_answer(observations, execution_notes)
+                facts_validated = answer_preserves_critical_values(
+                    answer, observations, require_all=False
+                )
                 yield {
                     "event": "status",
                     "stage": "composing_fallback",
@@ -653,25 +683,56 @@ class WorkspaceAgent:
                 }
                 try:
                     candidate_answer = self.service.model.generate(messages).strip()
-                    if answer_preserves_critical_values(candidate_answer, observations):
+                    if answer_preserves_critical_values(
+                        candidate_answer, observations, require_all=False
+                    ):
                         answer = candidate_answer
+                        facts_validated = True
                     else:
                         degraded_reasons.append("critical_value_mismatch")
                         answer = self._deterministic_answer(
                             observations, execution_notes
                         )
+                        facts_validated = answer_preserves_critical_values(
+                            answer, observations, require_all=False
+                        )
                 except ModelUnavailableError:
                     degraded_reasons.append("response_model_unavailable")
                     answer = self._deterministic_answer(observations, execution_notes)
+                    facts_validated = answer_preserves_critical_values(
+                        answer, observations, require_all=False
+                    )
                 except ModelError:
                     degraded_reasons.append("response_generation_failed")
                     answer = self._deterministic_answer(observations, execution_notes)
+                    facts_validated = answer_preserves_critical_values(
+                        answer, observations, require_all=False
+                    )
                 if answer:
                     yield {"event": "delta", "text": answer}
         else:
             answer = (plan.response or "目前没有需要查询的业务事实。").strip()
             if answer:
                 yield {"event": "delta", "text": answer}
+
+        if observations:
+            all_observations_succeeded = all(
+                str(item.get("status") or "") == "success" for item in observations
+            )
+            has_unresolved_execution = limit_reached or any(
+                item.get("type") in {"query_rejected", "planning_model_unavailable", "planning_output_invalid"}
+                for item in execution_notes
+            )
+            completion_status = (
+                "completed"
+                if all_observations_succeeded and not has_unresolved_execution
+                else "partial"
+            )
+            delivery_mode = (
+                VERIFIED_FINAL_DELIVERY_MODE
+                if completion_status == "completed" and facts_validated and answer.strip()
+                else WORKSPACE_INCOMPLETE_DELIVERY_MODE
+            )
 
         public_action_summary = (
             "该操作需要在对应管理模块核对后再执行"
@@ -683,7 +744,7 @@ class WorkspaceAgent:
             "response": {
                 "answer": answer.strip(),
                 "trace_id": trace_id,
-                "delivery_mode": VERIFIED_FINAL_DELIVERY_MODE,
+                "delivery_mode": delivery_mode,
                 "mode": plan.mode,
                 "tool_name": selected_name,
                 "tool_label": selected_label,
@@ -701,6 +762,7 @@ class WorkspaceAgent:
                 **self._vision_response_fields(image_observation),
                 "decision_steps": decision_steps,
                 "limit_reached": limit_reached,
+                "completion_status": completion_status,
                 "degraded": bool(degraded_reasons),
                 "degraded_reasons": degraded_reasons,
                 "prompt_version": WORKSPACE_PROMPT_VERSION,
@@ -848,7 +910,23 @@ class WorkspaceAgent:
                     "action_summary": None,
                 }
             )
-        return plan
+        return plan.model_copy(
+            update={
+                "reason": _safe_model_text(
+                    plan.reason, limit=500
+                ),
+                "response": (
+                    None
+                    if plan.response is None
+                    else _safe_model_text(plan.response, limit=2400)
+                ),
+                "action_summary": (
+                    None
+                    if plan.action_summary is None
+                    else _safe_model_text(plan.action_summary, limit=500)
+                ),
+            }
+        )
 
     def _stream_read_plan(
         self,
@@ -861,7 +939,7 @@ class WorkspaceAgent:
         yield {
             "event": "meta",
             "trace_id": trace_id,
-            "delivery_mode": VERIFIED_FINAL_DELIVERY_MODE,
+            "delivery_mode": WORKSPACE_PENDING_DELIVERY_MODE,
             "prompt_version": WORKSPACE_PROMPT_VERSION,
             "decision_step": 1,
             "plan": {
@@ -879,7 +957,7 @@ class WorkspaceAgent:
                 "response": {
                     "answer": answer,
                     "trace_id": trace_id,
-                    "delivery_mode": VERIFIED_FINAL_DELIVERY_MODE,
+                    "delivery_mode": WORKSPACE_CONTROL_DELIVERY_MODE,
                     "mode": "answer",
                     "tool_name": None,
                     "tool_label": tool_label(None),
@@ -927,7 +1005,7 @@ class WorkspaceAgent:
                 "tool_name": result.tool_name,
                 "tool_label": result.tool_label,
                 "task_id": result.task_id,
-                "objective": result.objective,
+                "objective": _safe_model_text(result.objective, limit=500),
                 "status": result.status,
                 "summary": summary,
             }
@@ -962,7 +1040,7 @@ class WorkspaceAgent:
                 "response": {
                     "answer": "所有核实任务均未完成，请稍后重试。",
                     "trace_id": trace_id,
-                    "delivery_mode": VERIFIED_FINAL_DELIVERY_MODE,
+                    "delivery_mode": WORKSPACE_INCOMPLETE_DELIVERY_MODE,
                     "mode": "answer",
                     "tool_name": None,
                     "tool_label": tool_label(None),
@@ -1008,6 +1086,7 @@ class WorkspaceAgent:
         answer = ""
         degraded_reasons: list[str] = []
         all_tasks_succeeded = all(result.status == "success" for result in results)
+        facts_validated = False
         if not all_tasks_succeeded:
             answer = self._deterministic_answer(observations, [])
         else:
@@ -1016,9 +1095,18 @@ class WorkspaceAgent:
             except (ModelUnavailableError, ModelError):
                 degraded_reasons.append("response_generation_failed")
                 answer = self._deterministic_answer(observations, [])
-            if not answer_preserves_critical_values(answer, results):
+            if answer_preserves_critical_values(
+                answer, results, require_all=True
+            ):
+                facts_validated = True
+            else:
                 degraded_reasons.append("critical_value_mismatch")
                 answer = self._deterministic_answer(observations, [])
+                facts_validated = answer_preserves_critical_values(
+                    answer, results, require_all=True
+                )
+        if not all_tasks_succeeded:
+            facts_validated = False
         if answer:
             yield {"event": "delta", "text": answer}
 
@@ -1029,7 +1117,11 @@ class WorkspaceAgent:
             "response": {
                 "answer": answer.strip(),
                 "trace_id": trace_id,
-                "delivery_mode": VERIFIED_FINAL_DELIVERY_MODE,
+                "delivery_mode": (
+                    VERIFIED_FINAL_DELIVERY_MODE
+                    if completed and facts_validated and answer.strip()
+                    else WORKSPACE_INCOMPLETE_DELIVERY_MODE
+                ),
                 "mode": "answer",
                 "tool_name": last_tool,
                 "tool_label": tool_label(last_tool),
@@ -1122,6 +1214,11 @@ class WorkspaceAgent:
     ) -> Any:
         value: Any = structured_data
         for segment in path:
+            if isinstance(value, dict) and segment == "result" and "result" not in value:
+                value = WorkspaceAgent._single_list_value(value)
+                continue
+            if isinstance(value, dict) and isinstance(segment, int):
+                value = WorkspaceAgent._single_list_value(value)
             if isinstance(segment, int):
                 if (
                     not isinstance(value, list)
@@ -1137,6 +1234,15 @@ class WorkspaceAgent:
         if value is None:
             raise ValueError("read_dependency_value_missing")
         return value
+
+    @staticmethod
+    def _single_list_value(value: dict[str, Any]) -> list[Any]:
+        """Resolve a model's root-array shorthand only when the shape is unambiguous."""
+
+        candidates = [item for item in value.values() if isinstance(item, list)]
+        if len(candidates) != 1:
+            raise ValueError("read_dependency_value_missing")
+        return candidates[0]
 
     def _execute(
         self,

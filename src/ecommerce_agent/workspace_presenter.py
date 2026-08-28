@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from typing import Any
 
 
@@ -36,13 +36,18 @@ STATUS_LABELS: dict[str, str] = {
     "active": "正常",
     "inactive": "停用",
     "available": "可用",
+    "created": "已创建",
+    "fulfilling": "履约中",
+    "deleted": "已删除",
     "no_data": "暂无数据",
+    "success": "已核实",
     "traceable": "来源可追溯",
     "source_id_missing": "来源信息不完整",
     "resolved": "已找到唯一结果",
     "ambiguous": "找到多个可能结果",
     "no_match": "未找到结果",
     "paid": "已支付",
+    "unpaid": "未支付",
     "partially_refunded": "部分退款",
     "refunded": "已退款",
     "pending": "待处理",
@@ -51,6 +56,8 @@ STATUS_LABELS: dict[str, str] = {
     "delivered": "已送达",
     "completed": "已完成",
     "canceled": "已取消",
+    "requested": "已申请",
+    "returning": "退货中",
     "critical": "严重",
     "high": "高",
     "medium": "中",
@@ -101,7 +108,6 @@ STATUS_LABELS: dict[str, str] = {
     "invalid": "无效",
     "limited_passed": "有限通过",
     "needs_review": "待复核",
-    "unpaid": "未支付",
     "collected": "已揽收",
     "in_transit": "运输中",
     "exception": "物流异常",
@@ -113,22 +119,10 @@ STATUS_LABELS: dict[str, str] = {
     "false": "否",
     "advisory": "仅建议",
     "advisory_only": "仅建议",
-}
-
-
-STATUS_CONFLICTS: dict[str, frozenset[str]] = {
-    "已降级": frozenset({"正常", "标准", "通过", "新鲜", "当前有效", "已完成", "可用", "就绪"}),
-    "失败": frozenset({"正常", "标准", "通过", "已完成", "可用", "就绪"}),
-    "不可用": frozenset({"正常", "标准", "通过", "已完成", "可用", "就绪", "新鲜"}),
-    "缺失": frozenset({"正常", "标准", "通过", "已完成", "可用", "就绪", "新鲜"}),
-    "被阻断": frozenset({"正常", "标准", "通过", "已完成", "可用", "就绪"}),
-    "已过期": frozenset({"新鲜", "当前有效", "正常", "通过"}),
-    "已被新证据替代": frozenset({"新鲜", "当前有效", "正常", "通过"}),
-    "新鲜": frozenset({"已过期", "已被新证据替代", "已降级"}),
-    "当前有效": frozenset({"已过期", "已被新证据替代", "已降级"}),
-    "严重": frozenset({"低", "正常", "健康", "无风险"}),
-    "高": frozenset({"低", "正常", "健康", "无风险"}),
-    "低": frozenset({"高", "严重", "临近缺货", "需要补货"}),
+    "valid": "有效",
+    "positive_effect": "正向变化",
+    "negative_effect": "负向变化",
+    "no_detectable_effect": "未检测到明确差异",
 }
 
 
@@ -143,6 +137,61 @@ MODEL_LABELS = frozenset(
         "TSB 间歇需求模型",
     }
 )
+
+
+_STATUS_CONFLICT_GROUPS: tuple[frozenset[str], ...] = (
+    frozenset(
+        {
+            "正常",
+            "标准",
+            "通过",
+            "失败",
+            "不可用",
+            "缺失",
+            "被阻断",
+            "已完成",
+            "已核实",
+            "有效",
+            "无效",
+            "暂无数据",
+            "可用",
+            "就绪",
+            "已降级",
+        }
+    ),
+    frozenset({"新鲜", "当前有效", "已过期", "已被新证据替代"}),
+    frozenset({"低", "高", "严重", "无风险", "临近缺货", "需要补货"}),
+    MODEL_LABELS,
+)
+STATUS_CONFLICTS: dict[str, frozenset[str]] = {
+    label: frozenset(
+        other
+        for group in _STATUS_CONFLICT_GROUPS
+        if label in group
+        for other in group
+        if other != label
+    )
+    for group in _STATUS_CONFLICT_GROUPS
+    for label in group
+}
+
+
+_STATUS_ASSERTION_ALIASES: dict[str, tuple[str, ...]] = {
+    "正常": ("正常", "健康", "无异常"),
+    "已核实": ("已核实", "已确认"),
+    "失败": ("失败", "出错", "未完成"),
+    "不可用": ("不可用", "无法使用"),
+    "缺失": ("缺失", "不完整"),
+    "被阻断": ("被阻断", "阻断"),
+    "暂无数据": ("暂无数据", "没有数据", "无数据", "未查到", "没有对应记录"),
+    "已降级": ("已降级", "降级"),
+    "通过": ("通过", "已通过"),
+    "已完成": ("已完成", "完成"),
+    "新鲜": ("新鲜", "最新"),
+    "当前有效": ("当前有效", "有效"),
+    "已过期": ("已过期", "过期"),
+    "已被新证据替代": ("已被新证据替代", "被替代"),
+}
 
 
 def tool_label(tool_name: str | None) -> str:
@@ -217,6 +266,8 @@ def observation_data_status(
         return "no_data"
     if tool_name == "get_inventory_plan" and not _dict(observation.get("inventory_plan")):
         return "no_data"
+    if tool_name == "get_listing_traffic_insights" and not _list(observation.get("insights")):
+        return "no_data"
     return "success"
 
 
@@ -235,10 +286,7 @@ def critical_fact_values(product_view: dict[str, Any]) -> list[str]:
 
 
 def _numeric_key(value: str) -> Decimal | None:
-    try:
-        return Decimal(value.replace(",", ""))
-    except (InvalidOperation, ValueError):
-        return None
+    return Decimal(value.replace(",", ""))
 
 
 def _critical_tokens(text: str) -> tuple[set[str], set[Decimal]]:
@@ -263,6 +311,8 @@ def _status_facts(tool_name: str, observation: dict[str, Any]) -> list[dict[str,
         if value in (None, ""):
             return
         facts.append({"主题": subject, "状态": _status(value)})
+
+    add(tool_label(tool_name), observation_data_status(tool_name, observation))
 
     if tool_name == "get_demand_forecast":
         forecast = _dict(observation.get("forecast"))
@@ -293,6 +343,25 @@ def _status_facts(tool_name: str, observation: dict[str, Any]) -> list[dict[str,
         add("业务分析状态", observation.get("status"))
         add("分析证据新鲜度", _dict(observation.get("freshness")).get("status"))
         add("质量门禁", _dict(observation.get("quality_gate")).get("status"))
+        for index, item in enumerate(_list(observation.get("insights"))[:6], start=1):
+            insight = _dict(item)
+            experiment = _dict(insight.get("experiment"))
+            experiment_id = str(experiment.get("experiment_id") or index)
+            add(f"实验 {experiment_id} 状态", experiment.get("status"))
+            analysis = _dict(insight.get("analysis"))
+            evidence = _dict(analysis.get("evidence"))
+            add(
+                f"实验 {experiment_id} 质量门禁",
+                _dict(evidence.get("quality_gate")).get("status"),
+            )
+            add(
+                f"实验 {experiment_id} 统计结论",
+                evidence.get("statistical_conclusion"),
+            )
+            add(
+                f"实验 {experiment_id} 证据新鲜度",
+                _dict(insight.get("freshness") or analysis.get("freshness")).get("status"),
+            )
     elif tool_name in {"list_recommendations", "get_recommendation_audit_trail"}:
         for item in _list(observation.get("items"))[:6]:
             value = _dict(item)
@@ -310,19 +379,49 @@ def _verified_source(result: Any) -> dict[str, Any]:
         product_view = result.get("result")
         if not isinstance(product_view, dict):
             product_view = {}
+        status = str(result.get("status") or "success")
+        status_facts = list(
+            product_view.get("已核实状态")
+            or result.get("status_facts")
+            or []
+        )
+        if not status_facts:
+            status_facts = [
+                {
+                    "主题": str(result.get("tool_label") or "业务信息"),
+                    "状态": _status(
+                        "no_data"
+                        if status == "no_data"
+                        else "failed"
+                        if status != "success"
+                        else "success"
+                    ),
+                }
+            ]
         return {
-            "status": str(result.get("status") or "success"),
+            "status": status,
             "objective": str(result.get("objective") or ""),
             "tool_label": str(result.get("tool_label") or ""),
             "facts": [str(fact) for fact in product_view.get("已核实信息") or []],
-            "status_facts": list(
-                product_view.get("已核实状态")
-                or result.get("status_facts")
-                or []
-            ),
+            "status_facts": status_facts,
         }
+    status = str(getattr(result, "status", "success"))
+    status_facts = list(getattr(result, "status_facts", []) or [])
+    if not status_facts:
+        status_facts = [
+            {
+                "主题": str(getattr(result, "tool_label", "业务信息")),
+                "状态": _status(
+                    "no_data"
+                    if status == "no_data"
+                    else "failed"
+                    if status != "success"
+                    else "success"
+                ),
+            }
+        ]
     return {
-        "status": str(getattr(result, "status", "success")),
+        "status": status,
         "objective": str(getattr(result, "objective", "")),
         "tool_label": str(getattr(result, "tool_label", "")),
         "facts": [
@@ -330,7 +429,7 @@ def _verified_source(result: Any) -> dict[str, Any]:
             for fact in getattr(result, "verified_facts", [])
             if str(fact)
         ],
-        "status_facts": list(getattr(result, "status_facts", []) or []),
+        "status_facts": status_facts,
     }
 
 
@@ -348,7 +447,7 @@ def _semantic_words(value: str) -> set[str]:
 
 def _answer_sentences(answer: str) -> list[str]:
     sentences: list[str] = []
-    for raw in re.split(r"[。！？!?\n]+", answer):
+    for raw in re.split(r"[。！？!?；;\n]+", answer):
         sentence = re.sub(r"^\s*(?:[-*•]|\d+[.)、])\s*", "", raw).strip()
         if sentence:
             sentences.append(sentence)
@@ -358,63 +457,112 @@ def _answer_sentences(answer: str) -> list[str]:
 def answer_preserves_critical_values(
     answer: str, results: list[Any], *, require_all: bool = True
 ) -> bool:
-    del require_all  # Both plan shapes now use the same omission-tolerant contract.
     sources = [_verified_source(result) for result in results]
-    allowed_identifiers: set[str] = set()
-    allowed_numbers: set[Decimal] = set()
-    no_data_sources: list[dict[str, Any]] = []
-    status_facts: list[dict[str, str]] = []
+    sentences = _answer_sentences(answer)
+    source_words = [
+        _semantic_words(
+            " ".join(
+                [
+                    source["objective"],
+                    source["tool_label"],
+                    *source["facts"],
+                    *[
+                        str(item.get("主题") or item.get("subject") or "")
+                        for item in source["status_facts"]
+                        if isinstance(item, dict)
+                    ],
+                ]
+            )
+        )
+        for source in sources
+    ]
+    source_tokens: list[tuple[set[str], set[Decimal]]] = []
     for source in sources:
+        identifiers: set[str] = set()
+        numbers: set[Decimal] = set()
         if source["status"] == "success":
             for fact in source["facts"]:
-                identifiers, numbers = _critical_tokens(fact)
-                allowed_identifiers.update(identifiers)
-                allowed_numbers.update(numbers)
-        else:
-            no_data_sources.append(source)
+                fact_identifiers, fact_numbers = _critical_tokens(fact)
+                identifiers.update(fact_identifiers)
+                numbers.update(fact_numbers)
+        source_tokens.append((identifiers, numbers))
+
+    seen_tokens: list[tuple[set[str], set[Decimal]]] = [
+        (set(), set()) for _ in sources
+    ]
+    for sentence in sentences:
+        identifiers, numbers = _critical_tokens(sentence)
+        sentence_words = _semantic_words(sentence)
+        matched = [
+            index
+            for index, words in enumerate(source_words)
+            if sentence_words & words
+        ]
+        if (identifiers or numbers) and not matched:
+            return False
+        for index in matched:
+            source = sources[index]
+            if source["status"] != "success":
+                if identifiers or numbers or re.search(
+                    r"(?:为|是|有|共|合计)\s*(?:0|零)", sentence
+                ):
+                    return False
+                continue
+            allowed_identifiers, allowed_numbers = source_tokens[index]
+            if not identifiers.issubset(allowed_identifiers):
+                return False
+            if not numbers.issubset(allowed_numbers):
+                return False
+            seen_tokens[index][0].update(identifiers)
+            seen_tokens[index][1].update(numbers)
+
+    status_facts: list[dict[str, str]] = []
+    for source in sources:
         for item in source["status_facts"]:
             if isinstance(item, dict):
                 subject = str(item.get("主题") or item.get("subject") or "")
                 label = str(item.get("状态") or item.get("label") or "")
                 if subject and label:
                     status_facts.append({"subject": subject, "label": label})
-
-    for sentence in _answer_sentences(answer):
-        identifiers, numbers = _critical_tokens(sentence)
-        if not identifiers and not numbers:
-            continue
-        sentence_words = _semantic_words(sentence)
-        if any(
-            len(
-                sentence_words
-                & _semantic_words(
-                    " ".join(
-                        [source["objective"], source["tool_label"], *source["facts"]]
-                    )
-                )
-            )
-            >= 1
-            for source in no_data_sources
-        ):
-            return False
-        if not identifiers.issubset(allowed_identifiers):
-            return False
-        if not numbers.issubset(allowed_numbers):
-            return False
-
     for item in status_facts:
         subject_words = _semantic_words(item["subject"])
-        conflicts = set(STATUS_CONFLICTS.get(item["label"], frozenset()))
-        if item["label"] in MODEL_LABELS:
-            conflicts.update(MODEL_LABELS - {item["label"]})
-        if not conflicts:
+        conflicts = STATUS_CONFLICTS.get(item["label"], frozenset())
+        if not subject_words or not conflicts:
             continue
-        for sentence in _answer_sentences(answer):
-            if subject_words & _semantic_words(sentence) and any(
-                conflict in sentence for conflict in conflicts
+        for sentence in sentences:
+            if not subject_words & _semantic_words(sentence):
+                continue
+            if any(
+                _status_assertion_present(sentence, conflict)
+                for conflict in conflicts
             ):
                 return False
+
+    if require_all:
+        for index, (required_identifiers, required_numbers) in enumerate(source_tokens):
+            if sources[index]["status"] != "success":
+                continue
+            seen_identifiers, seen_numbers = seen_tokens[index]
+            if not required_identifiers.issubset(seen_identifiers):
+                return False
+            if not required_numbers.issubset(seen_numbers):
+                return False
     return True
+
+
+def _status_assertion_present(sentence: str, label: str) -> bool:
+    aliases = _STATUS_ASSERTION_ALIASES.get(label, (label,))
+    for alias in aliases:
+        start = 0
+        while True:
+            position = sentence.find(alias, start)
+            if position < 0:
+                break
+            prefix = sentence[max(0, position - 4) : position]
+            if not re.search(r"(?:不|未|没有|暂无|无法|不能|并非|不是)\s*$", prefix):
+                return True
+            start = position + len(alias)
+    return False
 
 
 def observation_summary(product_view: dict[str, Any]) -> str:

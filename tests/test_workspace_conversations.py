@@ -398,6 +398,44 @@ def test_workspace_stream_persists_structured_metadata_columns(
     assert "completed" in row["processing_json"]
 
 
+def test_workspace_stream_redacts_model_reason_before_sse_and_persistence(
+    tmp_path, monkeypatch
+) -> None:
+    app = create_app(make_settings(tmp_path))
+    monkeypatch.setattr(
+        app.state.agent.model,
+        "generate_json",
+        lambda messages, **kwargs: {
+            "mode": "answer",
+            "response": "当前状态已核对",
+            "reason": "联系 13812345678 说明后续处理",
+        },
+    )
+    monkeypatch.setattr(
+        app.state.agent.model,
+        "stream_generate",
+        lambda messages: iter(["当前状态已核对"]),
+    )
+
+    with TestClient(app) as client:
+        conversation = client.post(
+            "/v1/admin/workspace/conversations", headers=ADMIN_HEADERS
+        ).json()
+        response = client.post(
+            f"/v1/admin/workspace/conversations/{conversation['id']}/chat/stream",
+            headers=ADMIN_HEADERS,
+            json={"message": "汇总当前状态", "context": {}},
+        )
+        messages = client.get(
+            f"/v1/admin/workspace/conversations/{conversation['id']}/messages",
+            headers=ADMIN_HEADERS,
+        ).json()
+
+    serialized = response.text + json.dumps(messages, ensure_ascii=False)
+    assert "13812345678" not in serialized
+    assert "reason" in messages[-1]["processing"]
+
+
 def test_workspace_messages_restore_structured_metadata_without_processing_json(
     tmp_path, monkeypatch
 ) -> None:

@@ -11,6 +11,7 @@ from ecommerce_agent.business import CatalogItemUpsert, OrderUpsert
 from ecommerce_agent.business.inventory import InventoryBalanceUpsert
 from ecommerce_agent.business.orders import OrderLineInput
 from ecommerce_agent.llm import ModelError, ModelUnavailableError
+from ecommerce_agent.workspace_agent import WorkspaceAgent
 from ecommerce_agent.workspace_read_plan import WorkspaceTaskResult
 
 from conftest import make_settings
@@ -559,7 +560,7 @@ def test_workspace_stream_routes_to_real_overview_and_exposes_progress(
     assert done["requires_confirmation"] is False
     assert done["trace_id"].startswith("workspace-")
     meta = next(event for event in events if event["event"] == "meta")
-    assert meta["delivery_mode"] == "verified_final"
+    assert meta["delivery_mode"] == "pending"
     answer_payload = response_messages[-1]["content"]
     assert '"已核实结果"' in answer_payload
     assert '"verified_result"' not in answer_payload
@@ -787,6 +788,41 @@ def test_workspace_never_executes_write_requests_without_confirmation(
     assert "我可以为这批订单发起退款" not in done["answer"]
     assert "不会直接生成、提交或执行" in done["answer"]
     assert done["advanced_view"] == "orders"
+    assert done["delivery_mode"] == "control_response"
+
+
+def test_workspace_direct_control_response_is_not_marked_as_verified_fact(
+    tmp_path, monkeypatch
+) -> None:
+    app = create_app(make_settings(tmp_path))
+    monkeypatch.setattr(
+        app.state.agent.model,
+        "generate_json",
+        lambda messages, **kwargs: {
+            "mode": "clarify",
+            "tool_name": None,
+            "arguments": {},
+            "response": "请补充商品编号。",
+            "missing_information": ["sku_id"],
+            "reason": "需要补充商品编号",
+        },
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/admin/workspace/chat/stream",
+            headers=ADMIN_HEADERS,
+            json={
+                "session_id": "workspace:test-control-delivery-001",
+                "message": "查这个商品。",
+                "history": [],
+                "context": {},
+            },
+        )
+
+    done = _events(response)[-1]["response"]
+    assert done["delivery_mode"] == "control_response"
+    assert done["completion_status"] == "completed"
 
 
 def test_workspace_model_clarification_is_bounded_by_available_capabilities(
@@ -1834,3 +1870,15 @@ def test_workspace_missing_dependency_argument_path_is_typed_failure(
         done["task_results"][1]["error_summary"]
         == "前置核实结果不足，未能继续查询。"
     )
+
+
+def test_workspace_dependency_resolves_unambiguous_model_root_array() -> None:
+    assert WorkspaceAgent._resolve_dependency_value(
+        {"items": [{"sku_id": "SKU-001"}]},
+        [0, "sku_id"],
+    ) == "SKU-001"
+
+    assert WorkspaceAgent._resolve_dependency_value(
+        {"items": [{"sku_id": "SKU-001"}]},
+        ["result", 0, "sku_id"],
+    ) == "SKU-001"

@@ -350,3 +350,96 @@ def test_operations_report_does_not_forward_long_model_narrative() -> None:
     assert "订单较前半段下降 52.9%" in rendered
     assert "模型分析原文" not in rendered
     assert "分析中发现 1 个值得关注的经营信号" in rendered
+
+
+def test_verified_fact_guard_keeps_values_with_their_source_and_closes_statuses() -> None:
+    inventory = {
+        "status": "success",
+        "objective": "核对库存风险",
+        "tool_label": "库存风险",
+        "result": {
+            "已核实信息": ["共检查 10 个库存记录，其中 4 个需要优先关注。"]
+        },
+    }
+    revenue = {
+        "status": "success",
+        "objective": "核对最近收入",
+        "tool_label": "经营指标",
+        "result": {"已核实信息": ["已支付收入为 4181.00 元。"]},
+    }
+    no_data = {
+        "status": "no_data",
+        "objective": "核对最近收入",
+        "tool_label": "经营指标",
+        "result": {"已核实信息": ["当前查询范围内暂无数据。"]},
+    }
+
+    assert not answer_preserves_critical_values(
+        "收入为 10 元。", [inventory, revenue], require_all=False
+    )
+    assert not answer_preserves_critical_values(
+        "最近收入为零。", [no_data], require_all=False
+    )
+    assert not answer_preserves_critical_values(
+        "库存风险正常。",
+        [
+            {
+                **no_data,
+                "objective": "核对库存风险",
+                "tool_label": "库存风险",
+            }
+        ],
+        require_all=False,
+    )
+    assert answer_preserves_critical_values(
+        "库存有 10 条记录，其中 4 条需要关注；收入为 4181.00 元。",
+        [inventory, revenue],
+        require_all=False,
+    )
+
+
+def test_traffic_status_reads_nested_quality_gate_and_domain_statuses_are_translated() -> None:
+    view = present_observation(
+        "get_listing_traffic_insights",
+        {
+            "sku_id": "SKU-TRAFFIC-001",
+            "insights": [
+                {
+                    "experiment": {
+                        "experiment_id": "exp-001",
+                        "status": "completed",
+                    },
+                    "freshness": {"status": "current"},
+                    "analysis": {
+                        "evidence": {
+                            "quality_gate": {"status": "blocked"},
+                            "statistical_conclusion": "inconclusive",
+                        }
+                    },
+                }
+            ],
+            "freshness": {"status": "current"},
+        },
+    )
+    rendered = json.dumps(view, ensure_ascii=False)
+    assert "已完成" in rendered
+    assert "当前有效" in rendered
+    assert "被阻断" in rendered
+    assert "暂不能下结论" in rendered
+    assert "fulfilling" not in json.dumps(
+        present_observation(
+            "get_order_facts",
+            {
+                "orders": [
+                    {
+                        "order_id": "ORDER-001",
+                        "order_status": "fulfilling",
+                        "payment_status": "paid",
+                        "total_amount": "1.00",
+                        "lines": [],
+                    }
+                ]
+            },
+        ),
+        ensure_ascii=False,
+    )

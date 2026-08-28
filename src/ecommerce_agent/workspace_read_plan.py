@@ -3,10 +3,11 @@ from __future__ import annotations
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, wait
 import json
+import re
 from time import monotonic
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class WorkspaceArgumentReference(BaseModel):
@@ -14,6 +15,49 @@ class WorkspaceArgumentReference(BaseModel):
 
     task_id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
     path: list[str | int] = Field(min_length=1, max_length=8)
+
+    @field_validator("path", mode="before")
+    @classmethod
+    def normalize_model_json_path(cls, value: Any) -> Any:
+        """Accept the bounded JSONPath spelling used by compatible models.
+
+        The canonical wire shape remains a list. Some deployed models return
+        a property/index path as a string, so parse only that bounded grammar
+        and let Pydantic reject everything else.
+        """
+
+        if isinstance(value, list):
+            return value
+        if not isinstance(value, str):
+            return value
+        raw = value.strip()
+        if raw.startswith("$"):
+            raw = raw[1:]
+        if raw.startswith("."):
+            raw = raw[1:]
+        if not raw:
+            return value
+
+        segments: list[str | int] = []
+        position = 0
+        while position < len(raw):
+            if raw[position] == ".":
+                position += 1
+                if position >= len(raw):
+                    return value
+            if raw[position] == "[":
+                end = raw.find("]", position + 1)
+                if end < 0 or not raw[position + 1 : end].isdigit():
+                    return value
+                segments.append(int(raw[position + 1 : end]))
+                position = end + 1
+                continue
+            match = re.match("[A-Za-z_][A-Za-z0-9_-]*", raw[position:])
+            if match is None:
+                return value
+            segments.append(match.group(0))
+            position += len(match.group(0))
+        return segments
 
 
 class WorkspaceReadTask(BaseModel):
