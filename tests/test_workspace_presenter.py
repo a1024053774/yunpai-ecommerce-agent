@@ -681,6 +681,37 @@ def test_inventory_plan_statuses_are_checked_in_their_own_fields() -> None:
     )
 
 
+def test_single_character_risk_status_allows_spacing_after_field_marker() -> None:
+    view = present_observation(
+        "get_inventory_risk",
+        {
+            "risks": [
+                {
+                    "sku_id": "SKU-001",
+                    "warehouse_id": "WH-001",
+                    "risk_code": "stockout_risk",
+                    "risk_level": "high",
+                    "available": "4.00",
+                    "coverage_days": "0.80",
+                    "recommended_replenishment": "126.00",
+                }
+            ]
+        },
+    )
+    result = {
+        "status": "success",
+        "objective": "查看库存风险",
+        "tool_label": "库存风险",
+        "result": view,
+    }
+
+    assert answer_preserves_critical_values(
+        "商品 SKU-001（仓库 WH-001）的风险等级为 高。",
+        [result],
+        require_all=False,
+    )
+
+
 def test_competitive_presenter_uses_current_price_position_contract() -> None:
     view = present_observation(
         "get_competitive_intelligence",

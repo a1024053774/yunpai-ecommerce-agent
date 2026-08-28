@@ -288,6 +288,14 @@ def _lower_priced_competitor_count(observation: dict[str, Any]) -> Any:
     return _dict(observation.get("summary")).get("our_price_higher")
 
 
+def _inventory_entity(value: dict[str, Any]) -> tuple[str, str]:
+    sku_id = str(value.get("sku_id") or "未提供编号")
+    warehouse_id = str(value.get("warehouse_id") or "").strip()
+    if warehouse_id:
+        return f"商品 {sku_id}（仓库 {warehouse_id}）", f"{sku_id}@{warehouse_id}"
+    return f"商品 {sku_id}", sku_id
+
+
 def critical_fact_claims(
     tool_name: str, observation: dict[str, Any]
 ) -> list[dict[str, str]]:
@@ -412,7 +420,13 @@ def critical_fact_claims(
             add(entity, order_id, "商品件数", len(_list(value.get("lines"))))
     if tool_name == "get_inventory_risk":
         risks = _list(observation.get("risks"))
-        add("库存风险", "inventory", "库存记录数", len(risks))
+        add(
+            "库存风险",
+            "inventory",
+            "库存记录数",
+            len(risks),
+            field_terms="库存记录数 共检查 库存记录",
+        )
         add(
             "库存风险",
             "inventory",
@@ -421,16 +435,16 @@ def critical_fact_claims(
                 str(_dict(item).get("risk_level")) in {"high", "critical"}
                 for item in risks
             ),
+            field_terms="优先关注数 需要优先关注 优先关注",
         )
         for item in risks[:8]:
             value = _dict(item)
-            sku_id = value.get("sku_id")
-            entity = f"商品 {sku_id or '未提供编号'}"
-            add(entity, sku_id, "可用库存", value.get("available"))
-            add(entity, sku_id, "预计可售天数", value.get("coverage_days"))
+            entity, entity_id = _inventory_entity(value)
+            add(entity, entity_id, "可用库存", value.get("available"))
+            add(entity, entity_id, "预计可售天数", value.get("coverage_days"))
             add(
                 entity,
-                sku_id,
+                entity_id,
                 "建议补货数量",
                 value.get("recommended_replenishment"),
             )
@@ -612,7 +626,7 @@ def _status_facts(tool_name: str, observation: dict[str, Any]) -> list[dict[str,
             )
             add("库存风险", "风险等级", highest.get("risk_level"))
         for value in risks:
-            entity = f"商品 {value.get('sku_id') or '未提供编号'}"
+            entity, _ = _inventory_entity(value)
             add(entity, "库存风险", value.get("risk_code"))
             add(entity, "风险等级", value.get("risk_level"))
     elif tool_name == "get_demand_forecast":
@@ -824,6 +838,11 @@ def _status_label_mentions(
                 position = text.find(alias, start)
                 if position < 0:
                     break
+                if len(alias) == 1 and not re.search(
+                    r"(?:为|是|等级|风险|[:：])\s*$", text[:position]
+                ):
+                    start = position + len(alias)
+                    continue
                 following = text[position + len(alias) : position + len(alias) + 1]
                 if following in {"度", "性"}:
                     start = position + len(alias)
@@ -863,6 +882,19 @@ def _looks_like_status_claim(text: str) -> bool:
             text,
         )
     )
+
+
+def _unique_entity_context(
+    identifiers: set[str], entity_identifier_sets: list[set[str]]
+) -> set[str]:
+    if not identifiers:
+        return set()
+    matches = {
+        frozenset(entity_identifiers)
+        for entity_identifiers in entity_identifier_sets
+        if identifiers.issubset(entity_identifiers)
+    }
+    return identifiers if len(matches) == 1 else set()
 
 
 def answer_preserves_critical_values(
@@ -1053,8 +1085,9 @@ def answer_preserves_critical_values(
     }
     for sentence_index, sentence in enumerate(sentences):
         sentence_identifiers = _critical_tokens(sentence)[0] & known_entity_identifiers
-        inherited_identifiers = (
-            sentence_identifiers if len(sentence_identifiers) == 1 else set()
+        inherited_identifiers = _unique_entity_context(
+            sentence_identifiers,
+            [claim["entity_identifiers"] for claim in field_claims],
         )
         for clause in _answer_clauses(sentence):
             _, numbers = _critical_tokens(clause)
@@ -1077,7 +1110,7 @@ def answer_preserves_critical_values(
                 for claim in source_claims
                 if (
                     not entity_identifiers
-                    or bool(claim["entity_identifiers"] & entity_identifiers)
+                    or entity_identifiers.issubset(claim["entity_identifiers"])
                 )
             ]
             represented_numbers = {claim["value"] for claim in source_claims}
@@ -1141,8 +1174,13 @@ def answer_preserves_critical_values(
     }
     for sentence_index, sentence in enumerate(sentences):
         sentence_identifiers = _critical_tokens(sentence)[0] & known_status_identifiers
-        inherited_identifiers = (
-            sentence_identifiers if len(sentence_identifiers) == 1 else set()
+        inherited_identifiers = _unique_entity_context(
+            sentence_identifiers,
+            [
+                set(item["entity_identifiers"].split())
+                for item in status_facts
+                if item["entity_identifiers"]
+            ],
         )
         for clause in _answer_clauses(sentence):
             explicit_identifiers = (
@@ -1158,9 +1196,8 @@ def answer_preserves_critical_values(
                 )
                 and (
                     not entity_identifiers
-                    or bool(
+                    or entity_identifiers.issubset(
                         set(item["entity_identifiers"].split())
-                        & entity_identifiers
                     )
                 )
             ]
@@ -1444,8 +1481,9 @@ def _inventory_facts(observation: dict[str, Any]) -> list[str]:
     facts = [f"共检查 {len(risks)} 个库存记录，其中 {high} 个需要优先关注。"]
     for item in risks[:8]:
         risk = _dict(item)
+        entity, _ = _inventory_entity(risk)
         facts.append(
-            f"商品 {risk.get('sku_id') or '未提供编号'}：{_status(risk.get('risk_code'))}，"
+            f"{entity}：{_status(risk.get('risk_code'))}，"
             f"可用库存 {risk.get('available') or '0'}，预计可售 {risk.get('coverage_days') or '无法估算'} 天，"
             f"建议补货 {risk.get('recommended_replenishment') or '0'} 件。"
         )

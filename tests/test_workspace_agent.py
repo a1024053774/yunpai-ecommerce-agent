@@ -495,6 +495,48 @@ def test_workspace_deterministic_answer_does_not_treat_model_objective_as_fact()
     assert answer_preserves_critical_values(answer, observations, require_all=True)
 
 
+def test_workspace_deterministic_answer_distinguishes_inventory_warehouses() -> None:
+    view = present_observation(
+        "get_inventory_risk",
+        {
+            "risks": [
+                {
+                    "sku_id": "SKU-001",
+                    "warehouse_id": "WH-001",
+                    "risk_code": "stockout_risk",
+                    "risk_level": "high",
+                    "available": "4.00",
+                    "coverage_days": "0.80",
+                    "recommended_replenishment": "126.00",
+                },
+                {
+                    "sku_id": "SKU-001",
+                    "warehouse_id": "WH-002",
+                    "risk_code": "replenishment_due",
+                    "risk_level": "medium",
+                    "available": "15.00",
+                    "coverage_days": "7.50",
+                    "recommended_replenishment": "45.00",
+                },
+            ]
+        },
+    )
+    observations = [
+        {
+            "status": "success",
+            "tool_name": "get_inventory_risk",
+            "tool_label": "库存风险",
+            "result": view,
+        }
+    ]
+
+    answer = WorkspaceAgent._deterministic_answer(observations, [])
+
+    assert "仓库 WH-001" in answer
+    assert "仓库 WH-002" in answer
+    assert answer_preserves_critical_values(answer, observations, require_all=True)
+
+
 def test_workspace_composite_rejects_answer_that_changes_verified_amount(
     tmp_path, monkeypatch
 ) -> None:
