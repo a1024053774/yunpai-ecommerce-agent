@@ -88,6 +88,7 @@
 
 ## 功能变更历史
 
+- 2026-08-29：F-108/F-310/F-316/F-320/F-324/F-325 完成最新受鉴权 virtual 公网 Demo 的整合验收。统筹 Agent 输入框可直接 Ctrl/⌘+V 粘贴 PNG/JPEG/WebP，Qwen2.5-VL 观察以非权威、脱敏形式跨轮延续；/customer-test 同时显示 Qwen2.5-VL 与 Qwen3-14B 润色采用状态。装载演示数据后，/admin 按需调用商品、订单、库存、竞品、营销、利润、运营辅助、指标、流量实验、需求预测、库存计划、生命周期建议和建议审计；/admin/advanced 以同一 FastAPI、SQLite、租户和领域服务展示结构化证据。公网 / 与 /app 均进入 /admin；提交 845a0f5 已推送并部署，15 张页面/调用证据和全量 1511 passed, 1 skipped 见 E-20260829-001。功能状态仍保留原边界：只代表 virtual Demo，不代表真实渠道、真实经营结论、平台写权限、正式独立 WP5 或生产 Gate。
 - 2026-08-28：F-324 的统筹 Agent 客户前端与最新多模态 Demo 后端完成统一发布。/admin 作为统筹主入口，/admin/advanced 进入专业后台，/customer-test 复用单一图片识别与 Qwen 润色链路；新增的预测、库存计划、商品经营建议和建议审计能力进入统筹动态工具目录。持久会话、复合查询、失败可重试、标题隐私和旧流式兼容入口均有回归；提交 51f5174 已推送到 demo/main-multimodal-product-demo，并以受鉴权 virtual Demo 部署。见 E-20260828-006；不代表真实渠道、生产写权限或正式 M8-R WP5。
 - 2026-08-20：F-121 增加 `simulate-store --load-only`。交测启动模板默认在每位测试者自己的
   Git-ignored SQLite 中幂等装载仓库内置“晴川生活电器旗舰店” fixture，不复制维护者本机

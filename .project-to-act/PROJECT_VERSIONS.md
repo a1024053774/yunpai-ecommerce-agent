@@ -4,22 +4,20 @@
 
 ## 当前版本
 
-- 当前公网统一 Demo（2026-08-28）：代码提交 51f517423afde667c0664621ed42fb60fb85034b 已推送到 origin/demo/main-multimodal-product-demo，并部署到服务器 /opt/yunpai-ecommerce-agent。/admin、/admin/advanced、/customer-test、持久统筹会话、预测/库存计划/生命周期建议工具、图片 Vision 和 Qwen Polish 均由同一服务提供；schema v39、包版本 0.30.0 保持不变。Nginx 已补齐 /admin/advanced 的受保护 location，执行前后源码/数据备份和发布后备份均已验证。公网只放行受鉴权 virtual 产品测试，不代表生产发布。
-- 下方此前公网产品测试部署条目保留为历史阶段证据；当前代码与服务器状态以本条和 E-20260828-006 为准。
+- 当前公网统一 Demo（2026-08-29）：代码提交 845a0f52f728b931a5f8b739c421f6b24c9869a6 已推送到 origin/demo/main-multimodal-product-demo，并部署到服务器 /opt/yunpai-ecommerce-agent。/ 与 /app 均 302 到 /admin；/admin、/admin/advanced、/customer-test、持久统筹会话、直接粘贴及跨轮 Vision、商品/订单/库存/营销/利润/流量/预测/库存计划/生命周期建议和建议审计均由同一服务与 SQLite 数据库提供；schema v39、包版本 0.30.0 保持不变。执行前后源码/数据备份和发布后备份均已验证。公网只放行受鉴权 virtual 产品测试，不代表生产发布。
+- 下方此前公网产品测试部署条目保留为历史阶段证据；当前代码与服务器状态以本条和 E-20260829-001 为准。
 - 版本号：`0.30.0`。权威来源为 `pyproject.toml` 的 `[project].version` 与
   `src/ecommerce_agent/__init__.py::__version__`；两处必须一致。
 - 发布状态：`main` 已包含 0.30.0 之后的客服、M5-R、M6-R、F-322、知识库和 M7-R WP1～WP4 增量，但这些
   提交没有同步提升运行时包版本，因此不得把历史内部候选标签 `0.31.0`～`0.33.0` 写成
   当前运行时版本。生产放行继续阻塞。
-- 公网产品测试部署：服务器唯一电商实例现运行 `main@b77dfeb` 加多模态/客服 UI 适配树，
-  原部署源码哈希 `f04655bc44c9bc5702215ebd73cb12731a461ff7ae58f8150fe0f26d28b376f8`，并叠加
-  Qwen/vLLM 网关修复提交 `7d5d8eb525e73fce5a7cf5f0a4c7f1d92c8e706b`（服务器
-  `llm.py` SHA-256 `a4cc44cd3019b116b71372cacc8433fddf40bb6bda316f603fca675265bc5596`）；原实现已固化为
-  GitHub 提交 `f647cfe204ea9dd842da7b1009bdc9426a77cf06` 并推送到
-  `origin/demo/main-multimodal-product-demo`；原
+- 公网产品测试部署：服务器唯一电商实例当前运行
+  `origin/demo/main-multimodal-product-demo@845a0f52f728b931a5f8b739c421f6b24c9869a6`，
+  不可变发布目录为
+  `/opt/yunpai-ecommerce-agent-releases/845a0f52f728b931a5f8b739c421f6b24c9869a6`；原
   `origin/codex/main-multimodal-product-demo` 已按用户要求删除，
   schema v39、包版本仍为 `0.30.0`。该实例通过首次访问链接签发 7 天
-  Secure/HttpOnly/SameSite=Lax Cookie，只放行 virtual `/admin`、`/customer-test` 与对应
+  Secure/HttpOnly/SameSite=Lax Cookie，只放行 virtual `/admin`、`/admin/advanced`、`/customer-test` 与对应
   电商 API；不再使用用户名/密码，也不是新的语义版本、正式生产发布或 `G-PROD-001`
   通过；GitHub `main` 未修改，也未创建或合并 PR。
 - 兼容性说明（0.30.0 运行时 + main 未升包增量）：schema v28 additive 新增 Traffic Lab 六类核心表、一张 metric 隔离表、索引、复合租户外键和 revision 不可变触发器；v27 可前向迁移。WP2 不改 schema 或依赖；虚拟 Connector capability 1.2 additive 增加 `listing_revision` / `traffic_metrics`，通用 sync 响应 additive 增加幂等、隔离计数和回执。WP3 沿用 v28、无新依赖/HTTP API，additive 导出 `TrafficFeatureEngine` 与版本化特征契约；`image-v1` 保留读侧与旧算法，`image-v2` 为当前版本，同一 asset 可显式选择版本重算且不更新资产。WP4 沿用 v28；Python 包不再公开任意统计载荷 `TrafficAnalysisRunCreate`，调用方改用只接收实验 ID 的 `TrafficAnalysisEngine`；当前新分析显式要求 `traffic-analysis-v2`，历史 v1 run 保持可读；黑盒 runner 报告 additive 增加 `ground_truth_boundary`，保留原 `analysis_imported_ground_truth` 字段但改由运行轨迹审计派生。WP5 沿用 v28、无新依赖或迁移，additive 增加管理员限定的 `/v1/traffic-lab/*` 工作流、`traffic_lab` available 模块与模型可见的只读 `get_listing_traffic_insights`；既有 API 响应契约、LangGraph 拓扑和语义路由不变，控制台只在管理员显式点击后运行分析，未加入自动发布、改标题/换图或投放动作。M6-R WP1–WP2 以 schema v29 固化 demand fact 与 forecast engine；WP3 以 schema v30 additive 增加 planning policy/plan、quantity/quality/risk evidence 和不可变边界，v29 可前向迁移且不重建既有表；WP4 沿用 v30，无依赖或迁移变化，additive 增加 `/v1/forecasting/*`、两个只读工具、D20 与显式运行后台，既有 API/路由/拓扑不变；WP5 仍沿用 v30，新增纯 Python Eval fixture/runner/report 与 D-039 oracle 边界，不改变依赖、持久 schema、API 或生产路由。F-322 未单独升版，使用 schema **v32**；**v31 已被 origin PR #11 占用**，合并时须保留两段迁移。v32 新增版本化 `(tenant,store)` IANA 业务日历和 nullable experiment 固化证据，并将 Traffic accepted/quarantine 重建为 `(tenant,connector,source_id)`；v30（或合并后的实际前序版本）可前向迁移，accepted 从不可变 revision 回填 connector，quarantine 仅从冻结 payload 读取，缺失写 `legacy_unscoped`。历史实验可读但缺日历证据时分析 blocked。灾备 manifest 继续精确匹配当前 schema：升级前以旧程序完成停机备份，升级后恢复写入前以 v32 程序生成并验证新全量备份；旧归档与匹配程序保留到隔离恢复演练通过。
@@ -36,10 +34,11 @@
   `net_sales` 不再以 gross 冒充正式净销。应用仍未单独升包，最终 PR Head 必须是
   `2e7fa58` 的后代；这不得视为已发布 schema 或正式独立验收通过，见 E-20260825-001。
 - 占号状态：PR #10 已合入 main `1906365`，schema **v33** 在 `main`（knowledge_key 唯一索引 + retrieval_logs）。F-322 **v32** 已在 main。PR #11 的 `_apply_v31`（workspace 会话表）仍未进入 `main`。M7-R WP1 的 **v34** 与 WP3 的 **v35** 均已在 `main`；M9-R WP3 的 **v36** 仅完成占号，运行迁移未合并。schema 迁移占号以 `CONTRIBUTING.md` 第 9 节“Schema 版本号占用登记”为唯一权威来源，本文不复制“下一空闲号”。
-- 最后更新：2026-08-28
+- 最后更新：2026-08-29
 
 ## 公网产品测试部署候选（未单独升应用版）
 
+- 2026-08-29 统筹 Agent 完整能力发布：部署对象为 GitHub `demo/main-multimodal-product-demo@845a0f5`。公网 `/` 与 `/app` 均重定向到 `/admin`，不再进入 AgentLoop；统筹输入框支持直接 Ctrl/⌘+V 粘贴 PNG/JPEG/WebP，并可在后续轮次恢复已持久化、已脱敏、`semantic_authority=false` 的图片观察。统筹动态只读工具已覆盖商品、订单、库存、竞品、营销、利润、运营辅助、指标、流量实验、需求预测、库存计划、生命周期建议和建议审计；高级后台读取同一服务和数据库。流量实验绑定实验 ID 读取已固化 `effect_estimate` / `confidence_interval`。公网逐项实测、15 张截图、全量 `1511 passed, 1 skipped`、备份和部署链见 E-20260829-001；只放行受鉴权 virtual Demo。
 - 2026-08-28 统一统筹 Agent 发布：部署对象为 GitHub demo/main-multimodal-product-demo@51f5174；统筹前端、最新商品/预测/库存/生命周期后端和多模态客服共用一个 FastAPI 服务、SQLite 数据库与安全边界。/admin 为主入口，/admin/advanced 为高级后台，/customer-test 为受控图片客服；旧 workspace stream 仅作持久会话兼容入口。Nginx 受保护白名单已包含 /admin/advanced；发布前后备份、服务健康、公网 SSE、Vision/Polish、浏览器桌面/390px 和 console 检查均通过。证据 E-20260828-006；不豁免真实平台、写动作、完整媒体灾备、长稳或生产 Gate。
 - 运行核心：只使用最新电商 `main` 的 M7/M9/schema v39 路径；独立客服仓库只提供新版 UI
   和适用修复来源，不形成第二套业务事实、Agent 路由或数据库。旧 8768/schema v28 实例已

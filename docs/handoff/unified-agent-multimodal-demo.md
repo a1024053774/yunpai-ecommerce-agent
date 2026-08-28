@@ -1,135 +1,164 @@
-# 统筹 Agent 多模态 Demo 部署与使用说明
+# 统筹 Agent 多模态 Demo：公网入口、部署与使用说明
 
-适用对象：2026-08-28 合并后的统筹 Agent 与多模态客服 Demo。
-管理员密钥、访问令牌、模型 API Key 和 4090 推理服务地址必须通过受控渠道提供，不进入 GitHub、飞书正文或截图。
+适用日期：2026-08-29。
 
-本说明是当前公网交付说明；代码分支为 `demo/main-multimodal-product-demo`，应用包版本仍为
-`0.30.0`，数据库 schema 仍为 v39。部署回执和最新验收证据以本说明末尾的证据目录及项目台账为准。
+本说明对应受鉴权的 virtual 产品测试实例，不代表真实淘宝/天猫渠道、真实经营数据、平台写权限、长稳或正式生产 Gate 已放行。访问令牌、Cookie、管理员密钥和模型 API Key 不写入 GitHub、飞书正文、截图或工单。
 
-## 入口
+## 1. 当前交付版本
 
-部署后由同一个服务提供三个入口：
+- GitHub 分支：demo/main-multimodal-product-demo
+- 公网已部署代码：845a0f52f728b931a5f8b739c421f6b24c9869a6
+- 服务器部署回执：/opt/yunpai-ecommerce-agent/.deploy-revision
+- 不可变发布目录：/opt/yunpai-ecommerce-agent-releases/845a0f52f728b931a5f8b739c421f6b24c9869a6
+- 当前应用、数据库 schema、模型和能力状态以 /health、/ready、能力 API 与 .deploy-revision 为权威来源；2026-08-29 验收时观测到包版本 0.30.0、schema 39。
 
-- /admin：统筹 Agent 主入口，用于店铺经营、商品、订单、库存、客服、流量、预测和建议的统一查询。
-- /admin/advanced：高级管理后台，用于商品经营工作台、数据准备度、需求预测、客服接管、知识与 SOP、质检和发布门禁。
-- /customer-test：受控客服体验，支持 PNG/JPEG/WebP 图片、Qwen 视觉识别和 Qwen 润色；只写入隔离的虚拟测试数据，不向平台发送消息。
+本次最终收口包括：
 
-公网 IP 实例的产品入口是 `/admin`；`/app` 属于独立的 AgentLoop，不是统筹 Agent，也不应作为客户入口。
-AgentLoop 的域名入口保持独立，不能用 IP 实例的 `/app` 判断本产品是否部署成功。
+- /admin 接入商品、订单、库存、竞品、营销、利润、运营辅助、指标、流量实验、需求预测、库存计划、生命周期建议和建议审计。
+- /admin 可直接在输入框按 Ctrl/⌘+V 粘贴 PNG/JPEG/WebP，不要求先点“上传图片”。
+- 图片经 Qwen2.5-VL 形成非权威观察；脱敏后的观察文本可在后续轮次继续使用，但不会变成业务事实或执行授权。
+- /customer-test 实际接入 Qwen2.5-VL 和 Qwen3-14B 润色，并显示是否调用、是否采用、模型和耗时。
+- 流量实验读取已固化的 effect_estimate / confidence_interval，方向、变化值和区间按实验 ID 绑定；不重算统计。
 
-正确的安全访问方式是：
+## 2. 正确公网入口
 
-1. 向部署维护者索取当前短期授权链接。链接形式为 https://129.211.3.209:8800/product-demo/access/<短期令牌>，实际令牌不写入本文、GitHub、飞书或工单。
-2. 第一次打开授权链接后，Nginx 返回 7 天 Secure/HttpOnly/SameSite=Lax Cookie，并跳转到 /admin。
-3. 之后使用以下干净入口：
-   - https://129.211.3.209:8800/admin：统筹 Agent 主入口。
-   - https://129.211.3.209:8800/admin/advanced：高级管理后台。
-   - https://129.211.3.209:8800/customer-test：受控客服/图片/润色体验。
+- https://129.211.3.209:8800/ → 302 /admin
+- https://129.211.3.209:8800/app → 302 /admin
+- https://129.211.3.209:8800/admin：统筹 Agent 主入口
+- https://129.211.3.209:8800/admin/advanced：高级管理后台
+- https://129.211.3.209:8800/customer-test：图片识别与客服润色测试
 
-部署维护者在服务器上通过 SSH 读取当前授权链接：
+AgentLoop 的独立域名未改；不要再把 IP 实例的 /app 当成 AgentLoop 客户入口。无有效 Cookie 时，/admin、/admin/advanced 和 /customer-test 均返回 403。
 
-`bash
-sudo stat -c '%a %U %G %n' /etc/yunpai-product-demo/access-url
-sudo cat /etc/yunpai-product-demo/access-url
-`
+## 3. 安全取得访问链接 / Cookie
 
-该文件应保持 `0600 root:root`；授权链接只通过企业密码管理器、受控私聊或现场交接发送，
-不要贴到 GitHub、飞书正文、截图、浏览器收藏夹同步或工单。轮换 Nginx token 后旧 Cookie
-应失效；客户只需保留浏览器 Cookie，不需要复制 Cookie 内容。退出产品测试使用
-`/product-demo/logout`，随后重新打开维护者发出的短期授权链接。
+访问链接只保存在服务器。仅在受控终端执行：
 
-## 第一次使用
+    ssh yunpai
+    sudo stat -c '%a %U %G %n' /etc/yunpai-product-demo/access-url
+    sudo cat /etc/yunpai-product-demo/access-url
 
-1. 打开部署维护者通过私密渠道提供的受保护访问入口；浏览器获得安全 Cookie 后进入 /admin。当前公网 Demo 不需要在页面输入管理员密钥。
-2. 直接描述目标，例如“汇总当前库存风险和最近订单”，统筹 Agent 会按需选择只读业务能力并展示处理摘要。
-3. 查询商品经营、预测或生命周期建议时，可直接提出自然语言问题；这些能力只读取已固化证据，不会自动创建采购单、改价或发布。
-4. 需要专业操作时点击“高级管理”，进入 /admin/advanced 核对事实、版本、证据和人工确认状态。
-5. 需要统筹图片观察时，直接把图片粘贴到 /admin 的消息输入框（Windows/Linux 用 Ctrl+V，macOS 用 ⌘+V），不需要先上传文件；图片可以单独发送，也可以同时补充文字。文件选择按钮只是可选入口。
-6. 需要客服图片识别或润色时，从“图片客服”入口进入 /customer-test；回复下方会标出视觉识别和润色是否实际采用。
+要求：
 
-- /admin 使用服务端持久化会话；刷新页面或切换会话时，历史记录从同一租户/管理员范围的数据库读取。
-- 旧客户端仍可调用 /v1/admin/workspace/chat/stream，但它只是兼容入口，会委托持久化会话链路并忽略客户端自带历史，避免出现第二套路由语义。
-- 复合查询只有在全部核实任务成功时才标记为完成；全部失败会留下可重试的未完成记录，不会把空回答写入正常历史。
-- 会话标题和展示边界会在 API 写入/返回前脱敏；不要把客户姓名、电话、地址或其他个人信息主动放进标题。
-- 图片观察会以带“非权威”标记的脱敏内容进入后续统筹轮次；它只能帮助模型理解图片可能涉及的对象，不能替代商品、订单、库存或售后工具核验。
-- 工作区 SSE 使用 `delivery_mode=verified_final`：状态、图片观察和工具事件可以边处理边返回，
-  `delta` 名称为兼容字段，但每轮只发送一条已经完成事实/状态校验的完整回复；刷新历史后，
-  `processing` 中仍保留阶段、工具、回退、冲突和失败原因。
+- 文件保持 0600 root:root。
+- 链接只通过企业密码管理器、受控私聊或现场交接发送。
+- 第一次打开短期链接后，Nginx 写入 7 天 Secure / HttpOnly / SameSite=Lax Cookie，并跳转 /admin。
+- 后续只使用干净的三个产品入口，不复制或查看 Cookie 内容。
+- 退出使用 /product-demo/logout；令牌轮换后重新打开维护者提供的新链接。
 
-## 当前部署链路
+## 4. 使用说明
 
-客户浏览器
-  → Nginx TLS :8800（短期授权链接 / Cookie 门禁）
-  → 127.0.0.1:8767（systemd 管理的 FastAPI 电商服务）
-  → SQLite schema v39 + 虚拟演示数据
-  → 4090 SSH 隧道
-       ├─ 18085：Qwen3.6-35B，统筹规划与最终生成
-       ├─ 58080：Qwen3-14B LoRA，受事实锚保护的客服润色
-       └─ 58081：Qwen2.5-VL，非权威图片观察
+### 4.1 统筹 Agent
 
-服务端启动顺序是：拉取已审核分支 → 保留并验证 schema 备份 → init 前向迁移 → 按需执行
-simulate-store --load-only 幂等装载“晴川生活电器旗舰店”虚拟数据 → 启动 systemd 服务
-→ Nginx 反代和 Cookie 门禁 → 依次检查 /health、/ready、/admin、/admin/advanced
-和 /customer-test。应用只监听回环地址，公网不直接暴露 8767；4090 的三个推理端口也不直接暴露公网。
+1. 进入 /admin。
+2. 可展开“补充业务范围”，填写店铺 ID、SKU、订单 ID；新会话若不需要旧范围，应清空这些可选字段。
+3. 直接描述经营问题。只读查询会按需调用一项或多项后台能力；涉及退款、改价、采购、付款、发布等写操作时只给出确认提示。
+4. 图片咨询直接把图片粘贴进消息输入框；出现“已准备好，直接发送即可”后输入问题并发送。
+5. 下一轮可说“继续基于上一张图说明”。系统只恢复已脱敏的非权威观察，不保存 base64 到模型历史。
+6. 需要看完整结构化证据时点击“高级管理”。
 
-统筹 Agent 与高级管理使用同一应用、同一数据库和同一租户范围。当前目录中的业务工具包括商品、订单、库存、竞品、营销、利润、运营辅助、指标、流量实验室、需求预测/库存计划和商品生命周期建议；统筹接口只读这些已固化事实，写操作仍需进入高级管理人工确认。
+演示数据范围：
 
-装载演示数据后，统筹 Agent 可按需核对以下同一数据库中的只读能力：商品目录/商品事实、
-订单与物流、库存风险、经营指标、竞品价格与情报、营销诊断、利润与结算、运营分析、
-流量实验洞察、需求预测、库存计划、商品经营建议及建议审计。`simulate-store --load-only`
-只做幂等装载，不运行写动作；高级管理页面显示的是同一批数据和证据，不是另一套 mock 服务。
+- qingchuan-flagship-001：商品、订单、库存、营销、利润、流量实验等。
+- QC-AF5-WHITE / QC-ORDER-1001：商品、多仓库存与物流示例。
+- YP-SKU-TRAFFIC-001：固化流量实验示例。
+- virtual-shop-001 / YP-SKU-001：需求预测、库存计划和生命周期建议示例。
+- sim-rec-001：生命周期建议与审计示例。
 
-## 客服 Demo 的边界
+### 4.2 高级管理
 
-- 页面显示的商品、库存、订单和客服会话属于虚拟/隔离演示数据，不代表真实店铺实时状态。
-- “已润色”只表示在事实核验后的回复上完成受控文字整理，不改变价格、库存、物流、退款或售后事实。
-- “已识图”只表示视觉模型返回了可用观察结果；无法确认的订单或商品信息仍会保持不确定，不会由图片猜测。
-- 统筹 Agent 的写操作只返回确认建议；当前 Demo 不执行退款、赔付、改价、采购、付款、发布或平台消息发送。
+/admin/advanced 与统筹 Agent 使用同一 FastAPI 服务、SQLite 数据库、租户和工具实现，不是另一套 mock 后台。重点页面：
 
-## 部署步骤（服务器）
+- 功能模块：查看 13 个可用业务模块的职责、边界和 Agent 工具。
+- 需求预测：查看固化 run、区间、回测、库存建议与质量原因。
+- 商品经营：查看 M9-R 读模型、门禁、诊断、生命周期建议和审计；缺证据时 fail closed。
+- 营销投放 / 利润对账：查看活动日指标、ROAS、CTR、费用、管理利润和差异任务。
+- 流量实验：读取实验、样本、effect、可信区间、质量门禁、反证和新鲜度；页面查询不会运行新分析。
 
-以下步骤对应当前服务器链路：服务目录为 /opt/yunpai-ecommerce-agent，systemd 单元为
-yunpai-ecommerce-agent.service，应用回环端口为 8767，公网由 Nginx 的 8800/TLS 入口反代。
-实际主机名、证书和备份目录以服务器现有配置为准。
+### 4.3 客服图片与润色
 
-1. 拉取已审核的 GitHub 分支，并在停机窗口前确认工作区干净。
-2. 在服务器私有环境文件中配置模型、认证和数据目录。主模型配置指向 4090 隧道的 Qwen3.6-35B；多模态能力对应 VISION_*，润色能力对应 POLISH_*。真实密钥只放在权限为 0600 的环境文件或密钥管理器中。
-3. 停止服务并按现有灾备流程创建、验证当前 schema 的加密备份；不要直接覆盖旧备份。
-4. 更新代码和虚拟环境，执行数据库初始化或前向迁移；产品演示使用 simulate-store --load-only 幂等装载虚拟店铺数据，不把模拟数据混入默认 operational 视图。
-5. 启动服务，依次检查 /health、/ready、/admin、/admin/advanced 和 /customer-test。
-6. 通过前置认证做一次商品、库存、订单、统筹图片粘贴和客服润色请求；确认 /health 中的视觉和润色状态与实际配置一致，并核对 SSE 无错误、图片观察标记为非权威。
-7. 保留切换前备份和上一版源码归档。若健康检查失败，停止新版本并按现有回滚流程恢复，不在公网临时关闭认证。
+进入 /customer-test，选择虚拟演示对象，可上传或直接粘贴图片。回复下方重点查看：
 
-发布后至少留存以下验收证据：有效 Cookie 下 `/admin`、`/admin/advanced`、`/customer-test`、
-`/health`、`/ready` 和能力 API；无 Cookie 的 403；统筹商品/库存/订单/预测/库存计划/生命周期
-查询；统筹粘贴图片及跨轮观察；客服图片识别与润色；以及浏览器无控制台错误的截图。截图只允许
-使用虚拟演示数据，不得包含访问 token、Cookie、模型 API Key 或真实顾客信息。
+- Qwen 视觉：已解析
+- Qwen 润色：已采用，或已调用、原文未变
+- 风险、上下文、证据和决策详情
 
-## 本地交接/复现
+客服测试不会向真实平台发送消息。润色只调整表达，不得改变已核实的价格、库存、物流、退款或经营数字。
 
-使用 Python 3.11+ 和仓库虚拟环境。典型的离线 smoke 命令如下（真实模型配置不写入本文）：
+## 5. 回复状态语义
 
-    python3.11 -m venv .venv
-    .venv/bin/python -m pip install -e .[dev]
-    export DATA_DIR=$PWD/data-workspace-agent
-    export ADMIN_AUTH_REQUIRED=true
-    export AUTH_REQUIRED=true
-    export MODEL_ENABLED=false
-    export MODEL_MOCK_MODE=true
-    export CUSTOMER_TEST_ENABLED=true
-    .venv/bin/python -m ecommerce_agent.cli init
-    .venv/bin/python -m ecommerce_agent.cli simulate-store --load-only
-    .venv/bin/python -m ecommerce_agent.cli serve --host 127.0.0.1 --port 8091
+- pending：处理中，不是最终结果。
+- control_response：本轮没有查询实时业务事实，例如图片描述、澄清或动作确认；不能当成后台业务事实核验。
+- verified_final：所需只读任务均为 success 或已核实 no_data，最终正文通过事实/状态校验。模型草稿不一致时会使用确定性事实摘要并显示“安全降级”，仍可为 verified_final。
+- incomplete：任务失败、只完成部分或无法形成有效正文；不得当成已完成。
 
-然后打开 http://127.0.0.1:8091/admin；高级后台是 http://127.0.0.1:8091/admin/advanced。要验证真实视觉和润色服务，将模型配置放在本地私有环境中，并先用 model-probe 检查连通性。
+刷新历史后，processing 仍保留 delivery_mode、completion_status、工具事件、Vision 状态和降级原因。
 
-统筹工作台的图片验证：在消息输入框直接 Ctrl/⌘+V 粘贴图片，等待“图片观察”状态，再发送文字或只发送图片；第二轮输入“基于刚才图片继续说明”，应能看到带“非权威”标记的上一轮观察进入模型历史。客服图片验证仍在 /customer-test，两条链路共享图片格式和 5 MiB 限制，但客服页的结果属于受控 simulation。
+## 6. 当前部署链路
 
-## 验收重点
+    GitHub demo/main-multimodal-product-demo
+      → 不可变 release 目录
+      → 停止 systemd 服务
+      → 源码快照 + 0600 环境备份
+      → 旧代码创建并验证停机加密 .ypbak
+      → rsync 到 /opt/yunpai-ecommerce-agent
+           保留 .env / .venv / data / backups
+      → compileall / 新代码创建并验证停机加密 .ypbak
+      → 写入 .deploy-revision
+      → systemd: yunpai-ecommerce-agent.service
+      → FastAPI 仅监听 127.0.0.1:8767
+      → Nginx TLS :8800 + 访问链接/Cookie 门禁
+      → 客户浏览器
 
-- /admin 与 /admin/advanced 是同一服务的两个页面，不要为统筹 Agent 另起一套 API 或数据库。
-- 统筹工具目录应能看到预测、库存计划和生命周期建议，并显示中文业务标签。
-- 装载虚拟数据后，统筹 Agent 应能按需调用商品、订单、库存、竞品、营销、利润、运营辅助、指标、流量、预测/库存计划和生命周期建议的只读事实；高级管理页是同一服务的证据核对入口。
-- /customer-test 的图片请求应展示视觉状态、媒体历史和润色状态；失败时保留原回复并明确标注回退。
-- 图片观察的跨轮历史只保存脱敏、非权威文本，不保存 base64；高级管理中的写操作仍需人工确认。
-- 任何平台写动作、真实渠道消息发送和真实经营结论都不由本 Demo 的本机或公网测试结果放行。
+推理链路：
+
+- 127.0.0.1:18085：Qwen3.6-35B，统筹规划与最终生成。
+- 127.0.0.1:58080：Qwen3-14B，受事实锚保护的客服润色。
+- 127.0.0.1:58081：Qwen2.5-VL，非权威图片观察。
+
+上述端口通过受控隧道使用，不直接暴露公网。Neo4j 是可替换的图谱能力；本 Demo 的生产回答链路使用运行时 SQLite RAG，因此 Neo4j 连接失败不阻断当前 virtual Demo。
+
+## 7. 发布步骤与回滚
+
+1. 确认 GitHub 目标提交和工作树范围。
+2. 用 git archive 写入新的不可变 release 目录。
+3. 停止 yunpai-ecommerce-agent.service。
+4. 备份旧源码和 0600 .env；用旧代码执行 backup --require-stopped 与 backup-verify。
+5. rsync --delete release 到应用目录，显式排除 .env、.venv、data、backups 和部署回执。
+6. 运行 compileall；用新代码再次创建、验证停机加密备份。
+7. 写入 .release-commit 和 .deploy-revision，启动 systemd。
+8. 检查回环 /health、/ready，再检查公网重定向、403 门禁和有效 Cookie 下三个页面。
+9. 执行商品/库存/订单、营销/利润、预测/计划、生命周期/审计、流量、统筹粘贴图片、跨轮图片和客服 Vision/Polish smoke。
+
+失败时停止新服务，使用 .deploy-revision 中的源码归档和匹配 schema 的已验证 .ypbak 回滚；不要临时关闭公网认证。
+
+## 8. 2026-08-29 验收结果
+
+- 最终代码全量：1511 passed, 1 skipped；唯一 skip 为既有条件跳过。
+- 最终变更相关回归：75 项 workspace/presenter/multimodal 通过；compileall、git diff --check、project-to-act 校验和 design-integrity scanner 通过。
+- 公网：/ 与 /app 均 302 /admin；无 Cookie 的三个页面均 403；服务 /health、/ready 均 200。
+- 统筹 Agent：商品/多仓库存/订单、营销/利润、预测/库存计划、生命周期/审计和流量实验均通过真实公网只读调用。
+- 流量实验：两份固化分析均显示实验 ID、状态、质量门禁、结论、新鲜度、方向、变化值和区间；数据库确认 delivery_mode=verified_final、completion_status=completed、工具 success。
+- 图片：Ctrl/⌘+V 直接粘贴成功，Vision applied；不附图的后续轮次继续使用上一张图且未调用经营工具。
+- 客服：Qwen2.5-VL applied，Qwen3-14B polish applied。
+- 浏览器：/admin、/admin/advanced、/customer-test 的 console error/warning 均为 0。
+
+关键截图：
+
+- docs/evidence/20260829-845a0f5-admin-direct-paste-vision-badge.png
+- docs/evidence/20260829-845a0f5-admin-paste-cross-round-live.png
+- docs/evidence/20260829-845a0f5-admin-product-inventory-order-live.png
+- docs/evidence/20260829-845a0f5-admin-marketing-profit-live.png
+- docs/evidence/20260829-845a0f5-admin-forecast-inventory-plan-live.png
+- docs/evidence/20260829-845a0f5-admin-lifecycle-audit-live.png
+- docs/evidence/20260829-845a0f5-admin-traffic-verified.png
+- docs/evidence/20260829-845a0f5-advanced-overview.png
+- docs/evidence/20260829-845a0f5-advanced-modules.png
+- docs/evidence/20260829-845a0f5-advanced-forecasting.png
+- docs/evidence/20260829-845a0f5-advanced-product-lifecycle-loaded.png
+- docs/evidence/20260829-845a0f5-advanced-marketing.png
+- docs/evidence/20260829-845a0f5-advanced-finance.png
+- docs/evidence/20260829-845a0f5-advanced-traffic-lab.png
+- docs/evidence/20260829-845a0f5-customer-vision-polish.png
+
+对应验收台账：E-20260829-001 / G-UNIFIED-AGENT-DEMO-001。
