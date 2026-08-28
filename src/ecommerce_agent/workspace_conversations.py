@@ -13,6 +13,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .message_media import annotate_workspace_history_content
 from .text_utils import redact_sensitive
 
 
@@ -95,10 +96,41 @@ def build_workspace_history(
 
     if limit < 1:
         return []
-    history = [
-        {"role": str(item["role"]), "content": str(item["content"])}
-        for item in messages
-        if item.get("role") in {"user", "assistant"}
-        and str(item.get("content", "")).strip()
-    ]
+    history = []
+    for item in messages:
+        if item.get("role") not in {"user", "assistant"}:
+            continue
+        content = annotate_workspace_history_content(
+            str(item.get("content", "")), item.get("processing")
+        )
+        if content.strip():
+            history.append({"role": str(item["role"]), "content": content})
     return history[-limit:]
+
+
+def workspace_vision_processing(event: dict[str, Any]) -> dict[str, Any]:
+    """Build a redacted, non-authoritative image record for workspace history."""
+
+    status = str(event.get("status") or "unknown")
+    applied = bool(event.get("applied"))
+    processing: dict[str, Any] = {
+        "image_attached": True,
+        "vision_status": status,
+        "vision_applied": applied,
+        "vision_model": event.get("model"),
+        "vision_latency_ms": event.get("latency_ms"),
+    }
+    evidence = event.get("evidence")
+    if applied and isinstance(evidence, dict):
+        description = evidence.get("description")
+        if isinstance(description, str) and description.strip():
+            safe_description, _ = redact_sensitive(description[:2000])
+            processing["vision_evidence"] = {
+                "status": "applied",
+                "source_kind": "customer_image",
+                "description": safe_description.strip(),
+                "authority": "multimodal_model_observation",
+                "semantic_authority": False,
+                "business_execution_authority": False,
+            }
+    return processing

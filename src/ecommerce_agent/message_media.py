@@ -110,9 +110,33 @@ def annotate_history_content(
         for item in parse_message_media(sources_json)
         if item.get("vision_description")
     ]
-    if not notes:
+    return _append_vision_history_notes(content, notes)
+
+
+def annotate_workspace_history_content(
+    content: str,
+    processing: dict[str, Any] | None,
+) -> str:
+    """Append a persisted workspace image observation to model-facing history."""
+
+    if not isinstance(processing, dict):
         return content
-    note_text = "；".join(notes)
+    evidence = processing.get("vision_evidence")
+    if not isinstance(evidence, dict):
+        return content
+    if evidence.get("semantic_authority") is not False:
+        return content
+    description = evidence.get("description")
+    if not isinstance(description, str) or not description.strip():
+        return content
+    return _append_vision_history_notes(content, [description])
+
+
+def _append_vision_history_notes(content: str, notes: list[str]) -> str:
+    normalized = [str(note).strip() for note in notes if str(note).strip()]
+    if not normalized:
+        return content
+    note_text = "；".join(normalized)
     return f"{content}\n{_HISTORY_MEDIA_NOTE_PREFIX} {note_text}"
 
 

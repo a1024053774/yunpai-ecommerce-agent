@@ -738,7 +738,7 @@
       adminKey: sessionStorage.getItem('yunpai.adminKey') || '',
       adminAuthRequired: true, sessionId: '', history: [], messages: [], conversations: [],
       running: false, startedAt: 0, timer: null, currentMeta: null, currentTool: null, currentVision: null,
-      customerServiceCapabilities: null, image: null, imageTypes: ['image/png','image/jpeg','image/webp'], maxImageBytes: 5 * 1024 * 1024
+      customerServiceCapabilities: null, image: null, messageObjectUrls: new Set(), imageTypes: ['image/png','image/jpeg','image/webp'], maxImageBytes: 5 * 1024 * 1024
     };
     const eventLabels = {
       'chat.completed':'客服完成回复', 'evolution.approved':'新知识已批准', 'evolution.evaluated':'知识候选已评估',
@@ -754,7 +754,11 @@
     const visionStatusLabel = (status) => ({applied:'已解析',disabled:'未启用',misconfigured:'配置不完整',error:'调用失败'}[status] || status || '未知');
 
     const newWorkspaceSessionId = () => `workspace:${crypto.randomUUID ? crypto.randomUUID() : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`}`;
-    function clearRenderedMessages() { $('messageList').innerHTML = ''; }
+    function clearRenderedMessages() {
+      state.messageObjectUrls.forEach((url) => URL.revokeObjectURL(url));
+      state.messageObjectUrls.clear();
+      $('messageList').innerHTML = '';
+    }
     function setImageStatus(message) { $('workspaceImageStatus').textContent = message || ''; }
     async function imagePayloadFromFile(file) {
       if (!file || !state.imageTypes.includes(file.type)) throw new Error('仅支持 PNG、JPEG 或 WebP 图片');
@@ -805,6 +809,7 @@
     }
     async function selectConversation(conversationId, refreshList = true) {
       const messages = await api(`/v1/admin/workspace/conversations/${encodeURIComponent(conversationId)}/messages`);
+      clearWorkspaceImage();
       state.sessionId = conversationId; state.messages = messages; state.history = messages.filter((item) => ['user','assistant'].includes(item.role)).slice(-12).map((item) => ({role:item.role, content:item.content}));
       clearRenderedMessages(); state.messages.forEach((item) => {
         const processing = item.processing || {};
@@ -824,6 +829,7 @@
     }
     async function createConversation() {
       const conversation = await api('/v1/admin/workspace/conversations', {method:'POST', body:JSON.stringify({})});
+      clearWorkspaceImage();
       state.sessionId = conversation.id; state.history = []; state.messages = []; clearRenderedMessages();
       state.conversations = [conversation, ...state.conversations.filter((item) => item.id !== conversation.id)]; renderConversationList();
     }
@@ -870,6 +876,7 @@
     function appendMessage(role, content, details = {}, persist = false) {
       const row = document.createElement('div'); row.className = `message-row ${role}`;
       const avatar = role === 'assistant' ? '<span class="avatar">Y</span>' : '';
+      if (details.imageUrl) state.messageObjectUrls.add(details.imageUrl);
       const message = role === 'assistant' ? formatAgentText(content) : escapeHtml(content);
       const image = details.imageUrl ? `<img class="message-image" alt="本轮粘贴的图片" src="${escapeHtml(details.imageUrl)}">` : (details.imageAttached ? '<span class="message-image-badge">已附图片</span>' : '');
       const vision = details.visionStatus && details.visionStatus !== 'not_applicable' ? `<span class="vision-status ${details.visionApplied ? 'ok' : 'warn'}">图片观察：${escapeHtml(visionStatusLabel(details.visionStatus))}${details.visionModel ? ` · ${escapeHtml(details.visionModel)}` : ''}${Number.isInteger(details.visionLatencyMs) ? ` · ${details.visionLatencyMs}ms` : ''}</span>` : '';
@@ -991,10 +998,10 @@
     $('messageInput').addEventListener('input', (event) => { event.target.style.height='48px'; event.target.style.height=`${Math.min(event.target.scrollHeight,150)}px`; });
     document.addEventListener('click', (event) => { const chip = event.target.closest('[data-prompt]'); if (chip) { $('messageInput').value = chip.dataset.prompt; $('messageInput').focus(); } });
     $('refreshButton').addEventListener('click', () => loadSnapshot().catch((error) => appendMessage('assistant',`刷新失败：${error.message}`)));
-    $('logoutButton').addEventListener('click', () => { state.adminId=''; state.adminKey=''; sessionStorage.removeItem('yunpai.adminId'); sessionStorage.removeItem('yunpai.adminKey'); $('loginOverlay').classList.remove('hidden'); });
+    $('logoutButton').addEventListener('click', () => { clearWorkspaceImage(); clearRenderedMessages(); state.adminId=''; state.adminKey=''; sessionStorage.removeItem('yunpai.adminId'); sessionStorage.removeItem('yunpai.adminKey'); $('loginOverlay').classList.remove('hidden'); });
     $('loginForm').addEventListener('submit', async (event) => {
       event.preventDefault(); state.adminId=$('adminId').value.trim(); state.adminKey=$('adminKey').value; $('loginError').textContent='';
-      try { await api('/v1/admin/overview'); sessionStorage.setItem('yunpai.adminId',state.adminId); sessionStorage.setItem('yunpai.adminKey',state.adminKey); $('adminKey').value=''; $('loginOverlay').classList.add('hidden'); await loadConversations(); await loadSnapshot(); }
+      try { await api('/v1/admin/overview'); sessionStorage.setItem('yunpai.adminId',state.adminId); sessionStorage.setItem('yunpai.adminKey',state.adminKey); $('adminKey').value=''; $('loginOverlay').classList.add('hidden'); await loadConversations(); await loadSnapshot(); await loadCapabilities(); }
       catch (error) { $('loginError').textContent=error.message; }
     });
 

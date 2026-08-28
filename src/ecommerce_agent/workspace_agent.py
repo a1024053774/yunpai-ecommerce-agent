@@ -13,7 +13,6 @@ from pydantic import (
     Field,
     ValidationError,
     field_validator,
-    model_validator,
 )
 
 from .auth import AdminPrincipal
@@ -21,7 +20,7 @@ from .business import CopywritingRequest, OpsReportQuery
 from .evolution import EvolutionService
 from .llm import ModelError, ModelUnavailableError
 from .policy import is_business_action_request
-from .schemas import ChatImageInput
+from .schemas import ChatImageInput, ChatMessageContent
 from .service import AgentService
 from .text_utils import redact_sensitive
 from .tools import ToolExecutionContext
@@ -57,17 +56,8 @@ class WorkspaceContext(BaseModel):
     order_id: str | None = Field(default=None, max_length=128)
 
 
-class WorkspaceMessageContent(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    message: str = Field(default="", max_length=4000)
-    image: ChatImageInput | None = None
-
-    @model_validator(mode="after")
-    def require_message_or_image(self) -> "WorkspaceMessageContent":
-        if not self.message.strip() and self.image is None:
-            raise ValueError("message or image is required")
-        return self
+class WorkspaceMessageContent(ChatMessageContent):
+    """Workspace-specific name for the shared text/image request envelope."""
 
 
 class WorkspaceChatRequest(WorkspaceMessageContent):
@@ -377,6 +367,7 @@ class WorkspaceAgent:
                 "applied": applied,
                 "model": image_observation.get("model"),
                 "latency_ms": image_observation.get("latency_ms"),
+                "evidence": image_observation.get("evidence") or None,
                 "message": (
                     "图片已读取，正在交给统筹 Agent 结合经营数据核对"
                     if applied

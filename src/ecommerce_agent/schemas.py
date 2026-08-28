@@ -134,16 +134,23 @@ class ChatImageInput(BaseModel):
         return _decode_chat_image(self.data_base64)
 
 
-class _ChatContent(BaseModel):
+class ChatMessageContent(BaseModel):
+    """Shared text/image envelope used by customer and workspace chat APIs."""
+
+    model_config = ConfigDict(extra="forbid")
+
     message: str = Field(default="", max_length=4000)
-    context: dict[str, Any] = Field(default_factory=dict, max_length=16)
     image: ChatImageInput | None = None
 
     @model_validator(mode="after")
-    def require_message_or_image(self) -> "_ChatContent":
+    def require_message_or_image(self) -> "ChatMessageContent":
         if not self.message.strip() and self.image is None:
             raise ValueError("message or image is required")
         return self
+
+
+class _ChatContent(ChatMessageContent):
+    context: dict[str, Any] = Field(default_factory=dict, max_length=16)
 
 
 class ChatRequest(_ChatContent):

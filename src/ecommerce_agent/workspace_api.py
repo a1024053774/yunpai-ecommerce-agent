@@ -20,7 +20,12 @@ from .workspace_agent import (
     WorkspaceMessageContent,
     WORKSPACE_IMAGE_ONLY_MESSAGE,
 )
-from .workspace_conversations import derive_workspace_title, redact_workspace_title
+from .workspace_conversations import (
+    build_workspace_history,
+    derive_workspace_title,
+    redact_workspace_title,
+    workspace_vision_processing,
+)
 
 
 logger = logging.getLogger("ecommerce_agent.workspace_api")
@@ -208,11 +213,12 @@ def build_workspace_router(
             limit=12,
         )
         history = [
-            WorkspaceHistoryItem(role=item["role"], content=item["content"])
-            for item in persisted
-            if item["status"] == "completed" and item["role"] in {"user", "assistant"}
-            and str(item.get("content") or "").strip()
-        ][-12:]
+            WorkspaceHistoryItem.model_validate(item)
+            for item in build_workspace_history(
+                [item for item in persisted if item["status"] == "completed"],
+                limit=12,
+            )
+        ]
         if conversation["message_count"] == 0:
             db.update_workspace_conversation_title(
                 tenant_id=admin.tenant_id,
@@ -223,7 +229,7 @@ def build_workspace_router(
                     derive=True,
                 ),
             )
-        db.append_workspace_message(
+        user_message = db.append_workspace_message(
             tenant_id=admin.tenant_id,
             admin_id=admin.admin_id,
             conversation_id=conversation_id,
@@ -231,6 +237,7 @@ def build_workspace_router(
             content=persisted_message,
             processing={"image_attached": payload.image is not None},
         )
+        user_message_id = user_message["id"]
         request = WorkspaceChatRequest(
             session_id=conversation_id,
             message=effective_message,
@@ -255,6 +262,15 @@ def build_workspace_router(
                 for event in agent.stream(request, admin):
                     if event.get("event") == "tool":
                         latest_tool = event
+                    if event.get("event") == "vision":
+                        db.update_workspace_message(
+                            tenant_id=admin.tenant_id,
+                            admin_id=admin.admin_id,
+                            conversation_id=conversation_id,
+                            message_id=user_message_id,
+                            status="completed",
+                            processing=workspace_vision_processing(event),
+                        )
                     if event.get("event") == "done":
                         result = event.get("response") or {}
                         safe_answer, _ = redact_sensitive(
