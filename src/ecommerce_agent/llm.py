@@ -221,6 +221,17 @@ class ModelGateway:
             ),
             "stream": stream,
         }
+        self._apply_thinking_config(payload, thinking_enabled=thinking_enabled)
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
+        return payload
+
+    def _apply_thinking_config(
+        self,
+        payload: dict[str, Any],
+        *,
+        thinking_enabled: bool | None,
+    ) -> None:
         if self.settings.model_provider == "glm":
             effective_thinking = (
                 self.settings.model_thinking_enabled
@@ -234,9 +245,15 @@ class ModelGateway:
             payload["thinking"] = {
                 "type": "enabled" if thinking_enabled else "disabled"
             }
-        if json_mode:
-            payload["response_format"] = {"type": "json_object"}
-        return payload
+        elif self.settings.model_provider == "qwen":
+            effective_thinking = (
+                self.settings.model_thinking_enabled
+                if thinking_enabled is None
+                else thinking_enabled
+            )
+            payload["chat_template_kwargs"] = {
+                "enable_thinking": effective_thinking
+            }
 
     def health(self) -> tuple[bool, str]:
         if self.settings.model_mock_mode:
@@ -261,8 +278,7 @@ class ModelGateway:
             "max_tokens": 8,
             "stream": False,
         }
-        if self.settings.model_provider in {"glm", "deepseek"}:
-            payload["thinking"] = {"type": "disabled"}
+        self._apply_thinking_config(payload, thinking_enabled=False)
         data = self._request(payload)
         content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
         return {

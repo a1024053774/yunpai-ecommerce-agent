@@ -189,6 +189,82 @@ def test_deepseek_text_generation_keeps_provider_thinking_default(tmp_path) -> N
     assert "thinking" not in captured
 
 
+def test_qwen_gateway_disables_thinking_for_text_and_structured_generation(
+    tmp_path,
+) -> None:
+    captured: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        captured.append(payload)
+        content = (
+            '{"intent":"product_inquiry","mode":"answer","reason":"facts_ready"}'
+            if payload.get("response_format")
+            else "已按商品事实回答。"
+        )
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": content}}]},
+        )
+
+    settings = replace(
+        make_settings(tmp_path),
+        model_provider="qwen",
+        model_enabled=True,
+        model_mock_mode=False,
+        model_streaming=False,
+        model_api_key="test-model-key",
+        model_thinking_enabled=False,
+    )
+    gateway = ModelGateway(settings, transport=httpx.MockTransport(handler))
+    try:
+        assert gateway.generate([{"role": "user", "content": "answer"}])
+        decision = gateway.generate_json(
+            [{"role": "user", "content": "decide"}],
+            thinking_enabled=False,
+        )
+    finally:
+        gateway.close()
+
+    assert decision["mode"] == "answer"
+    assert [item["chat_template_kwargs"] for item in captured] == [
+        {"enable_thinking": False},
+        {"enable_thinking": False},
+    ]
+    assert all("thinking" not in item for item in captured)
+
+
+def test_qwen_probe_disables_thinking(tmp_path) -> None:
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "model": "qwen-test",
+                "choices": [{"message": {"content": "OK"}}],
+                "usage": {"total_tokens": 4},
+            },
+        )
+
+    settings = replace(
+        make_settings(tmp_path),
+        model_provider="qwen",
+        model_enabled=True,
+        model_mock_mode=False,
+        model_api_key="test-model-key",
+    )
+    gateway = ModelGateway(settings, transport=httpx.MockTransport(handler))
+    try:
+        assert gateway.probe()["ok"] is True
+    finally:
+        gateway.close()
+
+    assert captured["chat_template_kwargs"] == {"enable_thinking": False}
+    assert "thinking" not in captured
+
+
 def test_structured_generation_retries_malformed_json(tmp_path) -> None:
     attempts = 0
 
