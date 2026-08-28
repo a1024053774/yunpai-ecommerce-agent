@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import json
 from dataclasses import replace
 
 from fastapi.testclient import TestClient
@@ -46,3 +48,36 @@ def test_request_body_limit_rejects_oversized_context(tmp_path) -> None:
         )
         assert response.status_code == 413
 
+
+def test_customer_test_stream_accepts_image_envelope_above_default_limit(
+    tmp_path,
+) -> None:
+    app = create_app(
+        replace(
+            make_settings(tmp_path),
+            customer_test_enabled=True,
+            max_request_body_bytes=1024,
+        )
+    )
+    png = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"x" * 4096).decode(
+        "ascii"
+    )
+    with TestClient(app, client=("127.0.0.1", 50000)) as client:
+        client.get("/customer-test")
+        response = client.post(
+            "/v1/test/customer-chat/stream",
+            json={
+                "session_id": "customer-test:stream-image-limit",
+                "message": "请说明图片",
+                "context": {},
+                "image": {"mime_type": "image/png", "data_base64": png},
+            },
+        )
+
+    assert response.status_code == 200
+    events = [
+        json.loads(line.removeprefix("data: "))
+        for line in response.text.splitlines()
+        if line.startswith("data: ")
+    ]
+    assert any(event["event"] == "result" for event in events)

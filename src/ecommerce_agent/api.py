@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import re
+import secrets
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -24,6 +26,7 @@ from .admin_api import build_admin_router
 from .channel_agent import ChannelAgentError
 from .chat_sessions_api import build_chat_sessions_router
 from .config import Settings, is_loopback_host
+from .customer_service.sse import encode_sse, project_chat_sse_events
 from .customer_test_api import build_customer_test_router
 from .database import SessionScopeError
 from .evolution import EvolutionError, EvolutionService
@@ -35,7 +38,6 @@ from .handoff_staffing import StaffingError
 from .governance_api import build_governance_router
 from .knowledge_engine.graph_api import build_graph_router
 from .knowledge_engine.wiki_api import build_wiki_router
-from .llm import ModelError, ModelUnavailableError
 from .operations_api import build_operations_router
 from .ops_assistant_api import build_ops_assistant_router
 from .outbox import OutboxReconcileRequest
@@ -45,8 +47,13 @@ from .readonly_data_api import build_readonly_data_router
 from .simulation_api import build_simulation_router
 from .traffic_lab_api import build_traffic_lab_router
 from .workbench_api import build_workbench_router
+
+
+CUSTOMER_TEST_SUBJECT_COOKIE = "yunpai_product_test_subject"
+_CUSTOMER_TEST_SUBJECT = re.compile(r"^[A-Za-z0-9_-]{16,64}$")
 from .schemas import (
     CandidateView,
+    CHAT_IMAGE_ENVELOPE_BYTES,
     ChatMessageRequest,
     ChatRequest,
     ChatResponse,
@@ -78,6 +85,7 @@ from .schemas import (
     HandoffTransition,
     HandoffView,
     RetentionRequest,
+    MAX_CHAT_IMAGE_REQUEST_BODY_BYTES,
 )
 from .service import AgentService
 from .taobao import (
@@ -121,7 +129,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def enforce_request_size(request: Request, call_next):
         content_length = request.headers.get("content-length")
         if content_length and int(content_length) > service.settings.max_request_body_bytes:
-            return JSONResponse(status_code=413, content={"detail": "request body too large"})
+            path = request.url.path
+            image_chat_path = path in {
+                "/v1/chat",
+                "/v1/chat/stream",
+                "/v1/test/customer-chat",
+                "/v1/test/customer-chat/stream",
+            } or (path.startswith("/v1/chat/sessions/") and path.endswith("/messages"))
+            if not image_chat_path or int(content_length) > MAX_CHAT_IMAGE_REQUEST_BODY_BYTES:
+                return JSONResponse(status_code=413, content={"detail": "request body too large"})
+            body = await request.body()
+            try:
+                payload = json.loads(body)
+                encoded_image = payload["image"]["data_base64"]
+            except (json.JSONDecodeError, KeyError, TypeError):
+                return JSONResponse(status_code=413, content={"detail": "request body too large"})
+            if not isinstance(encoded_image, str) or (
+                len(body) - len(encoded_image.encode("utf-8"))
+                > service.settings.max_request_body_bytes + CHAT_IMAGE_ENVELOPE_BYTES
+            ):
+                return JSONResponse(status_code=413, content={"detail": "request body too large"})
         return await call_next(request)
 
     def enforce_rate_limit(key: str) -> None:
@@ -162,7 +189,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             status = 503 if not service.auth.configured else 401
             raise HTTPException(status_code=status, detail=str(exc)) from exc
 
-    def require_local_customer_test(request: Request) -> Principal:
+    def require_customer_test_access(request: Request) -> None:
         peer = request.client.host if request.client else "unknown"
         enforce_rate_limit(f"customer-test:{peer}")
         if not is_loopback_host(peer):
@@ -172,17 +199,53 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         if not service.settings.customer_test_enabled:
             raise HTTPException(status_code=404, detail="customer test interface is disabled")
+
+    def require_local_customer_test(request: Request) -> Principal:
+        require_customer_test_access(request)
+        subject_token = request.cookies.get(CUSTOMER_TEST_SUBJECT_COOKIE, "")
+        if not _CUSTOMER_TEST_SUBJECT.fullmatch(subject_token):
+            raise HTTPException(
+                status_code=401,
+                detail="customer test browser session is missing",
+            )
         try:
-            return service.auth.authenticate(
+            principal = service.auth.authenticate(
                 service.settings.bootstrap_client_id,
                 service.settings.bootstrap_client_key,
-                "local-customer-test",
+                f"local-customer-test:{subject_token}",
+            )
+            return Principal(
+                tenant_id=principal.tenant_id,
+                client_id=principal.client_id,
+                subject_hash=principal.subject_hash,
+                # This interface is restricted to fixed synthetic demo data.
+                can_supply_order_context=True,
             )
         except AuthError as exc:
             raise HTTPException(
                 status_code=503,
                 detail="customer test interface requires a configured bootstrap client",
             ) from exc
+
+    def attach_customer_test_cookie(response: FileResponse, request: Request) -> None:
+        peer = request.client.host if request.client else "unknown"
+        if not service.settings.customer_test_enabled or not is_loopback_host(peer):
+            return
+        subject_token = request.cookies.get(CUSTOMER_TEST_SUBJECT_COOKIE, "")
+        if _CUSTOMER_TEST_SUBJECT.fullmatch(subject_token):
+            return
+        response.set_cookie(
+            CUSTOMER_TEST_SUBJECT_COOKIE,
+            secrets.token_urlsafe(24),
+            max_age=7 * 24 * 60 * 60,
+            httponly=True,
+            secure=(
+                request.url.scheme == "https"
+                or request.headers.get("x-forwarded-proto") == "https"
+            ),
+            samesite="strict",
+            path="/",
+        )
 
     app.include_router(build_operations_router(service, require_admin))
     app.include_router(build_forecasting_router(service, require_admin))
@@ -279,19 +342,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     admin_console_page = Path(__file__).resolve().parents[2] / "docs" / "admin-console.html"
 
     @app.get("/admin", include_in_schema=False)
-    def admin_console() -> FileResponse:
+    def admin_console(request: Request) -> FileResponse:
         if not admin_console_page.is_file():
             raise HTTPException(status_code=404, detail="admin console is not built")
-        return FileResponse(admin_console_page, media_type="text/html; charset=utf-8")
+        response = FileResponse(
+            admin_console_page,
+            media_type="text/html; charset=utf-8",
+        )
+        attach_customer_test_cookie(response, request)
+        return response
 
     customer_test_page = Path(__file__).resolve().parents[2] / "docs" / "customer-test.html"
 
     @app.get("/customer-test", include_in_schema=False)
     def customer_test(request: Request) -> FileResponse:
-        require_local_customer_test(request)
+        require_customer_test_access(request)
         if not customer_test_page.is_file():
             raise HTTPException(status_code=404, detail="customer test page is not built")
-        return FileResponse(customer_test_page, media_type="text/html; charset=utf-8")
+        response = FileResponse(
+            customer_test_page,
+            media_type="text/html; charset=utf-8",
+        )
+        attach_customer_test_cookie(response, request)
+        return response
 
     @app.get("/v1/channels/adapters")
     def channel_adapter_catalog(
@@ -556,7 +629,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/v1/chat", response_model=ChatResponse)
     def chat(payload: ChatRequest, principal: Principal = Depends(require_client)) -> ChatResponse:
         try:
-            return service.chat(principal, payload.session_id, payload.message, payload.context)
+            return service.chat(
+                principal,
+                payload.session_id,
+                payload.message,
+                payload.context,
+                image=payload.image,
+            )
         except SessionScopeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -566,135 +645,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         principal: Principal = Depends(require_client),
         idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     ) -> StreamingResponse:
-        def encode(event: dict) -> str:
-            data = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
-            return f"data: {data}\n\n"
+        def stream_factory():
+            return service.chat_stream(
+                principal,
+                payload.session_id,
+                payload.message,
+                payload.context,
+                image=payload.image,
+                idempotency_key=idempotency_key,
+            )
 
-        def events():
-            metadata: dict = {}
-            generated = False
-            try:
-                stream = service.chat_stream(
-                    principal,
-                    payload.session_id,
-                    payload.message,
-                    payload.context,
-                    idempotency_key=idempotency_key,
-                )
-                for item in stream:
-                    event_name = item["event"]
-                    if event_name == "meta":
-                        metadata = item
-                        yield encode(item)
-                        continue
-                    if event_name == "delta":
-                        generated = generated or not item.get("replay", False)
-                        yield encode({"event": "delta", "text": item["text"]})
-                        continue
-
-                    response = item["response"]
-                    if generated and response["sources"]:
-                        yield encode(
-                            {
-                                "event": "citations",
-                                "sources": response["sources"],
-                            }
-                        )
-                    if response["requires_human"]:
-                        yield encode(
-                            {
-                                "event": "handoff",
-                                "requires_human": True,
-                                "handoff_id": response["handoff_id"],
-                                "handoff_status": response["handoff_status"],
-                                "reason": response["reason"],
-                            }
-                        )
-                    yield encode(
-                        {
-                            "event": "done",
-                            "message_id": response["message_id"],
-                            "intent": response["intent"],
-                            "risk_level": response["risk_level"],
-                            "model_fallback": response["model_fallback"],
-                        }
-                    )
-            except ModelUnavailableError:
-                yield encode(
-                    {
-                        "event": "error",
-                        "code": "model_unavailable",
-                        "message": "model service is temporarily unavailable",
-                        "retry_advised": True,
-                    }
-                )
-                yield encode(
-                    {
-                        "event": "done",
-                        "message_id": metadata.get("message_id", ""),
-                        "intent": "unknown",
-                        "risk_level": "low",
-                        "model_fallback": True,
-                    }
-                )
-            except ModelError:
-                yield encode(
-                    {
-                        "event": "error",
-                        "code": "model_error",
-                        "message": "model generation failed",
-                        "retry_advised": False,
-                    }
-                )
-                yield encode(
-                    {
-                        "event": "done",
-                        "message_id": metadata.get("message_id", ""),
-                        "intent": "unknown",
-                        "risk_level": "low",
-                        "model_fallback": True,
-                    }
-                )
-            except SessionScopeError as exc:
-                # 会话/幂等冲突是客户端可预期错误：透传区分码（session_closed /
-                # session_scope_conflict / idempotency_key_conflict），不归为 internal_error
-                yield encode(
-                    {
-                        "event": "error",
-                        "code": getattr(exc, "code", "session_conflict"),
-                        "message": str(exc),
-                        "retry_advised": False,
-                    }
-                )
-                yield encode(
-                    {
-                        "event": "done",
-                        "message_id": metadata.get("message_id", ""),
-                        "intent": "unknown",
-                        "risk_level": "low",
-                        "model_fallback": True,
-                    }
-                )
-            except Exception:
-                yield encode(
-                    {
-                        "event": "error",
-                        "code": "internal_error",
-                        "message": "streaming response failed",
-                        "retry_advised": False,
-                    }
-                )
-                yield encode(
-                    {
-                        "event": "done",
-                        "message_id": metadata.get("message_id", ""),
-                        "intent": "unknown",
-                        "risk_level": "low",
-                        "model_fallback": True,
-                    }
-                )
-
-        return StreamingResponse(events(), media_type="text/event-stream")
+        events = (
+            encode_sse(event)
+            for event in project_chat_sse_events(stream_factory)
+        )
+        return StreamingResponse(events, media_type="text/event-stream")
 
     @app.post("/v1/chat/sessions/{session_id}/messages")
     def post_session_message(
@@ -712,6 +677,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 session_id=session_id,
                 message=payload.message,
                 context=payload.context,
+                image=payload.image,
             ),
             principal,
             idempotency_key,

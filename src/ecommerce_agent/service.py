@@ -29,37 +29,49 @@ from .channel_sdk.mockchat import MockChatChannelAdapter
 from .channel_sdk.taobao_adapter import TaobaoChannelAdapter
 from .config import Settings
 from .context_builder import ContextBuilder
+from .customer_service.generation import (
+    BRANCH_MODEL,
+    GenerationPlan,
+    draft_origin_for_plan,
+    plan_generation,
+    recover_model_failure,
+)
 from .database import Database, SessionScopeError, utc_now
 from .disaster_recovery import DataDirectoryLock
 from .evaluation import EvaluationRunRequest, EvaluationService
-from .graph import MODEL_UNAVAILABLE_HANDOFF_ANSWER, build_graph, verify_response
+from .graph import (
+    build_graph,
+    finalize_response,
+)
 from .handoff import HandoffService
 from .handoff_dispatch import HandoffDispatchService
 from .handoff_staffing import HandoffStaffingService
 from .knowledge_management import KnowledgeManagementService
 from .knowledge_seed import seed_records
-from .llm import ModelGateway
+from .llm import ModelError, ModelGateway
 from .maintenance import MaintenanceService
+from .message_media import MessageMediaStore, attach_vision_description
 from .policy import sanitize_context
-from .prompts import SYSTEM_PROMPT, build_messages
+from .polish import PolishGateway
 from .rag import KnowledgeBase
 from .quality import QualityService
 from .releases import ReleaseReplayRequest, ReleaseService
 from .readonly_data import ReadonlyDataService, ReadonlyReportIngestionService
 from .readonly_readiness import ReadonlyDemoService, ReadonlyReadinessService
 from .product_identity import ProductIdentityService
-from .schemas import ChatResponse, SourceItem
-from .text_utils import normalize_text, redact_sensitive
+from .schemas import ChatImageInput, ChatResponse, DraftOrigin, SourceItem
+from .text_utils import redact_sensitive
 from .taobao import TaobaoIntegrationService
 from .sops import SopService
-from .tokens import count_tokens
 from .tools import ToolRegistry
 from .traffic_lab import TrafficAnalysisModelInterpreter
 from .product_lifecycle.engine import RecommendationModelInterpreter
 from .product_diagnosis.interpreter import DiagnosisModelInterpreter
+from .vision import VisionGateway
 
 
 logger = logging.getLogger("ecommerce_agent.service")
+VERIFIED_FINAL_DELIVERY_MODE = "verified_final"
 
 # 进程级缓存：同一进程内只导入一次知识资产（避免每次启动重复导入拖慢）
 # 数据库是新临时目录时仍需导入（key 用 db 路径区分）
@@ -82,6 +94,7 @@ class AgentService:
         try:
             self.db = Database(self.settings.app_db_path)
             self.db.initialize()
+            self.message_media = MessageMediaStore(self.settings.data_dir)
             self.contexts = ContextBuilder(self.db)
             self.auth = AuthenticationService(self.db, self.settings)
             self.admin = AdminConsoleService(self.db, self.contexts)
@@ -98,6 +111,8 @@ class AgentService:
             # 现在 kg-* 知识进入 RAG 检索，222 节点知识图谱真正服务客服。
             self.kg_import_stats = self._import_knowledge_assets()
             self.model = ModelGateway(self.settings)
+            self.polisher = PolishGateway(self.settings)
+            self.vision = VisionGateway(self.settings)
             self.handoff_staffing = HandoffStaffingService(self.db)
             self.handoffs = HandoffService(self.db, self.handoff_staffing)
             self.handoffs.ensure_default_queues(self.settings.bootstrap_tenant_id)
@@ -199,7 +214,11 @@ class AgentService:
             self.releases = ReleaseService(self.db)
             self.evaluations = EvaluationService(self.db, self.releases)
             self.evaluation_recovery = self.evaluations.recover_interrupted_runs()
-            self.maintenance = MaintenanceService(self.db, self.settings)
+            self.maintenance = MaintenanceService(
+                self.db,
+                self.settings,
+                media_store=self.message_media,
+            )
             self.taobao = TaobaoIntegrationService(self.db, self.settings)
             self.channel_adapters = ChannelAdapterRegistry()
             self.channel_adapters.register(
@@ -224,6 +243,7 @@ class AgentService:
                 tools=self.tools,
                 sops=self.sops,
                 contexts=self.contexts,
+                polisher=self.polisher,
                 memory=self.memory,
             )
             self.graph = builder.compile(checkpointer=self.checkpointer)
@@ -247,6 +267,7 @@ class AgentService:
         message: str,
         context: dict[str, Any] | None = None,
         *,
+        image: ChatImageInput | None = None,
         idempotency_key: str | None = None,
         execution_mode: str = "live",
         source_type: str = "api",
@@ -262,21 +283,9 @@ class AgentService:
             source_type=source_type,
             source_reference=source_reference,
         )
-        safe_message, input_redacted = redact_sensitive(message)
-        untrusted_context = dict(context or {})
-        untrusted_context.pop("authorized", None)
-        trusted_context = sanitize_context(untrusted_context)
-        if principal.can_supply_order_context:
-            trusted_context["authorized"] = True
-        else:
-            for field in (
-                "order_id",
-                "order_status",
-                "logistics_status",
-                "carrier",
-                "tracking_last_event",
-            ):
-                trusted_context.pop(field, None)
+        safe_message, input_redacted, trusted_context, image_digest = (
+            self._prepare_chat_content(principal, message, context, image)
+        )
 
         invocation: dict[str, Any] | None = None
         if idempotency_key is not None:
@@ -287,12 +296,32 @@ class AgentService:
                 safe_message=safe_message,
                 trusted_context=trusted_context,
                 execution_mode=execution_mode,
+                image_digest=image_digest,
             )
             if invocation["status"] == "completed":
                 return self._invocation_response(invocation)
-
+        user_message_id = (
+            str(invocation["user_message_id"])
+            if invocation
+            else f"msg-user-{uuid.uuid4().hex}"
+        )
+        message_media: list[dict[str, Any]] = []
         started = time.perf_counter()
+        trace_id = (
+            str(invocation["trace_id"])
+            if invocation
+            else f"trace-{uuid.uuid4().hex}"
+        )
         try:
+            if image is not None:
+                message_media = [self.message_media.persist(user_message_id, image)]
+            vision_state = self._prepare_vision_state(
+                image=image,
+                safe_message=safe_message,
+                trace_id=trace_id,
+                tenant_id=principal.tenant_id,
+                message_media=message_media,
+            )
             state = self.graph.invoke(
                 {
                     "session_id": internal_session_id,
@@ -301,18 +330,22 @@ class AgentService:
                     "client_id": principal.client_id,
                     "execution_mode": execution_mode,
                     "invocation_id": invocation["id"] if invocation else None,
-                    "trace_id": invocation["trace_id"] if invocation else None,
+                    "trace_id": trace_id,
                     "message_id": invocation["assistant_message_id"] if invocation else None,
-                    "user_message_id": invocation["user_message_id"] if invocation else None,
+                    "user_message_id": user_message_id,
                     "user_input": safe_message,
                     "input_redacted": input_redacted,
                     "context": trusted_context,
+                    "message_media": message_media,
+                    **vision_state,
                 },
                 config={"configurable": {"thread_id": internal_session_id}},
             )
+            self.message_media.mark_persisted(message_media)
         except Exception as exc:
+            self._cleanup_unpersisted_message_media(user_message_id, message_media)
             duration_ms = (time.perf_counter() - started) * 1000
-            failure_trace = f"trace-error-{uuid.uuid4().hex}"
+            failure_trace = trace_id
             self.db.record_metric(
                 trace_id=failure_trace,
                 tenant_id=principal.tenant_id,
@@ -377,29 +410,22 @@ class AgentService:
         message: str,
         context: dict[str, Any] | None = None,
         *,
+        image: ChatImageInput | None = None,
         idempotency_key: str | None,
+        source_type: str = "api",
+        source_reference: str | None = None,
     ) -> Iterator[dict[str, Any]]:
         internal_session_id = self.db.resolve_session(
             tenant_id=principal.tenant_id,
             client_id=principal.client_id,
             external_session_id=session_id,
             subject_hash=principal.subject_hash,
+            source_type=source_type,
+            source_reference=source_reference,
         )
-        safe_message, input_redacted = redact_sensitive(message)
-        untrusted_context = dict(context or {})
-        untrusted_context.pop("authorized", None)
-        trusted_context = sanitize_context(untrusted_context)
-        if principal.can_supply_order_context:
-            trusted_context["authorized"] = True
-        else:
-            for field in (
-                "order_id",
-                "order_status",
-                "logistics_status",
-                "carrier",
-                "tracking_last_event",
-            ):
-                trusted_context.pop(field, None)
+        safe_message, input_redacted, trusted_context, image_digest = (
+            self._prepare_chat_content(principal, message, context, image)
+        )
 
         invocation: dict[str, Any] | None = None
         if idempotency_key is not None:
@@ -410,6 +436,7 @@ class AgentService:
                 safe_message=safe_message,
                 trusted_context=trusted_context,
                 execution_mode="live",
+                image_digest=image_digest,
             )
             if invocation["status"] == "completed":
                 response = self._invocation_response(invocation)
@@ -418,6 +445,7 @@ class AgentService:
                     "session_id": response.session_id,
                     "message_id": response.message_id,
                     "trace_id": response.trace_id,
+                    "delivery_mode": VERIFIED_FINAL_DELIVERY_MODE,
                 }
                 yield {
                     "event": "delta",
@@ -426,61 +454,154 @@ class AgentService:
                 }
                 yield {"event": "result", "response": response.model_dump()}
                 return
-
+        user_message_id = (
+            str(invocation["user_message_id"])
+            if invocation
+            else f"msg-user-{uuid.uuid4().hex}"
+        )
+        message_media: list[dict[str, Any]] = []
         config = {"configurable": {"thread_id": internal_session_id}}
         started = time.perf_counter()
-        state = self.graph.invoke(
-            {
-                "session_id": internal_session_id,
-                "external_session_id": session_id,
-                "tenant_id": principal.tenant_id,
-                "client_id": principal.client_id,
-                "execution_mode": "live",
-                "invocation_id": invocation["id"] if invocation else None,
-                "trace_id": invocation["trace_id"] if invocation else None,
-                "message_id": invocation["assistant_message_id"] if invocation else None,
-                "user_message_id": invocation["user_message_id"] if invocation else None,
-                "user_input": safe_message,
-                "input_redacted": input_redacted,
-                "context": trusted_context,
-            },
-            config=config,
-            interrupt_before=["generate"],
+        trace_id = (
+            str(invocation["trace_id"])
+            if invocation
+            else f"trace-{uuid.uuid4().hex}"
         )
-        yield {
+        try:
+            if image is not None:
+                message_media = [self.message_media.persist(user_message_id, image)]
+            vision_state = self._prepare_vision_state(
+                image=image,
+                safe_message=safe_message,
+                trace_id=trace_id,
+                tenant_id=principal.tenant_id,
+                message_media=message_media,
+            )
+            state = self.graph.invoke(
+                {
+                    "session_id": internal_session_id,
+                    "external_session_id": session_id,
+                    "tenant_id": principal.tenant_id,
+                    "client_id": principal.client_id,
+                    "execution_mode": "live",
+                    "invocation_id": invocation["id"] if invocation else None,
+                    "trace_id": trace_id,
+                    "message_id": invocation["assistant_message_id"] if invocation else None,
+                    "user_message_id": user_message_id,
+                    "user_input": safe_message,
+                    "input_redacted": input_redacted,
+                    "context": trusted_context,
+                    "message_media": message_media,
+                    **vision_state,
+                },
+                config=config,
+                interrupt_before=["generate"],
+            )
+        except BaseException:
+            self._cleanup_unpersisted_message_media(user_message_id, message_media)
+            raise
+        meta_event = {
             "event": "meta",
             "session_id": session_id,
             "message_id": state["message_id"],
             "trace_id": state["trace_id"],
+            "delivery_mode": VERIFIED_FINAL_DELIVERY_MODE,
+            "vision_status": state.get("vision_status", "not_applicable"),
+            "vision_model": state.get("vision_model"),
+            "vision_latency_ms": state.get("vision_latency_ms"),
         }
 
+        streamed_final_answer: str | None = None
         if "generate" in self.graph.get_state(config).next:
-            deltas, model_fallback, trace_step = self._generation_deltas(state)
-            parts: list[str] = []
-            for delta in deltas:
-                parts.append(delta)
-                yield {"event": "delta", "text": delta}
-            draft = "".join(parts).strip()
-            generation_state = {
+            plan = plan_generation(state, settings=self.settings, db=self.db)
+            draft_origin = draft_origin_for_plan(plan)
+            retry_advised = False
+            try:
+                deltas, model_fallback, trace_step, _ = self._generation_deltas(
+                    state,
+                    plan=plan,
+                )
+                draft = "".join(deltas).strip()
+            except ModelError as exc:
+                recovery = recover_model_failure(state, exc, db=self.db)
+                draft = recovery.draft
+                draft_origin = "fallback"
+                model_fallback = recovery.model_fallback
+                retry_advised = recovery.retry_advised
+                trace_step = recovery.trace_step
+            except BaseException:
+                self._cleanup_unpersisted_message_media(
+                    user_message_id,
+                    message_media,
+                )
+                raise
+            generation_trace = [*state["trace"]]
+            if plan.budget_trace:
+                generation_trace.append(plan.budget_trace)
+            generation_trace.append(trace_step)
+            generation_state: dict[str, Any] = {
                 **state,
                 "draft": draft,
+                "draft_origin": draft_origin,
                 "model_fallback": model_fallback,
-                "model_retry_advised": False,
-                "trace": [*state["trace"], trace_step],
+                "model_retry_advised": retry_advised,
+                "trace": generation_trace,
             }
-            verified = verify_response(generation_state)
-            self.graph.update_state(
-                config,
-                {
-                    "draft": draft,
-                    "model_fallback": model_fallback,
-                    "model_retry_advised": False,
-                    "trace": generation_state["trace"],
-                    **verified,
-                },
-                as_node="verify",
-            )
-            state = self.graph.invoke(None, config=config)
+            if retry_advised:
+                try:
+                    self.graph.update_state(
+                        config,
+                        {
+                            "draft": draft,
+                            "draft_origin": draft_origin,
+                            "model_fallback": model_fallback,
+                            "model_retry_advised": True,
+                            "trace": generation_trace,
+                        },
+                        as_node="generate",
+                    )
+                    state = self.graph.invoke(None, config=config)
+                except BaseException:
+                    self._cleanup_unpersisted_message_media(
+                        user_message_id,
+                        message_media,
+                    )
+                    raise
+            if not retry_advised:
+                try:
+                    verified = finalize_response(
+                        generation_state,
+                        polisher=self.polisher,
+                        db=self.db,
+                    )
+                    self.graph.update_state(
+                        config,
+                        {
+                            "draft": draft,
+                            "draft_origin": draft_origin,
+                            "model_fallback": model_fallback,
+                            "model_retry_advised": False,
+                            "trace": generation_trace,
+                            **verified,
+                        },
+                        as_node="verify",
+                    )
+                    state = self.graph.invoke(None, config=config)
+                except BaseException:
+                    self._cleanup_unpersisted_message_media(
+                        user_message_id,
+                        message_media,
+                    )
+                    raise
+            streamed_final_answer = state["answer"]
+
+        self.message_media.mark_persisted(message_media)
+        yield meta_event
+        if streamed_final_answer is not None:
+            yield {
+                "event": "delta",
+                "text": streamed_final_answer,
+            }
 
         duration_ms = (time.perf_counter() - started) * 1000
         self.db.record_metric(
@@ -497,54 +618,122 @@ class AgentService:
         response = self._response_from_state(state, session_id)
         yield {"event": "result", "response": response.model_dump()}
 
+    @staticmethod
+    def _prepare_chat_content(
+        principal: Principal,
+        message: str,
+        context: dict[str, Any] | None,
+        image: ChatImageInput | None,
+    ) -> tuple[str, bool, dict[str, Any], str | None]:
+        effective_message = message
+        if not effective_message.strip():
+            if image is None:
+                raise ValueError("message or image is required")
+            effective_message = "请根据我发送的图片说明相关信息。"
+        safe_message, input_redacted = redact_sensitive(effective_message)
+        untrusted_context = dict(context or {})
+        untrusted_context.pop("authorized", None)
+        trusted_context = sanitize_context(untrusted_context)
+        if principal.can_supply_order_context:
+            trusted_context["authorized"] = True
+        else:
+            for field in (
+                "order_id",
+                "order_status",
+                "logistics_status",
+                "carrier",
+                "tracking_last_event",
+            ):
+                trusted_context.pop(field, None)
+        image_digest = (
+            hashlib.sha256(image.decoded_bytes()).hexdigest()
+            if image is not None
+            else None
+        )
+        return safe_message, input_redacted, trusted_context, image_digest
+
+    def _cleanup_unpersisted_message_media(
+        self,
+        user_message_id: str,
+        media: list[dict[str, Any]],
+    ) -> None:
+        if not media:
+            return
+        with self.db.connect() as conn:
+            persisted = conn.execute(
+                "SELECT 1 FROM messages WHERE id=?",
+                (user_message_id,),
+            ).fetchone()
+        if persisted is not None:
+            self.message_media.mark_persisted(media)
+            return
+        try:
+            self.message_media.remove(media)
+        except (OSError, ValueError):
+            # Retention reconciles explicitly marked, unreferenced files.
+            # Preserve the original request failure instead of masking it.
+            logger.exception(
+                "unpersisted customer media cleanup deferred",
+                extra={"user_message_id": user_message_id},
+            )
+
+    def _prepare_vision_state(
+        self,
+        *,
+        image: ChatImageInput | None,
+        safe_message: str,
+        trace_id: str,
+        tenant_id: str,
+        message_media: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        if image is None:
+            return {
+                "media_evidence": {},
+                "vision_status": "not_applicable",
+                "vision_model": None,
+                "vision_latency_ms": None,
+                "vision_image_count": 0,
+            }
+        result = self.vision.describe(image=image, user_message=safe_message)
+        self.db.audit(
+            "media.vision",
+            "system",
+            trace_id,
+            result.audit_detail(),
+            tenant_id,
+        )
+        if result.applied and result.description and message_media:
+            # 观察随消息媒体元数据留存，后续轮次的历史可以带回图片内容
+            attach_vision_description(message_media, result.description)
+        return {
+            "media_evidence": result.media_evidence(),
+            "vision_status": result.status,
+            "vision_model": result.model,
+            "vision_latency_ms": result.latency_ms,
+            "vision_image_count": result.image_count,
+        }
+
     def _generation_deltas(
         self,
         state: dict[str, Any],
-    ) -> tuple[Iterator[str], bool, str]:
-        verified_result = (
-            state.get("tool_result")
-            if state.get("tool_result", {}).get("postcondition_met")
-            else None
-        )
-        if not state.get("retrieved") and not verified_result:
+        *,
+        plan: GenerationPlan | None = None,
+    ) -> tuple[Iterator[str], bool, str, DraftOrigin]:
+        plan = plan or plan_generation(state, settings=self.settings, db=self.db)
+        draft_origin = draft_origin_for_plan(plan)
+        if plan.branch != BRANCH_MODEL:
             return (
-                iter((MODEL_UNAVAILABLE_HANDOFF_ANSWER,)),
-                True,
-                "generate:no_evidence",
+                iter((plan.text or "",)),
+                plan.model_fallback,
+                str(plan.trace_step),
+                draft_origin,
             )
-
-        top_document = state["retrieved"][0] if state.get("retrieved") else None
-        if (
-            top_document
-            and state["decision"].get("reason") == "approved_knowledge_reuse"
-            and self.settings.rag_direct_approved_answer
-            and top_document["source"].startswith("evolution:")
-            # 精确匹配才复用（对齐 graph deliberate 同逻辑）
-            and normalize_text(top_document["question"])
-            == normalize_text(state["normalized_input"])
-        ):
-            return iter((top_document["answer"],)), False, "generate:approved_knowledge"
-
-        total = int(
-            self.settings.model_context_limit_tokens
-            * self.settings.context_budget_ratio
+        return (
+            self.model.stream_generate(plan.messages or []),
+            False,
+            "generate:stream",
+            draft_origin,
         )
-        available = max(
-            0,
-            total
-            - count_tokens(SYSTEM_PROMPT)
-            - count_tokens(state["normalized_input"]),
-        )
-        messages = build_messages(
-            question=state["normalized_input"],
-            documents=state["retrieved"],
-            context=state["context_bundle"],
-            history=state["context_bundle"].get("recent_history", []),
-            verified_tool_result=verified_result,
-            knowledge_budget_tokens=available * 6 // 10,
-            prompt_variant=(state.get("intent_routing") or {}).get("prompt_variant"),
-        )
-        return self.model.stream_generate(messages), False, "generate:stream"
 
     @staticmethod
     def _response_from_state(
@@ -572,6 +761,14 @@ class AgentService:
             reason=state["route_reason"],
             sources=sources,
             model_fallback=state["model_fallback"],
+            polish_status=state.get("polish_status", "not_applicable"),
+            polish_applied=bool(state.get("polish_applied")),
+            polish_model=state.get("polish_model"),
+            polish_latency_ms=state.get("polish_latency_ms"),
+            vision_status=state.get("vision_status", "not_applicable"),
+            vision_model=state.get("vision_model"),
+            vision_latency_ms=state.get("vision_latency_ms"),
+            vision_image_count=int(state.get("vision_image_count") or 0),
             handoff_id=state.get("handoff_id"),
             handoff_status=state.get("handoff_status"),
             sop_id=(state.get("active_sop") or {}).get("id"),
@@ -590,6 +787,7 @@ class AgentService:
         safe_message: str,
         trusted_context: dict[str, Any],
         execution_mode: str,
+        image_digest: str | None = None,
     ) -> dict[str, Any]:
         if not idempotency_key or len(idempotency_key) > 200:
             raise ValueError("agent idempotency key must contain 1 to 200 characters")
@@ -600,6 +798,7 @@ class AgentService:
                     "message": safe_message,
                     "context": trusted_context,
                     "execution_mode": execution_mode,
+                    "image_digest": image_digest,
                 },
                 ensure_ascii=False,
                 sort_keys=True,
@@ -940,6 +1139,8 @@ class AgentService:
 
     def health(self) -> dict[str, Any]:
         model_ok, model_detail = self.model.health()
+        vision_ok, vision_detail = self.vision.health()
+        polish_ok, polish_detail = self.polisher.health()
         knowledge_count = self.knowledge.count_active()
         schema_version = self.db.schema_version()
         foundation_ok = knowledge_count >= 100 and schema_version == Database.SCHEMA_VERSION
@@ -956,6 +1157,20 @@ class AgentService:
                 "name": self.settings.model_name,
                 "thinking_enabled": self.settings.model_thinking_enabled,
                 "streaming": self.settings.model_streaming,
+                "required_for_foundation_health": False,
+            },
+            "vision": {
+                "enabled": self.settings.vision_enabled,
+                "ok": vision_ok,
+                "detail": vision_detail,
+                "name": self.settings.vision_model_name,
+                "required_for_foundation_health": False,
+            },
+            "polish": {
+                "enabled": self.settings.polish_enabled,
+                "ok": polish_ok,
+                "detail": polish_detail,
+                "name": self.settings.polish_model_name,
                 "required_for_foundation_health": False,
             },
             "authentication": {"required": self.settings.auth_required, "configured": auth_ok},
@@ -1020,6 +1235,12 @@ class AgentService:
             "checkpoint_store": self._checkpoint_connection.execute("SELECT 1").fetchone()[0] == 1,
             "model_configuration": (
                 not self.settings.model_enabled or self.model.health()[0]
+            ),
+            "vision_configuration": (
+                not self.settings.vision_enabled or self.vision.health()[0]
+            ),
+            "polish_configuration": (
+                not self.settings.polish_enabled or self.polisher.health()[0]
             ),
             "business_modules": any(
                 item["status"] == "available" for item in self.operations.modules()
@@ -1453,6 +1674,8 @@ class AgentService:
             self.stop_competitive_monitor_worker()
             self.channel_agents.close()
             self.taobao.close()
+            self.vision.close()
+            self.polisher.close()
             self.model.close()
             self.tools.close()
             self._checkpoint_connection.close()

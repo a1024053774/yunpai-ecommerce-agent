@@ -4312,15 +4312,26 @@ class Database:
         return [str(row["route_reason"]) for row in rows if row["route_reason"]]
 
     def recent_messages(self, session_id: str, limit: int) -> list[dict[str, Any]]:
+        from .message_media import annotate_history_content
+
         with self.connect() as conn:
             rows = conn.execute(
                 """
-                SELECT role, content, created_at FROM messages
+                SELECT role, content, created_at, sources_json FROM messages
                 WHERE session_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?
                 """,
                 (session_id, limit),
             ).fetchall()
-        return [dict(row) for row in reversed(rows)]
+        return [
+            {
+                "role": row["role"],
+                "content": annotate_history_content(
+                    row["content"], row["sources_json"]
+                ),
+                "created_at": row["created_at"],
+            }
+            for row in reversed(rows)
+        ]
 
     def paginated_messages(
         self,

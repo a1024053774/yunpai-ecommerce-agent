@@ -7,15 +7,23 @@ from typing import Any
 
 from .config import Settings
 from .database import Database, utc_now
+from .message_media import MessageMediaStore, parse_message_media
 
 
 TERMINAL_HANDOFF_STATUSES = ("completed", "failed", "canceled", "rejected")
 
 
 class MaintenanceService:
-    def __init__(self, db: Database, settings: Settings):
+    def __init__(
+        self,
+        db: Database,
+        settings: Settings,
+        *,
+        media_store: MessageMediaStore | None = None,
+    ):
         self.db = db
         self.settings = settings
+        self.media_store = media_store or MessageMediaStore(settings.data_dir)
 
     def purge_expired(self, *, actor: str, dry_run: bool) -> dict[str, Any]:
         now = datetime.now(UTC)
@@ -88,6 +96,22 @@ class MaintenanceService:
                     (message_cutoff, *terminal),
                 ).fetchall()
             ]
+            media_sources = [
+                str(row["sources_json"])
+                for row in conn.execute(
+                    """
+                    SELECT m.sources_json FROM messages m
+                    WHERE m.created_at < ?
+                      AND NOT EXISTS (
+                          SELECT 1 FROM handoff_tasks h
+                          WHERE h.session_id=m.session_id
+                            AND h.status NOT IN (?, ?, ?, ?)
+                      )
+                    """,
+                    (message_cutoff, *terminal),
+                ).fetchall()
+                if parse_message_media(row["sources_json"])
+            ]
 
             report = {
                 "dry_run": dry_run,
@@ -101,9 +125,19 @@ class MaintenanceService:
                 "audit_events_deleted": int(audit_delete),
                 "sessions_closed": len(expired_sessions),
                 "expired_session_ids": expired_sessions,
+                "media_files_selected": sum(
+                    len(parse_message_media(value)) for value in media_sources
+                ),
+                "media_files_deleted": 0,
+                "media_files_delete_failed": 0,
+                "media_orphans_deleted": 0,
+                "media_orphans_delete_failed": 0,
             }
             if dry_run:
                 return report
+
+            for value in media_sources:
+                self.media_store.mark_for_deletion(value)
 
             conn.execute(
                 """
@@ -174,6 +208,30 @@ class MaintenanceService:
             conn.execute(
                 "INSERT INTO retention_runs VALUES (?, ?, ?, ?)",
                 (run_id, actor, json.dumps(report, ensure_ascii=False), utc_now()),
+            )
+        # 数据库提交后删除文件；失败文件保留 pending 标记，由下方扫描及后续
+        # 留存运行持续重试。进程内 pending 集合保护仍在执行的请求。
+        for value in media_sources:
+            try:
+                report["media_files_deleted"] += self.media_store.remove(value)
+            except (OSError, ValueError):
+                report["media_files_delete_failed"] += 1
+
+        with self.db.connect() as conn:
+            referenced_storage_refs = {
+                str(item["storage_ref"])
+                for row in conn.execute("SELECT sources_json FROM messages").fetchall()
+                for item in parse_message_media(row["sources_json"])
+            }
+        orphan_deleted, orphan_failed = self.media_store.remove_unreferenced(
+            referenced_storage_refs,
+        )
+        report["media_orphans_deleted"] = orphan_deleted
+        report["media_orphans_delete_failed"] = orphan_failed
+        with self.db._write_lock, self.db.connect() as conn:
+            conn.execute(
+                "UPDATE retention_runs SET detail_json=? WHERE id=?",
+                (json.dumps(report, ensure_ascii=False), run_id),
             )
         return report
 

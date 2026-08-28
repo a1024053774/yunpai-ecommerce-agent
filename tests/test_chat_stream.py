@@ -38,9 +38,11 @@ def test_chat_stream_generation_event_sequence(tmp_path) -> None:
         assert response.status_code == 200
         events = stream_events(response)
         assert events[0]["event"] == "meta"
+        assert events[0]["delivery_mode"] == "verified_final"
         assert [event["event"] for event in events[-2:]] == ["citations", "done"]
         assert all(event["event"] == "delta" for event in events[1:-2])
-        assert len(events[1:-2]) > 1
+        assert len(events[1:-2]) == 1
+        assert events[1]["text"]
 
 
 def test_chat_stream_meta_citations_and_done_payloads(tmp_path) -> None:
@@ -85,7 +87,7 @@ def test_chat_stream_handoff_event_reuses_response_fields(tmp_path) -> None:
         assert events[1]["reason"] == "customer_requested_human"
 
 
-def test_chat_stream_error_is_immediately_followed_by_done(tmp_path) -> None:
+def test_chat_stream_model_unavailable_returns_retry_answer_and_done(tmp_path) -> None:
     app = create_app(make_settings(tmp_path))
 
     def unavailable(_messages):
@@ -101,13 +103,12 @@ def test_chat_stream_error_is_immediately_followed_by_done(tmp_path) -> None:
         )
         events = stream_events(response)
 
-        assert [event["event"] for event in events[-2:]] == ["error", "done"]
-        assert events[-2] == {
-            "event": "error",
-            "code": "model_unavailable",
-            "message": "model service is temporarily unavailable",
-            "retry_advised": True,
-        }
+        assert all(event["event"] != "error" for event in events)
+        streamed = "".join(
+            event["text"] for event in events if event["event"] == "delta"
+        )
+        assert "稍等一下再发送一次" in streamed
+        assert events[-1]["event"] == "done"
         assert events[-1]["model_fallback"] is True
 
 

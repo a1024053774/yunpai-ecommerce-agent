@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from urllib.parse import quote
 
 from .database import Database, session_scope_condition
 from .context_builder import ContextBuilder
+from .message_media import non_media_sources, public_message_media
 
 
 class AdminConsoleService:
@@ -252,10 +254,15 @@ class AdminConsoleService:
                         )
                         if parsed.get(key) is not None
                     }
-            try:
-                item["sources"] = json.loads(item.pop("sources_json") or "[]")
-            except ValueError:
-                item["sources"] = []
+            sources_json = item.pop("sources_json") or "[]"
+            item["sources"] = non_media_sources(sources_json)
+            item["media"] = public_message_media(
+                sources_json,
+                url_prefix=(
+                    f"/v1/admin/conversations/{quote(session_id, safe='')}"
+                    f"/messages/{quote(str(item['id']), safe='')}/media"
+                ),
+            )
             item["model_fallback"] = bool(item["model_fallback"])
             item["redacted"] = bool(item["redacted"])
             item["decision"] = decision

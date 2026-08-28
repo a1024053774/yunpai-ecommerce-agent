@@ -48,8 +48,8 @@ data: {"event":"meta","session_id":"buyer-chat-001","message_id":"msg-...","trac
 
 | `event` | 其余字段 | 含义 |
 |---|---|---|
-| `meta` | `session_id`, `message_id`, `trace_id` | 首个事件，声明本轮稳定标识 |
-| `delta` | `text` | 一段回复文本，按接收顺序拼接 |
+| `meta` | `session_id`, `message_id`, `trace_id`, `delivery_mode` | 首个事件，声明本轮稳定标识；当前 `delivery_mode=verified_final` |
+| `delta` | `text` | 已完成生成、润色、事实校验并持久化的完整回复；为兼容既有客户端保留 `delta` 名称 |
 | `citations` | `sources` | 本轮生成引用的知识来源 |
 | `handoff` | `requires_human`, `handoff_id`, `handoff_status`, `reason` | 已进入或建议进入人工处理 |
 | `done` | `message_id`, `intent`, `risk_level`, `model_fallback` | 本轮逻辑流结束 |
@@ -63,7 +63,7 @@ data: {"event":"meta","session_id":"buyer-chat-001","message_id":"msg-...","trac
 有知识引用的正常生成：
 
 ```text
-meta → delta+ → citations → done
+meta → delta → citations → done
 ```
 
 无知识命中的降级生成：
@@ -85,6 +85,9 @@ meta → delta → done
 ```
 
 其中单个 `delta` 是数据库已保存的完整回复，不会再次调用模型，也不会新增消息。
+
+`verified_final` 模式不会发送模型的半截草稿，也不会把完整回复切成伪增量片段。
+在 `meta` 发出前，助手消息已经持久化；客户端中断后可通过会话历史恢复完整回复。
 
 流内失败：
 

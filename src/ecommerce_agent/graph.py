@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import time
 import uuid
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 from langgraph.graph import END, START, StateGraph
@@ -10,6 +11,15 @@ from pydantic import ValidationError
 
 from .config import Settings
 from .context_builder import ContextBuilder
+from .customer_service.generation import (
+    BRANCH_MODEL,
+    budgeted_history,
+    context_budgets,
+    draft_origin_for_plan,
+    has_media_observation,
+    plan_generation,
+    recover_model_failure,
+)
 from .database import Database, utc_now
 from .decision import AgentDecision
 from .handoff import HandoffService
@@ -23,17 +33,16 @@ from .policy import (
     review_output,
     sanitize_context,
 )
+from .polish import PolishGateway
 from .prompts import (
     DECISION_SYSTEM_PROMPT,
     SYSTEM_PROMPT,
     build_decision_messages,
-    build_messages,
 )
 from .rag import KnowledgeBase
 from .schemas import AgentState
 from .sops import SopService
 from .text_utils import normalize_text, redact_sensitive
-from .tokens import count_tokens, truncate_history
 from .tools import ToolExecutionContext, ToolRegistry, ToolResult
 
 if TYPE_CHECKING:
@@ -43,24 +52,6 @@ if TYPE_CHECKING:
 MODEL_UNAVAILABLE_HANDOFF_ANSWER = (
     "当前无法可靠完成自动处理，我会把现有信息和执行记录转给人工客服。"
 )
-
-
-def _map_scene(intent: str) -> str:
-    """按意图映射生成阶段场景（M3 四套 Prompt 接入）。
-
-    return/refund/return_exchange/after_sales → aftersale_policy
-    product → product_recommend
-    competitor → competitor_analysis
-    其余 → customer_service
-    """
-    intent = (intent or "").lower()
-    if intent in {"return", "refund", "return_exchange", "after_sales", "invoice"}:
-        return "aftersale_policy"
-    if intent in {"product", "inventory", "price_promo"}:
-        return "product_recommend"
-    if "competitor" in intent:
-        return "competitor_analysis"
-    return "customer_service"
 
 
 # 连续低质回复判定集合（对齐 origin/main：连续 2 次低质 → 强制转人工）
@@ -86,9 +77,14 @@ def _bounded_product_context_ready(state: AgentState) -> bool:
     return isinstance(candidates, list) and len(candidates) == 1 and bool(candidates[0])
 
 
-def verify_response(state: AgentState) -> dict[str, Any]:
+def _response_evidence(state: AgentState) -> str:
     evidence = " ".join(document["answer"] for document in state["retrieved"])
     evidence += " " + json.dumps(state["context_bundle"], ensure_ascii=False)
+    return evidence
+
+
+def verify_response(state: AgentState) -> dict[str, Any]:
+    evidence = _response_evidence(state)
     passed, reason = review_output(state["draft"], evidence)
     verified_result = state.get("tool_result", {}).get("postcondition_met") is True
     if state.get("model_retry_advised") and not verified_result:
@@ -121,6 +117,122 @@ def verify_response(state: AgentState) -> dict[str, Any]:
     }
 
 
+def finalize_response(
+    state: AgentState,
+    *,
+    polisher: PolishGateway,
+    db: Database,
+) -> dict[str, Any]:
+    verified = verify_response(state)
+    model_name = polisher.settings.polish_model_name or None
+    if not getattr(polisher.settings, "polish_enabled", True):
+        return {
+            **verified,
+            "polish_status": "disabled",
+            "polish_applied": False,
+            "polish_model": None,
+            "polish_latency_ms": None,
+        }
+    if verified.get("review_route") != "pass":
+        return {
+            **verified,
+            "polish_status": "skipped_review",
+            "polish_applied": False,
+            "polish_model": model_name,
+            "polish_latency_ms": None,
+        }
+    if state.get("draft_origin") != "model":
+        return {
+            **verified,
+            "polish_status": "skipped_non_model",
+            "polish_applied": False,
+            "polish_model": model_name,
+            "polish_latency_ms": None,
+        }
+    if state.get("model_fallback"):
+        return {
+            **verified,
+            "polish_status": "skipped_model_fallback",
+            "polish_applied": False,
+            "polish_model": model_name,
+            "polish_latency_ms": None,
+        }
+
+    result = polisher.polish(
+        raw_answer=verified["answer"],
+        user_message=state["normalized_input"],
+        facts=_response_evidence(state),
+        recent_history=(state.get("context_bundle") or {}).get(
+            "recent_history", []
+        ),
+    )
+
+    if result.applied:
+        passed, reason = review_output(result.answer, _response_evidence(state))
+        if not passed:
+            result = replace(
+                result,
+                answer=verified["answer"],
+                status=f"rejected_{reason}",
+                applied=False,
+                error_type="OutputPolicyError",
+            )
+
+    db.audit(
+        "response.polish",
+        "system",
+        state["trace_id"],
+        result.audit_detail(),
+        state["tenant_id"],
+    )
+    return {
+        **verified,
+        "answer": result.answer if result.applied else verified["answer"],
+        "polish_status": result.status,
+        "polish_applied": result.applied,
+        "polish_model": result.model or model_name,
+        "polish_latency_ms": result.latency_ms,
+        "trace": [*verified["trace"], f"polish:{result.status}"],
+    }
+
+
+def _decision_intent(state: AgentState) -> str:
+    return str(
+        state.get("decision", {}).get("intent")
+        or state.get("intent")
+        or "general"
+    )
+
+
+def select_handoff_answer(state: AgentState) -> str:
+    reason = state["route_reason"]
+    if _decision_intent(state) == "complaint":
+        return state.get("decision", {}).get("response") or (
+            "很抱歉给您带来困扰。我已将当前问题和必要上下文标记为投诉，"
+            "并转交人工客服优先跟进。"
+        )
+    if reason == "customer_requested_human":
+        return "好的，我会将当前问题和必要上下文转给人工客服。请勿发送密码、验证码或银行卡信息。"
+    if reason == "authorized_order_context_missing":
+        return "这个问题需要核对您的订单信息。我会转人工处理，请只提供平台订单编号，不要发送密码或验证码。"
+    if reason == "tool_not_registered":
+        return "我已经理解您要办理的业务，但当前环境尚未接入对应的执行工具，我会转人工继续处理。"
+    if reason.startswith("tool_policy_denied"):
+        return "当前操作未通过已配置的权限或业务规则校验，我会转人工进一步核对。"
+    if reason == "knowledge_unavailable":
+        return (
+            "知识检索服务暂时不可用，当前无法引用知识库；"
+            "我会把对话历史和已有信息转给人工客服继续核对。"
+        )
+    if reason in {"model_unavailable", "react_step_limit_reached"}:
+        return MODEL_UNAVAILABLE_HANDOFF_ANSWER
+    return (
+        state.get("decision", {}).get("response")
+        or state.get("answer")
+        or "当前问题存在无法自动消除的不确定性，我会为您转接人工客服。"
+    )
+
+
 def persist_response(
     state: AgentState,
     *,
@@ -148,13 +260,14 @@ def persist_response(
                 route_reason, sources_json, model_fallback, created_at,
                 tenant_id, client_id, redacted, context_snapshot_id,
                 customer_intent, intent_confidence, intent_method
-            ) VALUES (?, ?, ?, 'user', ?, NULL, NULL, NULL, '[]', 0, ?, ?, ?, ?, NULL, ?, ?, ?)
+            ) VALUES (?, ?, ?, 'user', ?, NULL, NULL, NULL, ?, 0, ?, ?, ?, ?, NULL, ?, ?, ?)
             """,
             (
                 user_message_id,
                 state["trace_id"],
                 state["session_id"],
                 safe_user,
+                json.dumps(state.get("message_media") or [], ensure_ascii=False),
                 now,
                 state["tenant_id"],
                 state["client_id"],
@@ -206,6 +319,14 @@ def persist_response(
                 "reason": state["route_reason"],
                 "sources": sources,
                 "model_fallback": state["model_fallback"],
+                "polish_status": state.get("polish_status", "not_applicable"),
+                "polish_applied": bool(state.get("polish_applied")),
+                "polish_model": state.get("polish_model"),
+                "polish_latency_ms": state.get("polish_latency_ms"),
+                "vision_status": state.get("vision_status", "not_applicable"),
+                "vision_model": state.get("vision_model"),
+                "vision_latency_ms": state.get("vision_latency_ms"),
+                "vision_image_count": state.get("vision_image_count", 0),
                 "handoff_id": state.get("handoff_id"),
                 "handoff_status": state.get("handoff_status"),
                 "sop_id": (state.get("active_sop") or {}).get("id"),
@@ -250,6 +371,7 @@ def persist_response(
             "context_snapshot_id": state.get("context_snapshot_id"),
             "context_readiness": state.get("context_readiness"),
             "evidence_ids": state.get("context_evidence_ids", []),
+            "vision_status": state.get("vision_status", "not_applicable"),
             "trace": state["trace"],
         },
         state["tenant_id"],
@@ -274,6 +396,7 @@ def build_graph(
     tools: ToolRegistry,
     sops: SopService,
     contexts: ContextBuilder,
+    polisher: PolishGateway,
     memory: KnowledgeMemoryService | None = None,
 ) -> StateGraph:
     builder = StateGraph(AgentState)
@@ -286,35 +409,6 @@ def build_graph(
             trace_id=state["trace_id"],
             trusted_context=state["context"],
         )
-
-    def context_budgets(question: str, system_prompt: str) -> tuple[int, int]:
-        total = int(
-            settings.model_context_limit_tokens * settings.context_budget_ratio
-        )
-        available = max(
-            0,
-            total - count_tokens(system_prompt) - count_tokens(question),
-        )
-        knowledge_budget = available * 6 // 10
-        return knowledge_budget, available - knowledge_budget
-
-    def budgeted_history(
-        state: AgentState,
-        system_prompt: str,
-    ) -> tuple[list[dict[str, Any]], dict[str, int | bool], int]:
-        knowledge_budget, history_budget = context_budgets(
-            state["normalized_input"],
-            system_prompt,
-        )
-        history = db.recent_messages(
-            state["session_id"],
-            settings.session_history_limit,
-        )
-        selected, meta = truncate_history(
-            history,
-            budget_tokens=history_budget,
-        )
-        return selected, meta, knowledge_budget
 
     def intake(state: AgentState) -> dict[str, Any]:
         message = normalize_text(state["user_input"])
@@ -335,12 +429,31 @@ def build_graph(
             "route_reason": "pending",
             "retrieved": [],
             "draft": "",
+            "draft_origin": "none",
+            "polish_status": (
+                "not_applicable" if settings.polish_enabled else "disabled"
+            ),
+            "polish_applied": False,
+            "polish_model": (
+                settings.polish_model_name if settings.polish_enabled else None
+            ),
+            "polish_latency_ms": None,
+            "media_evidence": state.get("media_evidence") or {},
+            "message_media": state.get("message_media") or [],
+            "vision_status": state.get("vision_status") or "not_applicable",
+            "vision_model": state.get("vision_model"),
+            "vision_latency_ms": state.get("vision_latency_ms"),
+            "vision_image_count": int(state.get("vision_image_count") or 0),
             "answer": "",
             "citations": [],
             "requires_human": False,
             "message_id": state.get("message_id") or f"msg-{uuid.uuid4().hex}",
             "trace_id": state.get("trace_id") or f"trace-{uuid.uuid4().hex}",
-            "trace": ["intake"],
+            "trace": (
+                ["intake", f"vision:{state.get('vision_status', 'error')}"]
+                if state.get("vision_image_count")
+                else ["intake"]
+            ),
             "review_route": "pass",
             "model_fallback": False,
             "model_retry_advised": False,
@@ -557,6 +670,7 @@ def build_graph(
     def build_decision_context(state: AgentState) -> dict[str, Any]:
         history = db.recent_messages(state["session_id"], settings.session_history_limit)
         _, history_budget = context_budgets(
+            settings,
             state["normalized_input"],
             DECISION_SYSTEM_PROMPT,
         )
@@ -574,6 +688,7 @@ def build_graph(
             history=history,
             history_budget_tokens=history_budget,
             tool_result=state.get("tool_result") or None,
+            media_evidence=state.get("media_evidence") or None,
             parent_snapshot_id=state.get("context_snapshot_id"),
         )
         route = "handoff" if snapshot.readiness == "handoff_required" else "deliberate"
@@ -612,6 +727,7 @@ def build_graph(
             # 导致高分但问题不匹配的文档被错误复用，绕过模型决策）
             and normalize_text(top_document["question"])
             == normalize_text(state["normalized_input"])
+            and not has_media_observation(state)
         ):
             decision = AgentDecision(
                 intent=top_document["intent"],
@@ -626,7 +742,9 @@ def build_graph(
 
         history, history_meta, knowledge_budget = budgeted_history(
             state,
-            DECISION_SYSTEM_PROMPT,
+            db=db,
+            settings=settings,
+            system_prompt=DECISION_SYSTEM_PROMPT,
         )
         bounded_product = _bounded_product_context_ready(state)
         messages = build_decision_messages(
@@ -737,7 +855,14 @@ def build_graph(
                 route = "handoff"
                 reason = "tool_result_not_verified"
         if route == "answer":
-            reason = "knowledge_answer_allowed"
+            if has_media_observation(state):
+                reason = (
+                    "media_and_knowledge_answer_allowed"
+                    if state.get("retrieved")
+                    else "media_observation_answer_allowed"
+                )
+            else:
+                reason = "knowledge_answer_allowed"
         elif route == "clarify":
             reason = "llm_clarification_required"
         elif route == "finish":
@@ -1061,6 +1186,7 @@ def build_graph(
     def build_generation_context(state: AgentState) -> dict[str, Any]:
         history = db.recent_messages(state["session_id"], settings.session_history_limit)
         _, history_budget = context_budgets(
+            settings,
             state["normalized_input"],
             SYSTEM_PROMPT,
         )
@@ -1079,6 +1205,7 @@ def build_graph(
             history=history,
             history_budget_tokens=history_budget,
             tool_result=state.get("tool_result") or None,
+            media_evidence=state.get("media_evidence") or None,
             parent_snapshot_id=state.get("context_snapshot_id"),
         )
         route = "handoff" if snapshot.readiness == "handoff_required" else "generate"
@@ -1106,101 +1233,43 @@ def build_graph(
         }
 
     def generate(state: AgentState) -> dict[str, Any]:
-        verified_result = (
-            state.get("tool_result")
-            if state.get("tool_result", {}).get("postcondition_met")
-            else None
-        )
-        if not state["retrieved"] and not verified_result:
+        plan = plan_generation(state, settings=settings, db=db)
+        draft_origin = draft_origin_for_plan(plan)
+        trace = [*state["trace"]]
+        if plan.budget_trace:
+            trace.append(plan.budget_trace)
+        if plan.branch != BRANCH_MODEL:
+            trace.append(str(plan.trace_step))
             return {
-                "draft": "当前知识库中没有足够信息，我会为您转人工客服进一步核对。",
-                "model_fallback": True,
-                "trace": [*state["trace"], "generate:no_evidence"],
+                "draft": plan.text or "",
+                "draft_origin": draft_origin,
+                "model_fallback": plan.model_fallback,
+                "model_retry_advised": False,
+                "trace": trace,
             }
-        top_document = state["retrieved"][0] if state["retrieved"] else None
-        if (
-            top_document
-            and state["decision"].get("reason") == "approved_knowledge_reuse"
-            and settings.rag_direct_approved_answer
-            and top_document["source"].startswith("evolution:")
-            # 精确匹配才复用（对齐 deliberate 同逻辑）
-            and normalize_text(top_document["question"]) == state["normalized_input"]
-        ):
-            return {
-                "draft": top_document["answer"],
-                "model_fallback": False,
-                "trace": [*state["trace"], "generate:approved_knowledge"],
-            }
-        history, history_meta, knowledge_budget = budgeted_history(
-            state,
-            SYSTEM_PROMPT,
-        )
-        messages = build_messages(
-            question=state["normalized_input"],
-            documents=state["retrieved"],
-            context=state["context_bundle"],
-            history=history,
-            verified_tool_result=verified_result,
-            knowledge_budget_tokens=knowledge_budget,
-            prompt_variant=(state.get("intent_routing") or {}).get("prompt_variant"),
-        )
-        # M3 场景 Prompt 接入：按 intent 映射场景，叠加防幻觉指令（RAG_SCENE_PROMPTS 默认开）
-        if settings.rag_scene_prompts and messages and state["retrieved"]:
-            scene = _map_scene(state.get("intent") or "")
-            try:
-                from .knowledge_engine.prompt_templates import render_prompt
-
-                context_text = "\n".join(
-                    doc.get("answer") or doc.get("question") or ""
-                    for doc in state["retrieved"][:5]
-                )
-                scene_instructions = render_prompt(
-                    scene, context_text, state["normalized_input"]
-                )
-                messages[0] = {
-                    "role": "system",
-                    "content": f"{messages[0]['content']}\n\n【本会话场景指令】\n{scene_instructions}",
-                }
-            except (ValueError, ImportError):
-                pass  # 场景注入失败不阻塞回答（保持原 SYSTEM_PROMPT）
-        budget_trace = (
-            f"context:budget:kept{history_meta['kept']}"
-            f"/dropped{history_meta['dropped']}"
-        )
         try:
-            draft = model.generate(messages)
+            draft = model.generate(plan.messages or [])
             fallback = False
             trace_step = "generate:model"
             retry_advised = False
         except ModelError as exc:
-            retry_advised = False
-            if verified_result:
-                draft = "操作已完成，业务系统已经确认处理结果。"
-                trace_step = "generate:verified_result_fallback"
-            elif isinstance(exc, ModelUnavailableError):
-                draft = ""
-                trace_step = "generate:model_temporarily_unavailable"
-                retry_advised = True
-            else:
-                draft = "当前模型暂时不可用，我会为您转人工客服，避免给出不准确的信息。"
-                trace_step = "generate:fallback"
-            fallback = True
-            db.audit(
-                "model.failure",
-                "system",
-                state["trace_id"],
-                {"error_type": type(exc).__name__, "error": str(exc)[:300]},
-                state["tenant_id"],
-            )
+            recovery = recover_model_failure(state, exc, db=db)
+            draft = recovery.draft
+            draft_origin = "fallback"
+            retry_advised = recovery.retry_advised
+            trace_step = recovery.trace_step
+            fallback = recovery.model_fallback
+        trace.append(trace_step)
         return {
             "draft": draft,
+            "draft_origin": draft_origin,
             "model_fallback": fallback,
             "model_retry_advised": retry_advised,
-            "trace": [*state["trace"], budget_trace, trace_step],
+            "trace": trace,
         }
 
     def verify(state: AgentState) -> dict[str, Any]:
-        return verify_response(state)
+        return finalize_response(state, polisher=polisher, db=db)
 
     def retry_later(state: AgentState) -> dict[str, Any]:
         return {
@@ -1234,36 +1303,9 @@ def build_graph(
 
     def handoff(state: AgentState) -> dict[str, Any]:
         reason = state["route_reason"]
-        decision_intent = str(
-            state.get("decision", {}).get("intent")
-            or state.get("intent")
-            or "general"
-        )
+        decision_intent = _decision_intent(state)
         model_confirmed_complaint = decision_intent == "complaint"
-        if model_confirmed_complaint:
-            # 投诉专属文案（对齐 origin/main：此前 merge 丢失，投诉无"抱歉"前缀）
-            answer = state.get("decision", {}).get("response") or (
-                "很抱歉给您带来困扰。我已将当前问题和必要上下文标记为投诉，"
-                "并转交人工客服优先跟进。"
-            )
-        elif reason == "customer_requested_human":
-            answer = "好的，我会将当前问题和必要上下文转给人工客服。请勿发送密码、验证码或银行卡信息。"
-        elif reason == "authorized_order_context_missing":
-            answer = "这个问题需要核对您的订单信息。我会转人工处理，请只提供平台订单编号，不要发送密码或验证码。"
-        elif reason == "tool_not_registered":
-            answer = "我已经理解您要办理的业务，但当前环境尚未接入对应的执行工具，我会转人工继续处理。"
-        elif reason.startswith("tool_policy_denied"):
-            answer = "当前操作未通过已配置的权限或业务规则校验，我会转人工进一步核对。"
-        elif reason == "knowledge_unavailable":
-            answer = (
-                "知识检索服务暂时不可用，当前无法引用知识库；"
-                "我会把对话历史和已有信息转给人工客服继续核对。"
-            )
-        elif reason in {"model_unavailable", "react_step_limit_reached"}:
-            answer = MODEL_UNAVAILABLE_HANDOFF_ANSWER
-        else:
-            decision_response = state.get("decision", {}).get("response")
-            answer = decision_response or state.get("answer") or "当前问题存在无法自动消除的不确定性，我会为您转接人工客服。"
+        answer = select_handoff_answer(state)
         if state.get("execution_mode") == "shadow":
             return {
                 "answer": answer,

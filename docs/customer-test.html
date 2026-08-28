@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>云湃电商 - 顾客对话测试</title>
+  <title>智能客服示例</title>
   <style>
     :root {
       --canvas: #f2f5f6;
@@ -12,7 +12,6 @@
       --muted: #64747b;
       --line: #d7e0e3;
       --nav: #17313a;
-      --nav-soft: #244a56;
       --teal: #087b72;
       --teal-soft: #e7f4f1;
       --amber: #a75c00;
@@ -21,39 +20,102 @@
       --red-soft: #fdecef;
       --blue: #1b5f8f;
       --blue-soft: #e8f2f9;
-      font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+      font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
     }
     * { box-sizing: border-box; }
     body { margin: 0; min-width: 320px; color: var(--ink); background: var(--canvas); }
     button, textarea { font: inherit; letter-spacing: 0; }
     button { cursor: pointer; }
-    .page { min-height: 100vh; display: grid; grid-template-rows: auto minmax(0, 1fr); }
-    .topbar { min-height: 62px; padding: 11px clamp(14px, 3vw, 32px); background: var(--nav); color: #fff; display: flex; gap: 16px; align-items: center; justify-content: space-between; }
-    .title { min-width: 0; }
+    .page { width: 100%; min-width: 0; min-height: 100vh; display: grid; grid-template-rows: auto minmax(0, 1fr); }
+    .topbar {
+      min-height: 62px; padding: 11px clamp(14px, 3vw, 32px); background: var(--nav); color: #fff;
+      position: relative; min-width: 0; display: flex; gap: 16px; align-items: center; justify-content: space-between;
+    }
+    .title { min-width: 0; flex: 1 1 320px; }
     .title strong { display: block; font-size: 18px; }
     .title span { display: block; margin-top: 3px; font-size: 12px; color: #b5c9ce; }
-    .topbar-actions { display: flex; align-items: center; gap: 9px; }
-    .status { display: inline-flex; align-items: center; min-height: 25px; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: 700; background: #294a55; color: #d9f2ed; white-space: nowrap; }
-    .button { min-height: 34px; padding: 6px 11px; border: 1px solid var(--line); border-radius: 4px; background: #fff; color: var(--ink); font-weight: 700; }
+    .topbar-actions { min-width: 0; display: flex; align-items: center; gap: 10px; margin-left: auto; }
+    .status {
+      display: inline-flex; align-items: center; min-height: 25px; padding: 3px 8px; border-radius: 4px;
+      font-size: 12px; font-weight: 700; background: #294a55; color: #d9f2ed; white-space: nowrap;
+    }
+    .release-center { position: relative; flex: 0 0 auto; }
+    .release-bell {
+      position: relative; width: 36px; height: 36px; padding: 0; border: 1px solid rgba(213,238,241,.34);
+      border-radius: 8px; display: grid; place-items: center; background: rgba(255,255,255,.06); color: #e8f4f5;
+    }
+    .release-bell:hover, .release-bell:focus-visible { background: #294a55; border-color: #78aaa9; outline: none; }
+    .release-bell svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    .release-panel[hidden] { display: none; }
+    .release-panel {
+      position: absolute; z-index: 80; top: calc(100% + 10px); right: 0; width: min(430px, calc(100vw - 28px));
+      max-height: min(650px, calc(100vh - 90px)); overflow: auto; border: 1px solid #c8d6da; border-radius: 10px;
+      background: #fff; color: var(--ink); box-shadow: 0 18px 45px rgba(19,49,58,.24);
+    }
+    .release-panel::before {
+      content: ""; position: absolute; top: -7px; right: 12px; width: 12px; height: 12px;
+      border-left: 1px solid #c8d6da; border-top: 1px solid #c8d6da; background: #fff; transform: rotate(45deg);
+    }
+    .release-panel-head {
+      position: sticky; top: 0; z-index: 1; padding: 15px 16px 13px; display: flex; align-items: flex-start;
+      justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); background: #fff;
+    }
+    .release-panel-head strong { display: block; font-size: 16px; }
+    .release-panel-head span { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; }
+    .release-close {
+      width: 30px; height: 30px; padding: 0; border: 0; border-radius: 6px; background: #eef3f4;
+      color: #53656c; font-size: 20px; line-height: 1;
+    }
+    .release-close:hover, .release-close:focus-visible { background: #dfe9eb; outline: 2px solid rgba(8,123,114,.18); }
+    .release-section { padding: 14px 16px; }
+    .release-section + .release-section { border-top: 1px solid var(--line); }
+    .release-section h2 { margin: 0 0 10px; font-size: 13px; }
+    .feature-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .feature-item { padding: 9px 10px; border: 1px solid #d4e4e2; border-radius: 6px; background: #f4f9f8; }
+    .feature-item strong { display: block; color: #086c64; font-size: 12px; }
+    .feature-item span { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; line-height: 1.45; }
+    .release-log { display: grid; gap: 13px; }
+    .release-entry { position: relative; padding-left: 16px; }
+    .release-entry::before { content: ""; position: absolute; top: 6px; left: 0; width: 7px; height: 7px; border-radius: 50%; background: var(--teal); }
+    .release-entry + .release-entry { padding-top: 13px; border-top: 1px dashed #d8e1e3; }
+    .release-entry + .release-entry::before { top: 19px; background: #91a3a9; }
+    .release-entry-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+    .release-entry time { color: var(--muted); font-size: 11px; }
+    .release-entry strong { font-size: 13px; }
+    .release-latest { padding: 2px 6px; border-radius: 999px; background: var(--teal-soft); color: #087269; font-size: 10px; font-weight: 700; }
+    .release-entry ul { margin: 7px 0 0; padding-left: 18px; color: #53656c; font-size: 12px; line-height: 1.6; }
+    .button {
+      min-height: 34px; padding: 6px 11px; border: 1px solid var(--line); border-radius: 4px;
+      background: #fff; color: var(--ink); font-weight: 700;
+    }
     .button:hover { border-color: #97abb2; background: #f8fbfb; }
     .button.primary { border-color: var(--teal); background: var(--teal); color: #fff; }
     .button.primary:hover { background: #06675f; }
     .button:disabled { opacity: .55; cursor: wait; }
-    .layout { width: min(1360px, 100%); min-height: 0; margin: 0 auto; padding: 20px clamp(14px, 3vw, 32px); display: grid; grid-template-columns: minmax(250px, 310px) minmax(0, 1fr); gap: 18px; }
+    .layout {
+      width: min(1360px, 100%); min-height: 0; margin: 0 auto; padding: 20px clamp(14px, 3vw, 32px);
+      display: grid; grid-template-columns: minmax(250px, 310px) minmax(0, 1fr); gap: 18px;
+    }
     .sidebar, .workspace { min-width: 0; }
     .panel { background: var(--paper); border: 1px solid var(--line); border-radius: 6px; }
     .panel-head { padding: 16px; border-bottom: 1px solid var(--line); }
-    .panel-head h1, .panel-head h2 { margin: 0; font-size: 16px; }
+    .panel-head h1 { margin: 0; font-size: 16px; }
     .panel-head p { margin: 6px 0 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
-    .case-list { padding: 8px; display: grid; gap: 7px; }
-    .case { width: 100%; padding: 10px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: var(--ink); text-align: left; }
-    .case:hover, .case.selected { border-color: #a8d4ce; background: var(--teal-soft); }
-    .case strong, .case span { display: block; }
-    .case strong { font-size: 14px; }
-    .case span { margin-top: 4px; color: var(--muted); font-size: 12px; line-height: 1.45; }
-    .case-foot { padding: 12px 16px 16px; color: var(--muted); border-top: 1px solid var(--line); font-size: 12px; line-height: 1.55; }
-    .workspace { display: grid; grid-template-rows: auto minmax(320px, 1fr) auto auto; overflow: hidden; }
-    .session-row { padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 12px; background: #fbfcfc; }
+    .hints { padding: 8px; display: grid; gap: 7px; }
+    .hint {
+      width: 100%; padding: 10px; border: 1px solid transparent; border-radius: 4px;
+      background: transparent; color: var(--ink); text-align: left;
+    }
+    .hint:hover, .hint.active { border-color: #a8d4ce; background: var(--teal-soft); }
+    .hint .when { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+    .history-head { border-top: 1px solid var(--line); }
+    .history-list { max-height: 280px; overflow: auto; }
+    .history-empty { margin: 0; padding: 4px 2px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+    .workspace { display: grid; grid-template-rows: auto minmax(320px, 1fr) auto auto; overflow: hidden; min-height: calc(100vh - 120px); }
+    .session-row {
+      padding: 12px 16px; border-bottom: 1px solid var(--line);
+      display: flex; align-items: center; justify-content: space-between; gap: 12px; background: #fbfcfc;
+    }
     .session-row .label { min-width: 0; }
     .session-row .label strong, .session-row .label span { display: block; }
     .session-row .label strong { font-size: 14px; }
@@ -71,67 +133,185 @@
     .tag.ok { color: #06675f; background: var(--teal-soft); }
     .tag.warn { color: var(--amber); background: var(--amber-soft); }
     .tag.danger { color: var(--red); background: var(--red-soft); }
+    .tag.info { color: var(--blue); background: var(--blue-soft); }
     .source-list { margin: 10px 0 0; padding: 10px; border-left: 3px solid #8bc7c0; background: #f3f8f8; color: #405158; font-size: 12px; }
     .source-list strong { color: var(--ink); }
+    .decision-details { margin-top: 9px; padding-top: 8px; border-top: 1px solid rgba(23, 33, 43, .12); }
+    .decision-details summary { cursor: pointer; color: var(--blue); font-size: 12px; }
+    .decision-grid { display: grid; gap: 5px; margin-top: 8px; color: var(--muted); font-size: 12px; }
+    .decision-trace { overflow-wrap: anywhere; word-break: break-word; }
     .composer { padding: 14px 16px; border-top: 1px solid var(--line); display: grid; gap: 9px; }
+    .demo-subject { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px; }
+    .demo-subject label { color: var(--muted); font-size: 12px; font-weight: 700; }
+    .demo-subject select { min-width: 0; padding: 7px 9px; border: 1px solid #b8c8cd; border-radius: 4px; background: #fff; color: var(--ink); }
     .context { color: var(--muted); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
     textarea { width: 100%; min-height: 82px; resize: vertical; padding: 10px 11px; border: 1px solid #b8c8cd; border-radius: 4px; color: var(--ink); background: #fff; outline: none; }
     textarea:focus { border-color: var(--teal); box-shadow: 0 0 0 2px rgba(8,123,114,.12); }
-    .composer-actions { display: flex; justify-content: flex-end; gap: 9px; }
+    .composer-actions { display: flex; align-items: center; justify-content: space-between; gap: 9px; }
+    .image-actions { display: flex; align-items: center; gap: 9px; }
+    .image-actions .button { flex: 0 0 auto; white-space: nowrap; }
+    .paste-hint { color: var(--muted); font-size: 12px; }
+    .image-preview { display: flex; align-items: center; gap: 10px; padding: 9px; border: 1px solid #b8d7d3; border-radius: 4px; background: #f3f9f8; }
+    .image-preview.hidden { display: none; }
+    .image-preview img { width: 72px; height: 72px; object-fit: cover; border: 1px solid var(--line); border-radius: 4px; background: #fff; }
+    .image-preview-info { min-width: 0; flex: 1; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+    .message-image { display: block; max-width: min(360px, 100%); max-height: 300px; margin: 0 0 9px; border: 1px solid var(--line); border-radius: 4px; object-fit: contain; background: #fff; }
     .evidence { margin: 0 16px 16px; padding: 0 0 14px; border-top: 1px solid var(--line); }
     .evidence summary { padding-top: 12px; color: var(--muted); font-size: 13px; cursor: pointer; }
     pre { max-height: 260px; margin: 10px 0 0; padding: 12px; overflow: auto; border-radius: 4px; background: #172a31; color: #dce8ea; font: 12px/1.55 ui-monospace, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
-    .notice { margin: 12px 16px 0; padding: 9px 10px; border-left: 3px solid var(--amber); background: var(--amber-soft); color: #714300; font-size: 13px; line-height: 1.5; }
-    .notice.hidden { display: none; }
     @media (max-width: 820px) {
       .layout { grid-template-columns: 1fr; }
-      .case-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .case-foot { display: none; }
+      .workspace { min-height: 60vh; }
       .messages { max-height: 46vh; }
     }
     @media (max-width: 520px) {
-      .topbar { align-items: flex-start; }
-      .topbar-actions .status { display: none; }
-      .case-list { grid-template-columns: 1fr; }
+      .topbar { align-items: flex-start; flex-wrap: wrap; }
+      .topbar-actions { width: 100%; justify-content: flex-start; }
+      .topbar-actions .status { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; }
+      .release-center { position: static; }
+      .release-panel { top: 100%; left: 12px; right: 12px; width: auto; max-height: calc(100vh - 130px); }
+      .release-panel::before { display: none; }
+      .feature-list { grid-template-columns: 1fr; }
       .session-row { align-items: flex-start; flex-direction: column; }
       .message { max-width: 95%; }
-      .composer-actions .button { flex: 1; }
+      .composer-actions { align-items: stretch; flex-direction: column; }
     }
   </style>
 </head>
 <body>
   <div class="page">
     <header class="topbar">
-      <div class="title"><strong>顾客对话测试</strong><span>本机隔离环境 · 复用智能客服真实调用链路</span></div>
+      <div class="title">
+        <strong>智能客服示例</strong>
+        <span>产品测试 · 晴川旗舰店 · 电商数据 / 多轮对话 / 图片观察 / Qwen 润色</span>
+      </div>
       <div class="topbar-actions">
-        <span class="status">仅限本机 · 模拟数据范围</span>
-        <a class="button" href="/admin">返回后台</a>
+        <div class="release-center">
+          <button
+            class="release-bell"
+            type="button"
+            id="releaseBell"
+            aria-label="查看支持功能和版本更新"
+            aria-haspopup="dialog"
+            aria-controls="releasePanel"
+            aria-expanded="false"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"></path>
+              <path d="M10 21h4"></path>
+            </svg>
+          </button>
+          <section
+            class="release-panel"
+            id="releasePanel"
+            role="dialog"
+            aria-modal="false"
+            aria-labelledby="releaseTitle"
+            hidden
+          >
+            <div class="release-panel-head">
+              <div>
+                <strong id="releaseTitle">功能与版本公告</strong>
+                <span>查看当前支持能力和最近更新</span>
+              </div>
+              <button class="release-close" type="button" id="releaseClose" aria-label="关闭公告">×</button>
+            </div>
+            <div class="release-section">
+              <h2>支持的 Feature</h2>
+              <div class="feature-list">
+                <div class="feature-item"><strong>智能对话</strong><span>DeepSeek 决策与流式回复，多轮追问</span></div>
+                <div class="feature-item"><strong>会话与长期记忆</strong><span>历史上下文、顾客偏好隔离</span></div>
+                <div class="feature-item"><strong>电商数据问答</strong><span>商品、订单、库存与店铺知识统一回答</span></div>
+                <div class="feature-item"><strong>商品诊断</strong><span>M7/M9 只读数据、商品身份与诊断能力</span></div>
+                <div class="feature-item"><strong>图片输入</strong><span>Qwen-VL 观察 PNG / JPEG / WebP</span></div>
+                <div class="feature-item"><strong>文案润色</strong><span>Qwen 在保护事实边界后优化最终表述</span></div>
+                <div class="feature-item"><strong>人工接管</strong><span>低置信度与业务操作升级</span></div>
+              </div>
+            </div>
+            <div class="release-section">
+              <h2>版本更新</h2>
+              <div class="release-log">
+                <article class="release-entry">
+                  <div class="release-entry-head">
+                    <time datetime="2026-08-27">2026-08-27</time>
+                    <strong>电商主线与多模态整合</strong>
+                    <span class="release-latest">最新</span>
+                  </div>
+                  <ul>
+                    <li>后端升级到已合入 M7/M9 的最新电商主线。</li>
+                    <li>接入 Qwen-VL 单图观察与跨轮图片记忆。</li>
+                    <li>接入受事实保护的 Qwen 最终文案润色。</li>
+                    <li>新版客服界面支持历史会话与流式诊断。</li>
+                  </ul>
+                </article>
+                <article class="release-entry">
+                  <div class="release-entry-head">
+                    <time datetime="2026-08-26">2026-08-26</time>
+                    <strong>独立客服模块初版</strong>
+                  </div>
+                  <ul>
+                    <li>客服能力拆分为可独立安装和复用的模块。</li>
+                    <li>提供对话、会话记忆、话术匹配和反馈治理。</li>
+                    <li>本机 Demo 支持历史会话、图片输入和诊断详情。</li>
+                  </ul>
+                </article>
+              </div>
+            </div>
+          </section>
+        </div>
+        <div class="status" id="modelStatus">正在检测模型…</div>
       </div>
     </header>
     <main class="layout">
       <aside class="sidebar panel">
         <div class="panel-head">
-          <h1>测试案例</h1>
-          <p>点击案例会填入真实请求内容，并保留案例指定的非敏感上下文。</p>
+          <h1>试着问</h1>
+          <p>已装载「晴川旗舰店」演示数据。可直接测试商品、订单、库存、售后和图片咨询。</p>
         </div>
-        <div class="case-list" id="caseList"><div class="empty">正在加载案例...</div></div>
-        <div class="case-foot">退款、改址等业务动作不会在此入口执行；系统会按正式安全策略转人工或拒绝越权请求。</div>
+        <div class="hints">
+          <button class="hint" type="button" data-subject="af5-order-1001" data-q="晴川空气炸锅 5L 容量是多少" disabled>5L 空气炸锅容量</button>
+          <button class="hint" type="button" data-subject="af5-order-1001" data-q="晴川 AF5 空气炸锅现在库存怎么样" disabled>AF5 当前库存</button>
+          <button class="hint" type="button" data-subject="af5-order-1001" data-q="我最近的订单现在是什么状态" disabled>最近订单状态</button>
+          <button class="hint" type="button" data-subject="hm3-order-1005" data-q="加湿器滤芯怎么换" disabled>加湿器售后说明</button>
+          <button class="hint" type="button" data-subject="store-only" data-q="请马上给我退款" disabled>请马上给我退款</button>
+        </div>
+        <div class="panel-head history-head">
+          <h1>历史会话</h1>
+        </div>
+        <div class="hints history-list" id="sessionList" aria-live="polite"></div>
       </aside>
-      <section class="workspace panel" aria-label="顾客测试对话">
+      <section class="workspace panel">
         <div class="session-row">
-          <div class="label"><strong>当前顾客会话</strong><span id="sessionId"></span></div>
+          <div class="label">
+            <strong>当前顾客会话</strong>
+            <span id="sessionId"></span>
+          </div>
           <button class="button" type="button" id="newSession">新建会话</button>
         </div>
         <div class="messages" id="messages">
-          <div class="empty" id="emptyState">选择左侧案例，或直接输入顾客问题。每次发送会显示智能客服实际返回的回答、风险判断、来源与原始接口输出。</div>
+          <div class="empty" id="emptyState">从左侧点一个问题，或直接输入。客服完成事实核验后会显示完整回复。</div>
         </div>
-        <div class="notice hidden" id="errorNotice" role="alert"></div>
         <form class="composer" id="chatForm">
-          <div class="context" id="contextHint">当前上下文：无</div>
-          <textarea id="messageInput" maxlength="4000" placeholder="以顾客身份输入问题，例如：这款商品多久发货？" required></textarea>
+          <div class="demo-subject">
+            <label for="demoSubject">演示对象</label>
+            <select id="demoSubject" disabled>
+              <option value="">正在加载…</option>
+            </select>
+          </div>
+          <div class="context" id="contextHint">当前演示上下文：无</div>
+          <textarea id="messageInput" maxlength="2000" placeholder="以顾客身份输入问题，也可附一张图片"></textarea>
+          <div class="image-preview hidden" id="imagePreview">
+            <img id="imagePreviewImg" alt="待发送图片预览">
+            <div class="image-preview-info" id="imagePreviewInfo"></div>
+            <button class="button" type="button" id="removeImage">移除图片</button>
+          </div>
+          <input id="imageInput" type="file" accept="image/png,image/jpeg,image/webp" hidden>
           <div class="composer-actions">
-            <button class="button" type="button" id="clearContext">清除上下文</button>
-            <button class="button primary" id="sendButton" type="submit">发送对话</button>
+            <div class="image-actions">
+              <button class="button" type="button" id="attachButton" disabled>上传图片</button>
+              <span class="paste-hint">支持 PNG / JPEG / WebP，也可直接粘贴到输入框</span>
+            </div>
+            <button class="button primary" id="sendButton" type="submit" disabled>发送</button>
           </div>
         </form>
         <details class="evidence" id="outputDetails">
@@ -142,148 +322,558 @@
     </main>
   </div>
   <script>
-    const state = { sessionId: '', context: {}, selectedCase: null, busy: false };
+    const SESSION_KEY = "yunpai-ecommerce-product-demo-session-id";
+    const state = {
+      sessionId: "",
+      busy: false,
+      image: null,
+      demoSubjectId: "",
+      demoSubjects: [],
+      context: {},
+      imageTypes: [],
+      maxImageBytes: 0,
+    };
     const $ = (id) => document.getElementById(id);
-    const escapeHtml = (value) => String(value ?? '').replace(/[&<>'"]/g, (char) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' })[char]);
+    const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (ch) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    }[ch]));
 
-    function createSessionId() {
-      const token = window.crypto?.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    function newSessionId() {
+      const token = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
       return `customer-test:${token}`;
     }
 
-    function updateSession() {
-      $('sessionId').textContent = state.sessionId;
+    function storeSessionId(id) {
+      try { localStorage.setItem(SESSION_KEY, id); } catch (_error) {}
     }
 
-    function updateContext() {
-      const entries = Object.entries(state.context);
-      $('contextHint').textContent = entries.length
-        ? `当前案例上下文：${entries.map(([key, value]) => `${key}=${value}`).join(' · ')}`
-        : '当前上下文：无';
+    function readStoredSessionId() {
+      try { return localStorage.getItem(SESSION_KEY) || ""; } catch (_error) { return ""; }
     }
 
-    function showError(message) {
-      $('errorNotice').textContent = message;
-      $('errorNotice').classList.remove('hidden');
+    function setReleasePanel(open, returnFocus = false) {
+      $("releasePanel").hidden = !open;
+      $("releaseBell").setAttribute("aria-expanded", String(open));
+      if (open) {
+        $("releaseClose").focus();
+      } else if (returnFocus) {
+        $("releaseBell").focus();
+      }
     }
 
-    function clearError() {
-      $('errorNotice').textContent = '';
-      $('errorNotice').classList.add('hidden');
+    function sessionTail(sessionId) {
+      const id = String(sessionId || "");
+      return id.length > 16 ? id.slice(-16) : id;
     }
 
-    function appendMessage(kind, title, content, meta = null) {
-      $('emptyState')?.remove();
-      const node = document.createElement('article');
+    function formatLocalTime(value) {
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return String(value || "");
+      return date.toLocaleString();
+    }
+
+    function formatMessageTime(value) {
+      const date = value ? new Date(value) : new Date();
+      const fallback = new Date();
+      const resolved = Number.isNaN(date.getTime()) ? fallback : date;
+      return resolved.toLocaleTimeString("zh-CN", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+      });
+    }
+
+    function parseSourcesJson(value) {
+      if (Array.isArray(value)) return value;
+      if (typeof value !== "string" || !value.trim()) return [];
+      try {
+        const parsed = JSON.parse(value);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (_error) {
+        return [];
+      }
+    }
+
+    function visionTag(meta) {
+      const status = meta.vision_status || "not_applicable";
+      if (status === "not_applicable") return "";
+      const model = meta.vision_model ? ` · ${escapeHtml(meta.vision_model)}` : "";
+      const latency = Number.isInteger(meta.vision_latency_ms) ? ` · ${meta.vision_latency_ms}ms` : "";
+      if (status === "applied") return `<span class="tag ok">Qwen 视觉：已解析${model}${latency}</span>`;
+      if (status === "disabled") return '<span class="tag">Qwen 视觉：未启用</span>';
+      if (status === "misconfigured") return `<span class="tag danger">Qwen 视觉：配置不完整${model}</span>`;
+      if (status === "error") return `<span class="tag danger">Qwen 视觉：调用失败${model}${latency}</span>`;
+      return `<span class="tag">Qwen 视觉：${escapeHtml(status)}${model}${latency}</span>`;
+    }
+
+    function polishTag(meta) {
+      const status = meta.polish_status || "not_applicable";
+      const model = meta.polish_model ? ` · ${escapeHtml(meta.polish_model)}` : "";
+      const latency = Number.isInteger(meta.polish_latency_ms) ? ` · ${meta.polish_latency_ms}ms` : "";
+      if (status === "applied") return `<span class="tag ok">Qwen 润色：已采用${model}${latency}</span>`;
+      if (status === "unchanged") return `<span class="tag info">Qwen 润色：已调用，原文未变${model}${latency}</span>`;
+      if (status === "disabled") return '<span class="tag">Qwen 润色：未启用</span>';
+      if (status === "not_applicable" || status.startsWith("skipped_")) {
+        return `<span class="tag">Qwen 润色：本条未调用${model}</span>`;
+      }
+      if (status === "error" || status === "misconfigured") {
+        return `<span class="tag danger">Qwen 润色：调用失败，已回退原文${model}${latency}</span>`;
+      }
+      if (status.startsWith("rejected_")) {
+        return `<span class="tag warn">Qwen 润色：输出未采用${model}${latency}</span>`;
+      }
+      return `<span class="tag">Qwen 润色：${escapeHtml(status)}${model}${latency}</span>`;
+    }
+
+    function riskTagClass(level) {
+      if (level === "blocked") return "danger";
+      if (level === "medium") return "warn";
+      return "";
+    }
+
+    function replyMetaHtml(meta) {
+      const bits = [];
+      if (meta.requires_human) {
+        bits.push('<span class="tag warn">已转人工</span>');
+      } else if (meta.intent) {
+        bits.push(`<span class="tag ok">${escapeHtml(meta.intent)}</span>`);
+      }
+      if (meta.risk_level) {
+        bits.push(`<span class="tag ${riskTagClass(meta.risk_level)}">风险 ${escapeHtml(meta.risk_level)}</span>`);
+      }
+      if (meta.reason) {
+        bits.push(`<span class="tag">${escapeHtml(meta.reason)}</span>`);
+      }
+      bits.push(visionTag(meta));
+      bits.push(polishTag(meta));
+      if (meta.model_fallback) {
+        bits.push('<span class="tag warn">模型兜底</span>');
+      }
+      if (Array.isArray(meta.evidence_ids) && meta.evidence_ids.length) {
+        bits.push(`<span class="tag info">证据 ${escapeHtml(meta.evidence_ids.length)}</span>`);
+      }
+      if (meta.context_readiness) {
+        bits.push(`<span class="tag">${escapeHtml(`上下文 ${meta.context_readiness}`)}</span>`);
+      }
+      const tags = bits.filter(Boolean);
+      return tags.length ? `<div class="reply-meta">${tags.join("")}</div>` : "";
+    }
+
+    function sourceListHtml(sources) {
+      if (!Array.isArray(sources) || !sources.length) return "";
+      const lines = sources.map((source) => {
+        const item = source && typeof source === "object" ? source : {};
+        return `${escapeHtml(item.category)} · ${escapeHtml(item.source)} · v${escapeHtml(item.version)}`;
+      }).join("<br>");
+      return `<div class="source-list"><strong>命中来源</strong><br>${lines}</div>`;
+    }
+
+    function decisionDetailsHtml(meta) {
+      const traceItems = Array.isArray(meta.trace) ? meta.trace.filter(Boolean) : [];
+      const trace = traceItems.join(" → ");
+      return (
+        `<details class="decision-details"><summary>决策详情</summary><div class="decision-grid">` +
+        `<div><strong>路由</strong> ${escapeHtml(meta.reason || "-")}</div>` +
+        `<div><strong>模型兜底</strong> ${meta.model_fallback ? "是" : "否"}</div>` +
+        `<div><strong>模式</strong> ${escapeHtml(meta.decision_mode || "-")}</div>` +
+        `<div><strong>工具</strong> ${escapeHtml(meta.decision_tool || "-")}</div>` +
+        `<div><strong>上下文</strong> ${escapeHtml(meta.context_readiness || "-")}</div>` +
+        (trace ? `<div class="decision-trace"><strong>轨迹</strong> ${escapeHtml(trace)}</div>` : "") +
+        `</div></details>`
+      );
+    }
+
+    function fillAgentDiagnostics(node, result) {
+      node.querySelectorAll(".reply-meta, .source-list, .decision-details").forEach((el) => el.remove());
+      node.insertAdjacentHTML(
+        "beforeend",
+        replyMetaHtml(result) + sourceListHtml(result.sources) + decisionDetailsHtml(result),
+      );
+    }
+
+    function clearImage() {
+      state.image = null;
+      $("imageInput").value = "";
+      $("imagePreview").classList.add("hidden");
+      $("imagePreviewImg").removeAttribute("src");
+      $("imagePreviewInfo").textContent = "";
+    }
+
+    function renderDemoContext(context) {
+      const entries = context && typeof context === "object" ? Object.entries(context) : [];
+      $("contextHint").textContent = entries.length
+        ? `当前演示上下文：${entries.map(([key, value]) => `${key}=${value}`).join(" · ")}`
+        : "当前演示上下文：无";
+    }
+
+    function applyDemoSubject(subjectId, startNewSession) {
+      const subject = state.demoSubjects.find((item) => item.id === subjectId);
+      if (!subject) return false;
+      const changed = Boolean(state.demoSubjectId && state.demoSubjectId !== subject.id);
+      state.demoSubjectId = subject.id;
+      state.context = subject.context && typeof subject.context === "object"
+        ? { ...subject.context }
+        : {};
+      $("demoSubject").value = subject.id;
+      renderDemoContext(state.context);
+      if (startNewSession && changed) setSession(newSessionId());
+      return true;
+    }
+
+    function setSession(id) {
+      state.sessionId = id;
+      storeSessionId(id);
+      $("sessionId").textContent = id;
+      clearImage();
+      $("outputJson").textContent = "尚未调用接口。";
+      $("messages").innerHTML = '<div class="empty" id="emptyState">这是晴川小家电模拟店。左侧点一个问题，或问空气炸锅 / 加湿器 / 挂烫机，也可以附图。</div>';
+    }
+
+    function appendMessage(kind, title, content, options = {}) {
+      const empty = $("emptyState");
+      if (empty) empty.remove();
+      const node = document.createElement("article");
       node.className = `message ${kind}`;
-      const time = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-      let html = `<div class="message-head"><strong>${escapeHtml(title)}</strong><span>${time}</span></div><div>${escapeHtml(content)}</div>`;
-      if (meta) {
-        const handoffClass = meta.requires_human ? 'warn' : 'ok';
-        html += `<div class="reply-meta"><span class="tag ${handoffClass}">${meta.requires_human ? '已转人工' : escapeHtml(meta.intent)}</span><span class="tag">风险 ${escapeHtml(meta.risk_level)}</span><span class="tag">${escapeHtml(meta.reason)}</span></div>`;
-        if (meta.sources?.length) {
-          html += `<div class="source-list"><strong>命中来源</strong><br>${meta.sources.map((source) => `${escapeHtml(source.category)} · ${escapeHtml(source.source)} · v${escapeHtml(source.version)}`).join('<br>')}</div>`;
-        }
+      const urls = Array.isArray(options.imageUrls)
+        ? options.imageUrls.filter(Boolean)
+        : (options.imageUrl ? [options.imageUrl] : []);
+      const image = urls.map(
+        (url) => `<img class="message-image" alt="顾客发送的图片" src="${escapeHtml(url)}">`,
+      ).join("");
+      let html = (
+        `<div class="message-head"><strong>${escapeHtml(title)}</strong>` +
+        `<span>${escapeHtml(formatMessageTime(options.createdAt))}</span></div>` +
+        `${image}<div class="message-body">${escapeHtml(content)}</div>`
+      );
+      if (options.meta) {
+        html += replyMetaHtml(options.meta);
+        html += sourceListHtml(options.meta.sources);
+        if (options.includeDecision) html += decisionDetailsHtml(options.meta);
       }
       node.innerHTML = html;
-      $('messages').append(node);
-      $('messages').scrollTop = $('messages').scrollHeight;
+      $("messages").appendChild(node);
+      $("messages").scrollTop = $("messages").scrollHeight;
+      return node;
     }
 
-    function setBusy(busy) {
-      state.busy = busy;
-      $('sendButton').disabled = busy;
-      $('sendButton').textContent = busy ? '正在请求...' : '发送对话';
-      $('messageInput').disabled = busy;
+    async function readSse(response, onEvent) {
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const chunks = buffer.split("\n\n");
+        buffer = chunks.pop() || "";
+        for (const chunk of chunks) {
+          const line = chunk.split("\n").find((item) => item.startsWith("data: "));
+          if (!line) continue;
+          onEvent(JSON.parse(line.slice(6)));
+        }
+      }
     }
 
-    async function sendMessage(message = $('messageInput').value.trim()) {
-      if (!message || state.busy) return;
-      clearError();
-      appendMessage('customer', '顾客', message);
-      $('messageInput').value = '';
-      setBusy(true);
-      const requestPayload = { session_id: state.sessionId, message, context: state.context };
+    async function send(message) {
+      if (state.busy || (!String(message || "").trim() && !state.image)) return;
+      state.busy = true;
+      $("sendButton").disabled = true;
+      const previewUrl = state.image ? $("imagePreviewImg").src : "";
+      const text = String(message || "");
+      $("messageInput").value = "";
+      appendMessage("customer", "顾客", text.trim() ? text : "（图片）", { imageUrl: previewUrl });
+      const agent = appendMessage("agent", "智能客服", "正在生成并核验回复…");
+      const body = agent.querySelector(".message-body");
+      const payload = {
+        session_id: state.sessionId,
+        message: text,
+        demo_subject_id: state.demoSubjectId,
+        context: state.context,
+      };
+      if (state.image) payload.image = state.image;
+      clearImage();
       try {
-        const response = await fetch('/v1/test/customer-chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(requestPayload)
+        const response = await fetch("/v1/test/customer-chat/stream", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
         });
-        const payload = await response.json().catch(() => ({ detail: `HTTP ${response.status}` }));
-        $('outputJson').textContent = JSON.stringify(payload, null, 2);
-        if (!response.ok) throw new Error(payload.detail || `请求失败 (${response.status})`);
-        appendMessage('agent', '智能客服', payload.answer, payload);
+        if (!response.ok) {
+          const err = await response.json().catch(() => ({ detail: response.statusText }));
+          throw new Error(typeof err.detail === "string" ? err.detail : JSON.stringify(err.detail || err));
+        }
+        let streamed = "";
+        await readSse(response, (event) => {
+          if (event.event === "delta") {
+            streamed += event.text || "";
+            body.textContent = streamed || "正在生成并核验回复…";
+            $("messages").scrollTop = $("messages").scrollHeight;
+          }
+          if (event.event === "result" && event.response) {
+            const result = event.response;
+            $("outputJson").textContent = JSON.stringify(result, null, 2);
+            body.textContent = result.answer || streamed;
+            fillAgentDiagnostics(agent, result);
+            $("messages").scrollTop = $("messages").scrollHeight;
+          }
+          if (event.event === "error") {
+            throw new Error(event.message || "客服事件处理失败");
+          }
+        });
       } catch (error) {
-        const messageText = error instanceof Error ? error.message : '接口调用失败';
-        appendMessage('error', '接口错误', messageText);
-        showError(messageText);
+        agent.className = "message error";
+        agent.querySelector(".message-head strong").textContent = "错误";
+        body.textContent = error.message || String(error);
       } finally {
-        setBusy(false);
-        $('messageInput').focus();
+        state.busy = false;
+        $("sendButton").disabled = false;
+        refreshSessionList();
       }
     }
 
-    function selectCase(testCase, node) {
-      state.context = testCase.context || {};
-      state.selectedCase = testCase.id;
-      document.querySelectorAll('.case').forEach((item) => item.classList.remove('selected'));
-      node.classList.add('selected');
-      $('messageInput').value = testCase.message;
-      updateContext();
-      $('messageInput').focus();
+    $("chatForm").addEventListener("submit", (event) => {
+      event.preventDefault();
+      if (state.busy) return;
+      send($("messageInput").value);
+    });
+
+    $("messageInput").addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" || event.shiftKey) return;
+      if (event.isComposing || event.keyCode === 229) return;
+      if (state.busy) return;
+      event.preventDefault();
+      send($("messageInput").value);
+    });
+
+    async function attachImageFile(file, displayName) {
+      if (!file) {
+        clearImage();
+        return;
+      }
+      if (!state.imageTypes.includes(file.type)) {
+        clearImage();
+        appendMessage("error", "错误", "仅支持 PNG、JPEG 或 WebP 图片。");
+        return;
+      }
+      if (file.size > state.maxImageBytes) {
+        clearImage();
+        const limit = (state.maxImageBytes / 1024 / 1024).toFixed(0);
+        appendMessage("error", "错误", `图片不能超过 ${limit} MiB`);
+        return;
+      }
+      const buffer = await file.arrayBuffer();
+      const bytes = new Uint8Array(buffer);
+      let binary = "";
+      bytes.forEach((value) => { binary += String.fromCharCode(value); });
+      const name = displayName || file.name || "图片";
+      state.image = {
+        mime_type: file.type,
+        data_base64: btoa(binary),
+      };
+      $("imagePreviewImg").src = URL.createObjectURL(file);
+      $("imagePreview").classList.remove("hidden");
+      $("imagePreviewInfo").textContent = `${name} · ${(file.size / 1024).toFixed(1)} KiB`;
     }
 
-    async function loadCases() {
+    $("attachButton").addEventListener("click", () => $("imageInput").click());
+    $("removeImage").addEventListener("click", () => {
+      clearImage();
+      $("messageInput").focus();
+    });
+    $("imageInput").addEventListener("change", async (event) => {
+      const file = event.target.files && event.target.files[0];
+      if (!file) {
+        clearImage();
+        return;
+      }
+      await attachImageFile(file);
+    });
+    document.addEventListener("paste", async (event) => {
+      const items = event.clipboardData && event.clipboardData.items;
+      if (!items) return;
+      for (const item of items) {
+        if (item.type !== "image/png" && item.type !== "image/jpeg" && item.type !== "image/webp") {
+          continue;
+        }
+        const file = item.getAsFile();
+        if (!file) continue;
+        event.preventDefault();
+        await attachImageFile(file, "粘贴的图片");
+        return;
+      }
+    });
+    $("newSession").addEventListener("click", () => {
+      setSession(newSessionId());
+      refreshSessionList();
+    });
+    $("demoSubject").addEventListener("change", (event) => {
+      applyDemoSubject(event.target.value, true);
+    });
+    $("releaseBell").addEventListener("click", (event) => {
+      event.stopPropagation();
+      setReleasePanel($("releasePanel").hidden);
+    });
+    $("releaseClose").addEventListener("click", () => setReleasePanel(false, true));
+    $("releasePanel").addEventListener("click", (event) => event.stopPropagation());
+    document.addEventListener("click", () => {
+      if (!$("releasePanel").hidden) setReleasePanel(false);
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !$("releasePanel").hidden) {
+        setReleasePanel(false, true);
+      }
+    });
+    document.querySelectorAll(".hint").forEach((button) => {
+      button.addEventListener("click", () => {
+        if (button.dataset.subject) applyDemoSubject(button.dataset.subject, true);
+        $("messageInput").value = button.dataset.q;
+        $("messageInput").focus();
+      });
+    });
+
+    fetch("/v1/test/customer-chat/profile").then((res) => res.json()).then((data) => {
+      const label = data.model_mode === "live"
+        ? `真实模型 · ${data.model_name}`
+        : data.model_mode === "mock"
+          ? `mock 模式 · ${data.model_name}`
+          : `模型未启用 · ${data.model_name}`;
+      const extras = [];
+      if (data.vision_enabled) extras.push(`识图 ${data.vision_model}`);
+      if (data.polish_enabled) extras.push(`润色 ${data.polish_model}`);
+      $("modelStatus").textContent = [label, ...extras].join(" · " );
+      state.demoSubjects = Array.isArray(data.demo_subjects) ? data.demo_subjects : [];
+      const subjectSelect = $("demoSubject");
+      subjectSelect.innerHTML = state.demoSubjects.map((subject) => (
+        `<option value="${escapeHtml(subject.id)}">${escapeHtml(subject.label)}</option>`
+      )).join("");
+      subjectSelect.disabled = !state.demoSubjects.length;
+      applyDemoSubject(data.default_demo_subject_id || "", false);
+      $("sendButton").disabled = !state.demoSubjectId;
+      document.querySelectorAll(".hint[data-subject]").forEach((button) => {
+        button.disabled = false;
+      });
+    }).catch(() => {
+      $("modelStatus").textContent = "示例服务未就绪";
+    });
+
+    fetch("/v1/test/customer-chat/capabilities").then((res) => res.json()).then((data) => {
+      state.imageTypes = Array.isArray(data.image_mime_types)
+        ? data.image_mime_types
+        : [];
+      state.maxImageBytes = Number(data.max_image_bytes) || 0;
+      $("attachButton").disabled = !state.imageTypes.length || !state.maxImageBytes;
+    }).catch(() => {
+      $("attachButton").disabled = true;
+    });
+
+    function renderHistoryMessage(item) {
+      const media = Array.isArray(item.media) ? item.media : [];
+      const urls = media.map((entry) => entry && entry.url).filter(Boolean);
+      if (item.role === "user") {
+        const extra = urls.length > 1 ? `（共 ${urls.length} 张图）` : "";
+        appendMessage("customer", "顾客", `${item.content || ""}${extra}`, {
+          imageUrls: urls,
+          createdAt: item.created_at,
+        });
+        return;
+      }
+      if (item.role === "assistant") {
+        appendMessage("agent", "智能客服", item.content || "", {
+          createdAt: item.created_at,
+          meta: {
+            intent: item.intent,
+            risk_level: item.risk_level,
+            reason: item.route_reason,
+            model_fallback: item.model_fallback,
+            sources: parseSourcesJson(item.sources_json),
+          },
+        });
+      }
+    }
+
+    async function loadSessionMessages(sessionId) {
       try {
-        const response = await fetch('/v1/test/customer-chat/cases');
-        const cases = await response.json();
-        if (!response.ok) throw new Error(cases.detail || `加载失败 (${response.status})`);
-        $('caseList').innerHTML = '';
-        cases.forEach((testCase) => {
-          const node = document.createElement('button');
-          node.className = 'case';
-          node.type = 'button';
-          node.innerHTML = `<strong>${escapeHtml(testCase.title)}</strong><span>${escapeHtml(testCase.message)}</span><span>预期：${escapeHtml(testCase.expected)}</span>`;
-          node.addEventListener('click', () => selectCase(testCase, node));
-          $('caseList').append(node);
+        const response = await fetch(
+          `/v1/test/customer-chat/sessions/${encodeURIComponent(sessionId)}/messages`
+        );
+        if (response.status === 404) {
+          setSession(newSessionId());
+          return false;
+        }
+        if (!response.ok) {
+          const message = response.status === 401 || response.status === 403
+            ? "登录状态已失效，请刷新页面并重新认证。"
+            : `历史会话加载失败（HTTP ${response.status}）。`;
+          throw new Error(message);
+        }
+        const page = await response.json();
+        const items = Array.isArray(page.items) ? page.items : [];
+        setSession(sessionId);
+        if (!items.length) return true;
+        for (const item of items) {
+          renderHistoryMessage(item);
+        }
+        return true;
+      } catch (error) {
+        const message = error instanceof SyntaxError
+          ? "历史会话返回格式异常，当前会话未切换。"
+          : (error.message || "历史会话加载失败，当前会话未切换。");
+        appendMessage("error", "历史会话加载失败", message);
+        return false;
+      }
+    }
+
+    async function refreshSessionList() {
+      const root = $("sessionList");
+      try {
+        const response = await fetch("/v1/test/customer-chat/sessions");
+        if (!response.ok) {
+          const message = response.status === 401 || response.status === 403
+            ? "登录状态已失效，请刷新页面并重新认证。"
+            : `历史会话列表加载失败（HTTP ${response.status}）。`;
+          throw new Error(message);
+        }
+        const data = await response.json();
+        const items = Array.isArray(data.items) ? data.items : [];
+        if (!items.length) {
+          root.innerHTML = '<p class="history-empty">暂无历史会话</p>';
+          return;
+        }
+        root.innerHTML = items.map((item) => {
+          const active = item.session_id === state.sessionId ? " active" : "";
+          return (
+            `<button class="hint${active}" type="button" data-session="${escapeHtml(item.session_id)}">` +
+            `${escapeHtml(sessionTail(item.session_id))}` +
+            `<span class="when">${escapeHtml(formatLocalTime(item.last_seen_at))}</span>` +
+            `</button>`
+          );
+        }).join("");
+        root.querySelectorAll("[data-session]").forEach((button) => {
+          button.addEventListener("click", () => {
+            const id = button.getAttribute("data-session") || "";
+            if (!id || state.busy || id === state.sessionId) return;
+            loadSessionMessages(id).then((loaded) => {
+              if (loaded) refreshSessionList();
+            });
+          });
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : '无法加载测试案例';
-        $('caseList').innerHTML = `<div class="notice">${escapeHtml(message)}</div>`;
-        showError(message);
+        const message = error instanceof SyntaxError
+          ? "历史会话列表返回格式异常。"
+          : (error.message || "历史会话列表加载失败。");
+        root.innerHTML = `<p class="history-empty" role="alert">${escapeHtml(message)}</p>`;
       }
     }
 
-    $('chatForm').addEventListener('submit', (event) => {
-      event.preventDefault();
-      sendMessage();
-    });
-    $('newSession').addEventListener('click', () => {
-      state.sessionId = createSessionId();
-      state.context = {};
-      state.selectedCase = null;
-      $('messages').innerHTML = '<div class="empty" id="emptyState">已创建新会话。选择案例，或直接输入顾客问题。</div>';
-      $('outputJson').textContent = '尚未调用接口。';
-      $('messageInput').value = '';
-      document.querySelectorAll('.case').forEach((item) => item.classList.remove('selected'));
-      clearError();
-      updateSession();
-      updateContext();
-      $('messageInput').focus();
-    });
-    $('clearContext').addEventListener('click', () => {
-      state.context = {};
-      state.selectedCase = null;
-      document.querySelectorAll('.case').forEach((item) => item.classList.remove('selected'));
-      updateContext();
-      $('messageInput').focus();
-    });
-
-    state.sessionId = createSessionId();
-    updateSession();
-    updateContext();
-    loadCases();
+    const savedSessionId = readStoredSessionId();
+    if (savedSessionId) {
+      setSession(savedSessionId);
+      loadSessionMessages(savedSessionId).then(() => refreshSessionList());
+    } else {
+      setSession(newSessionId());
+      refreshSessionList();
+    }
   </script>
 </body>
 </html>

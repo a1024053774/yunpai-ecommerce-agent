@@ -65,6 +65,20 @@ class Settings:
     model_decision_timeout_seconds: float = 15.0
     model_decision_max_output_tokens: int = 300
     model_decision_thinking_enabled: bool = False
+    polish_enabled: bool = False
+    polish_base_url: str = ""
+    polish_model_name: str = "qwen3-14b-rag-polish"
+    polish_api_key: str = ""
+    polish_timeout_seconds: float = 15.0
+    polish_max_output_tokens: int = 320
+    polish_temperature: float = 0.0
+    vision_enabled: bool = False
+    vision_base_url: str = ""
+    vision_model_name: str = "Qwen/Qwen2.5-VL-7B-Instruct"
+    vision_api_key: str = ""
+    vision_timeout_seconds: float = 45.0
+    vision_max_output_tokens: int = 512
+    vision_temperature: float = 0.0
     intent_classify_timeout_seconds: float = 2.0
     # 四套场景 Prompt 是否注入生产回答链路（M3 交付物⑥接入；默认开启）
     rag_scene_prompts: bool = True
@@ -182,6 +196,32 @@ class Settings:
             model_decision_thinking_enabled=_as_bool(
                 os.getenv("MODEL_DECISION_THINKING_ENABLED"), default=False
             ),
+            polish_enabled=_as_bool(os.getenv("POLISH_ENABLED"), default=False),
+            polish_base_url=os.getenv("POLISH_BASE_URL", "").strip().rstrip("/"),
+            polish_model_name=os.getenv(
+                "POLISH_MODEL_NAME", "qwen3-14b-rag-polish"
+            ).strip(),
+            polish_api_key=os.getenv("POLISH_API_KEY", "").strip(),
+            polish_timeout_seconds=max(
+                0.001, float(os.getenv("POLISH_TIMEOUT_SECONDS", "15.0"))
+            ),
+            polish_max_output_tokens=max(
+                1, int(os.getenv("POLISH_MAX_OUTPUT_TOKENS", "320"))
+            ),
+            polish_temperature=float(os.getenv("POLISH_TEMPERATURE", "0.0")),
+            vision_enabled=_as_bool(os.getenv("VISION_ENABLED"), default=False),
+            vision_base_url=os.getenv("VISION_BASE_URL", "").strip().rstrip("/"),
+            vision_model_name=os.getenv(
+                "VISION_MODEL_NAME", "Qwen/Qwen2.5-VL-7B-Instruct"
+            ).strip(),
+            vision_api_key=os.getenv("VISION_API_KEY", "").strip(),
+            vision_timeout_seconds=max(
+                0.001, float(os.getenv("VISION_TIMEOUT_SECONDS", "45.0"))
+            ),
+            vision_max_output_tokens=max(
+                1, int(os.getenv("VISION_MAX_OUTPUT_TOKENS", "512"))
+            ),
+            vision_temperature=float(os.getenv("VISION_TEMPERATURE", "0.0")),
             intent_classify_timeout_seconds=max(
                 0.001, float(os.getenv("INTENT_CLASSIFY_TIMEOUT_SECONDS", "2.0"))
             ),

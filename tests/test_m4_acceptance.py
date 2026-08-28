@@ -192,9 +192,13 @@ def test_model_outage_stream_stays_actionable(tmp_path) -> None:
             json={"session_id": "acc-model-off", "message": "尺码怎么选", "context": {}},
         )
         events = sse_events(response)
-        assert events[-2]["code"] == "model_unavailable"
-        assert events[-2]["retry_advised"] is True
+        assert all(event["event"] != "error" for event in events)
+        streamed = "".join(
+            event["text"] for event in events if event["event"] == "delta"
+        )
+        assert "稍等一下再发送一次" in streamed
         assert events[-1]["event"] == "done"
+        assert events[-1]["model_fallback"] is True
 
 
 # ---------------------------------------------------------------------------

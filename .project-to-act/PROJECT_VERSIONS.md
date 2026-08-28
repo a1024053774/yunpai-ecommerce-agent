@@ -9,6 +9,12 @@
 - 发布状态：`main` 已包含 0.30.0 之后的客服、M5-R、M6-R、F-322、知识库和 M7-R WP1～WP4 增量，但这些
   提交没有同步提升运行时包版本，因此不得把历史内部候选标签 `0.31.0`～`0.33.0` 写成
   当前运行时版本。生产放行继续阻塞。
+- 公网产品测试部署：服务器唯一电商实例现运行 `main@b77dfeb` 加当前未提交多模态/客服 UI
+  适配树，源码哈希 `f04655bc44c9bc5702215ebd73cb12731a461ff7ae58f8150fe0f26d28b376f8`，
+  schema v39、包版本仍为 `0.30.0`。该实例通过首次访问链接签发 7 天
+  Secure/HttpOnly/SameSite=Lax Cookie，只放行 virtual `/admin`、`/customer-test` 与对应
+  电商 API；不再使用用户名/密码，也不是新的语义版本、正式生产发布或 `G-PROD-001`
+  通过；本轮没有 commit/push。
 - 兼容性说明（0.30.0 运行时 + main 未升包增量）：schema v28 additive 新增 Traffic Lab 六类核心表、一张 metric 隔离表、索引、复合租户外键和 revision 不可变触发器；v27 可前向迁移。WP2 不改 schema 或依赖；虚拟 Connector capability 1.2 additive 增加 `listing_revision` / `traffic_metrics`，通用 sync 响应 additive 增加幂等、隔离计数和回执。WP3 沿用 v28、无新依赖/HTTP API，additive 导出 `TrafficFeatureEngine` 与版本化特征契约；`image-v1` 保留读侧与旧算法，`image-v2` 为当前版本，同一 asset 可显式选择版本重算且不更新资产。WP4 沿用 v28；Python 包不再公开任意统计载荷 `TrafficAnalysisRunCreate`，调用方改用只接收实验 ID 的 `TrafficAnalysisEngine`；当前新分析显式要求 `traffic-analysis-v2`，历史 v1 run 保持可读；黑盒 runner 报告 additive 增加 `ground_truth_boundary`，保留原 `analysis_imported_ground_truth` 字段但改由运行轨迹审计派生。WP5 沿用 v28、无新依赖或迁移，additive 增加管理员限定的 `/v1/traffic-lab/*` 工作流、`traffic_lab` available 模块与模型可见的只读 `get_listing_traffic_insights`；既有 API 响应契约、LangGraph 拓扑和语义路由不变，控制台只在管理员显式点击后运行分析，未加入自动发布、改标题/换图或投放动作。M6-R WP1–WP2 以 schema v29 固化 demand fact 与 forecast engine；WP3 以 schema v30 additive 增加 planning policy/plan、quantity/quality/risk evidence 和不可变边界，v29 可前向迁移且不重建既有表；WP4 沿用 v30，无依赖或迁移变化，additive 增加 `/v1/forecasting/*`、两个只读工具、D20 与显式运行后台，既有 API/路由/拓扑不变；WP5 仍沿用 v30，新增纯 Python Eval fixture/runner/report 与 D-039 oracle 边界，不改变依赖、持久 schema、API 或生产路由。F-322 未单独升版，使用 schema **v32**；**v31 已被 origin PR #11 占用**，合并时须保留两段迁移。v32 新增版本化 `(tenant,store)` IANA 业务日历和 nullable experiment 固化证据，并将 Traffic accepted/quarantine 重建为 `(tenant,connector,source_id)`；v30（或合并后的实际前序版本）可前向迁移，accepted 从不可变 revision 回填 connector，quarantine 仅从冻结 payload 读取，缺失写 `legacy_unscoped`。历史实验可读但缺日历证据时分析 blocked。灾备 manifest 继续精确匹配当前 schema：升级前以旧程序完成停机备份，升级后恢复写入前以 v32 程序生成并验证新全量备份；旧归档与匹配程序保留到隔离恢复演练通过。
 - M7-R 兼容性：WP1 以 schema v34 增加只读导入 manifest/隔离/字段证据；WP2 沿用 v34；WP3 以 schema v35 additive 增加商品身份与对账表；WP4 沿用 v35，additive 增加管理员 `/v1/readonly-data/*`、只读工作台、统一准备度投影和显式隔离 Demo，并统一带店铺 GET 的空白 ID 拒绝契约。WP1～WP4 已通过 E-20260820-001 的 WP5 代码级本机 Gate 并合入 `main`，未单独提升应用版，也未增加第三方依赖、Agent/LangGraph 语义、模型调用或平台写动作。
 - M9-R PR #19 本地候选以 schema v39 修复 item 写入隔离：库存表安全重建为 item 专属/未知
@@ -23,7 +29,27 @@
   `net_sales` 不再以 gross 冒充正式净销。应用仍未单独升包，最终 PR Head 必须是
   `2e7fa58` 的后代；这不得视为已发布 schema 或正式独立验收通过，见 E-20260825-001。
 - 占号状态：PR #10 已合入 main `1906365`，schema **v33** 在 `main`（knowledge_key 唯一索引 + retrieval_logs）。F-322 **v32** 已在 main。PR #11 的 `_apply_v31`（workspace 会话表）仍未进入 `main`。M7-R WP1 的 **v34** 与 WP3 的 **v35** 均已在 `main`；M9-R WP3 的 **v36** 仅完成占号，运行迁移未合并。schema 迁移占号以 `CONTRIBUTING.md` 第 9 节“Schema 版本号占用登记”为唯一权威来源，本文不复制“下一空闲号”。
-- 最后更新：2026-08-25
+- 最后更新：2026-08-28
+
+## 公网产品测试部署候选（未单独升应用版）
+
+- 运行核心：只使用最新电商 `main` 的 M7/M9/schema v39 路径；独立客服仓库只提供新版 UI
+  和适用修复来源，不形成第二套业务事实、Agent 路由或数据库。旧 8768/schema v28 实例已
+  停止、禁用并删除，数据和源码环境保留加密/受控归档。
+- additive 契约：新增可选 Vision/Polish 配置、受控聊天媒体、显式 virtual 演示对象和
+  `verified_final` SSE 语义；`delta` 名称为兼容保留，但每轮只发送一条已核验、已持久化
+  完整回复。正式 `/v1/chat*`、产品测试入口和 LangGraph 复用共享 generation/SSE 事实源。
+- 模型与配置：真实运行使用 DeepSeek `deepseek-v4-flash`、Qwen
+  `qwen3-14b-rag-polish`、Qwen-VL `Qwen/Qwen2.5-VL-7B-Instruct`；密钥仅在服务器
+  0600 `.env`，未进入仓库或台账。应用监听 `127.0.0.1:8767`，公网只经 Nginx 8800 TLS；
+  随机访问链接只保存在服务器 0600 文件并关闭该路径访问日志，Cookie 门覆盖 Admin、客服
+  页面和电商 API，后端管理员免登录只接受回环请求。
+- 灾备：切换前后均以当前 schema v39 程序创建并验证停机加密双库备份；媒体目录仍不包含在
+  双库归档内，依靠 pending marker/引用计数/留存重试管理，故本候选不宣称完整媒体异机灾备。
+- 验收：本机全量 `1384 passed, 1 skipped`、独立 design-integrity review PASS；公网商品、
+  库存、订单和图片真实调用均为 HTTP 200；访问链接/Cookie、Admin 无二次登录、商品库存/
+  订单页面、客服模型就绪、AgentLoop 与端口隔离复验通过，详情见 E-20260828-001、
+  E-20260828-002 / G-PRODUCT-DEMO-001。
 
 ## M7-R WP5 独立验收与整链合入（未单独升应用版）
 

@@ -4,12 +4,20 @@ import json
 
 import pytest
 
+import ecommerce_agent.graph as graph_module
+from ecommerce_agent.customer_service import generation as generation_module
 from ecommerce_agent.config import Settings
 from ecommerce_agent.prompts import build_decision_messages, build_messages
 from ecommerce_agent.service import AgentService
 from ecommerce_agent.tokens import count_messages, count_tokens, truncate_history
 
 from conftest import make_settings, principal_for
+
+
+def test_graph_reuses_shared_generation_budget_and_media_helpers() -> None:
+    assert graph_module.context_budgets is generation_module.context_budgets
+    assert graph_module.budgeted_history is generation_module.budgeted_history
+    assert graph_module.has_media_observation is generation_module.has_media_observation
 
 
 def test_count_tokens_uses_deterministic_estimate() -> None:
