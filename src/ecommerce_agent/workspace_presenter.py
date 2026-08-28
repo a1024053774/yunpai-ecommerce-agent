@@ -125,6 +125,7 @@ STATUS_LABELS: dict[str, str] = {
     "no_detectable_effect": "未检测到明确差异",
     "positive": "正向",
     "negative": "负向",
+    "none": "无明显方向",
     "neutral": "无明显方向",
     "flat": "无明显变化",
 }
@@ -541,9 +542,24 @@ def critical_fact_claims(
             experiment_id = experiment.get("experiment_id")
             effect, interval = _traffic_effect_fields(_dict(insight.get("analysis")))
             entity = f"实验 {experiment_id or '未提供编号'}"
-            add(entity, experiment_id, "变化值", effect.get("absolute"))
-            add(entity, experiment_id, "可信区间下限", interval.get("low"))
-            add(entity, experiment_id, "可信区间上限", interval.get("high"))
+            add(
+                entity,
+                experiment_id,
+                "变化值",
+                _traffic_stat_value(effect.get("absolute")),
+            )
+            add(
+                entity,
+                experiment_id,
+                "可信区间下限",
+                _traffic_stat_value(interval.get("low")),
+            )
+            add(
+                entity,
+                experiment_id,
+                "可信区间上限",
+                _traffic_stat_value(interval.get("high")),
+            )
     if tool_name == "get_demand_forecast":
         forecast = _dict(observation.get("forecast"))
         sku_id = forecast.get("sku_id")
@@ -1607,6 +1623,16 @@ def _traffic_effect_fields(
     )
 
 
+def _traffic_stat_value(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    number = Decimal(str(value))
+    if not number.is_finite():
+        raise ValueError("traffic statistic must be finite")
+    text = format(number.quantize(Decimal("0.000001")), "f")
+    return text.rstrip("0").rstrip(".") or "0"
+
+
 def _traffic_insight_facts(observation: dict[str, Any]) -> list[str]:
     sku_id = str(observation.get("sku_id") or "未提供编号")
     insights = _list(observation.get("insights"))
@@ -1620,7 +1646,7 @@ def _traffic_insight_facts(observation: dict[str, Any]) -> list[str]:
         analysis = _dict(insight.get("analysis"))
         evidence = _dict(analysis.get("evidence"))
         effect, interval = _traffic_effect_fields(analysis)
-        effect_text = effect.get("absolute")
+        effect_text = _traffic_stat_value(effect.get("absolute"))
         direction = _status(effect.get("direction") or "neutral")
         experiment_status = _status(experiment.get("status"))
         quality_status = _status(_dict(evidence.get("quality_gate")).get("status"))
@@ -1629,10 +1655,12 @@ def _traffic_insight_facts(observation: dict[str, Any]) -> list[str]:
             _dict(insight.get("freshness") or analysis.get("freshness")).get("status")
         )
         interval_text = ""
-        if interval.get("low") is not None and interval.get("high") is not None:
+        interval_low = _traffic_stat_value(interval.get("low"))
+        interval_high = _traffic_stat_value(interval.get("high"))
+        if interval_low is not None and interval_high is not None:
             interval_text = (
-                f"，可信区间下限为 {interval.get('low')}，"
-                f"上限为 {interval.get('high')}"
+                f"，可信区间下限为 {interval_low}，"
+                f"上限为 {interval_high}"
             )
         facts.append(
             f"实验 {experiment.get('experiment_id') or '未提供编号'} 状态为{experiment_status}，"

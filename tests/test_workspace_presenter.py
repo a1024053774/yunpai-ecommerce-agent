@@ -546,6 +546,45 @@ def test_traffic_status_reads_nested_quality_gate_and_domain_statuses_are_transl
     )
 
 
+def test_traffic_stats_use_stable_display_precision_and_translate_none_direction() -> None:
+    view = present_observation(
+        "get_listing_traffic_insights",
+        {
+            "sku_id": "YP-SKU-TRAFFIC-001",
+            "insights": [
+                {
+                    "experiment": {
+                        "experiment_id": "exp-precision",
+                        "status": "completed",
+                        "primary_metric": "ctr",
+                    },
+                    "analysis": {
+                        "effect_estimate": {
+                            "absolute": 0.0,
+                            "direction": "none",
+                        },
+                        "confidence_interval": {
+                            "low": -0.009551682940272121,
+                            "high": 0.009551682940272121,
+                        },
+                        "evidence": {
+                            "quality_gate": {"status": "passed"},
+                            "statistical_conclusion": "no_detectable_effect",
+                        },
+                    },
+                    "freshness": {"status": "current"},
+                }
+            ],
+        },
+    )
+
+    rendered = json.dumps(view, ensure_ascii=False)
+    assert "当前方向为 无明显方向" in rendered
+    assert "变化值为 0" in rendered
+    assert "可信区间下限为 -0.009552，上限为 0.009552" in rendered
+    assert "0.009551682940272121" not in rendered
+
+
 def test_order_status_claims_are_bound_to_the_order_and_field() -> None:
     view = present_observation(
         "get_order_facts",
