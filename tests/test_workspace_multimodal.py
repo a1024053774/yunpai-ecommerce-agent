@@ -227,7 +227,18 @@ def test_workspace_persists_non_authoritative_vision_observation_for_next_turn(
         and "图片可见白色空气炸锅包装" in item["content"]
         for item in second_history
     )
+    assert planner_payloads[-1]["image_observation"]["status"] == "applied"
+    assert planner_payloads[-1]["image_observation"]["evidence"]["description"] == (
+        "图片可见白色空气炸锅包装。"
+    )
     assert _TINY_PNG not in json.dumps(second_history, ensure_ascii=False)
+    second_events = [
+        json.loads(line.removeprefix("data: "))
+        for line in second.text.splitlines()
+        if line.startswith("data: ")
+    ]
+    assert all(event["event"] != "vision" for event in second_events)
+    assert second_events[-1]["response"]["image_attached"] is False
 
 
 def test_workspace_image_only_request_is_valid_but_empty_request_is_rejected(

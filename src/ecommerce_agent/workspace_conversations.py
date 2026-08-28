@@ -108,6 +108,42 @@ def build_workspace_history(
     return history[-limit:]
 
 
+def latest_workspace_vision_observation(
+    messages: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Restore the latest persisted, non-authoritative image observation."""
+
+    for item in reversed(messages):
+        processing = item.get("processing")
+        if not isinstance(processing, dict):
+            continue
+        evidence = processing.get("vision_evidence")
+        if not isinstance(evidence, dict):
+            continue
+        if evidence.get("semantic_authority") is not False:
+            continue
+        description = evidence.get("description")
+        if not isinstance(description, str) or not description.strip():
+            continue
+        return {
+            "status": "applied",
+            "applied": True,
+            "model": processing.get("vision_model"),
+            "latency_ms": processing.get("vision_latency_ms"),
+            "image_count": 1,
+            "history_reused": True,
+            "evidence": {
+                "status": "applied",
+                "source_kind": "customer_image",
+                "description": description.strip(),
+                "authority": "multimodal_model_observation",
+                "semantic_authority": False,
+                "business_execution_authority": False,
+            },
+        }
+    return None
+
+
 def workspace_vision_processing(event: dict[str, Any]) -> dict[str, Any]:
     """Build a redacted, non-authoritative image record for workspace history."""
 

@@ -30,6 +30,7 @@ from .workspace_agent import (
 from .workspace_conversations import (
     build_workspace_history,
     derive_workspace_title,
+    latest_workspace_vision_observation,
     redact_workspace_title,
     workspace_vision_processing,
 )
@@ -231,6 +232,7 @@ def build_workspace_router(
             conversation_id=conversation_id,
             limit=12,
         )
+        prior_image_observation = latest_workspace_vision_observation(persisted)
         history = [
             WorkspaceHistoryItem.model_validate(item)
             for item in build_workspace_history(
@@ -306,7 +308,11 @@ def build_workspace_router(
                 )
 
             try:
-                for raw_event in agent.stream(request, admin):
+                for raw_event in agent.stream(
+                    request,
+                    admin,
+                    prior_image_observation=prior_image_observation,
+                ):
                     event = _redact_workspace_event(raw_event)
                     event_name = event.get("event")
                     if event_name == "status":
