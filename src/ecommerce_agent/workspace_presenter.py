@@ -1643,6 +1643,9 @@ def _traffic_insight_facts(observation: dict[str, Any]) -> list[str]:
     for item in insights[:4]:
         insight = _dict(item)
         experiment = _dict(insight.get("experiment"))
+        experiment_ref = str(
+            experiment.get("experiment_id") or "未提供编号"
+        )
         analysis = _dict(insight.get("analysis"))
         evidence = _dict(analysis.get("evidence"))
         effect, interval = _traffic_effect_fields(analysis)
@@ -1663,9 +1666,10 @@ def _traffic_insight_facts(observation: dict[str, Any]) -> list[str]:
                 f"上限为 {interval_high}"
             )
         facts.append(
-            f"实验 {experiment.get('experiment_id') or '未提供编号'} 状态为{experiment_status}，"
+            f"实验 {experiment_ref} 状态为{experiment_status}，"
             f"质量门禁为{quality_status}，统计结论为{conclusion}，证据新鲜度为{freshness}；"
-            f"关注{experiment.get('primary_metric') or '流量指标'}，当前方向为 {direction}"
+            f"实验 {experiment_ref} 关注{experiment.get('primary_metric') or '流量指标'}，"
+            f"当前方向为 {direction}"
             f"，变化值为 {effect_text if effect_text is not None else '暂无'}{interval_text}。"
         )
     facts.append("以上只复述已固化的统计证据，不会重算统计，也不代表平台权重或因果机制。")

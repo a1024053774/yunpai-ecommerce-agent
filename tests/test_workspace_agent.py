@@ -653,6 +653,28 @@ def test_workspace_deterministic_answer_preserves_traffic_evidence() -> None:
                         }
                     },
                     "freshness": {"status": "current"},
+                },
+                {
+                    "experiment": {
+                        "experiment_id": "exp-traffic-002",
+                        "status": "completed",
+                        "primary_metric": "ctr",
+                    },
+                    "analysis": {
+                        "effect_estimate": {
+                            "absolute": "0",
+                            "direction": "none",
+                        },
+                        "confidence_interval": {
+                            "low": "-0.01",
+                            "high": "0.01",
+                        },
+                        "evidence": {
+                            "quality_gate": {"status": "passed"},
+                            "statistical_conclusion": "no_detectable_effect",
+                        }
+                    },
+                    "freshness": {"status": "current"},
                 }
             ],
             "freshness": {"status": "current"},
@@ -672,6 +694,8 @@ def test_workspace_deterministic_answer_preserves_traffic_evidence() -> None:
     assert "质量门禁为通过" in answer
     assert "统计结论为正向变化" in answer
     assert "可信区间下限为 0.005，上限为 0.025" in answer
+    assert "实验 exp-traffic-002" in answer
+    assert "可信区间下限为 -0.01，上限为 0.01" in answer
     assert answer_preserves_critical_values(answer, observations, require_all=True)
 
 
