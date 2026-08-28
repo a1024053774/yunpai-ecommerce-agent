@@ -17,11 +17,14 @@ class _TrafficConsoleStructure(HTMLParser):
         self.ids: set[str] = set()
         self.nav_views: set[str] = set()
         self.fields: set[str] = set()
+        self.input_values: dict[str, str] = {}
 
     def handle_starttag(self, tag: str, attrs) -> None:
         values = dict(attrs)
         if values.get("id"):
             self.ids.add(values["id"])
+        if tag == "input" and values.get("id"):
+            self.input_values[values["id"]] = values.get("value", "")
         if tag == "button" and values.get("data-view"):
             self.nav_views.add(values["data-view"])
         if values.get("data-traffic-field"):
@@ -63,6 +66,28 @@ def test_traffic_lab_console_has_structured_evidence_and_manual_analysis(tmp_pat
         "contamination",
         "counter_evidence",
     } <= structure.fields
+
+
+def test_traffic_lab_console_defaults_match_the_virtual_demo_contract(tmp_path) -> None:
+    fixture_path = (
+        Path(__file__).parents[1]
+        / "src"
+        / "ecommerce_agent"
+        / "fixtures"
+        / "virtual_store_v1.json"
+    )
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    scenario = next(item for item in fixture["demands"] if item["id"] == "D19")
+
+    app = create_app(make_settings(tmp_path))
+    with TestClient(app) as client:
+        page = client.get("/admin/advanced")
+
+    structure = _TrafficConsoleStructure()
+    structure.feed(page.text)
+    arguments = scenario["input"]["arguments"]
+    assert structure.input_values["trafficStore"] == arguments["store_id"]
+    assert structure.input_values["trafficSku"] == arguments["sku_id"]
 
 
 def test_wp5_mechanism_eval_is_numeric_structured_and_bidirectional(tmp_path) -> None:

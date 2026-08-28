@@ -764,7 +764,7 @@
         <section class="view" id="view-traffic-lab">
           <div class="section-head">
             <div><h2>商品流量实验</h2><p>读取已固化统计证据；仅管理员显式触发分析</p></div>
-            <div class="toolbar"><input class="input" id="trafficStore" value="virtual-shop-001" placeholder="店铺 ID"><input class="input" id="trafficSku" value="YP-SKU-TRAFFIC-001" placeholder="SKU"><input class="input" id="trafficExperiment" placeholder="实验 ID"><button class="button" id="loadTrafficInsights">查询证据</button></div>
+            <div class="toolbar"><input class="input" id="trafficStore" value="qingchuan-flagship-001" placeholder="店铺 ID"><input class="input" id="trafficSku" value="YP-SKU-TRAFFIC-001" placeholder="SKU"><input class="input" id="trafficExperiment" placeholder="实验 ID"><button class="button" id="loadTrafficInsights">查询证据</button></div>
           </div>
           <div class="notice">页面加载与查询不会运行分析；分析结果只在点击“显式运行分析”后生成，并保留污染标记与反证。</div>
           <div class="toolbar" style="margin:14px 0"><select class="input" id="trafficTransitionStatus"><option value="">请先选择实验</option></select><input class="input" id="trafficEndedAt" type="datetime-local" aria-label="实验结束时间" disabled><button class="button" id="transitionTrafficExperiment" disabled>推进实验状态</button><button class="button primary" id="analyzeTrafficExperiment" disabled>显式运行分析</button></div>
