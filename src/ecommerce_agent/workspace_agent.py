@@ -1498,17 +1498,18 @@ class WorkspaceAgent:
     ) -> str:
         sections: list[str] = []
         for observation in observations:
+            tool_name = str(observation.get("tool_name") or "")
             objective = str(
-                observation.get("objective")
+                (tool_label(tool_name) if tool_name else None)
                 or observation.get("tool_label")
                 or "业务信息"
             )
             status = str(observation.get("status") or "success")
             if status in {"failed", "skipped"}:
-                sections.append(f"{objective}：暂时无法判断，请稍后重试。")
+                sections.append(f"【{objective}】暂时无法判断，请稍后重试。")
                 continue
             if status == "no_data":
-                sections.append(f"{objective}：当前查询范围内暂无数据。")
+                sections.append(f"【{objective}】当前查询范围内暂无数据。")
                 continue
             result = observation.get("result")
             if not isinstance(result, dict):
@@ -1519,7 +1520,7 @@ class WorkspaceAgent:
                 if text:
                     facts.append(text)
             if facts:
-                sections.append(f"{objective}：{' '.join(facts)}")
+                sections.append(f"【{objective}】{' '.join(facts)}")
         if not sections:
             note = next(
                 (

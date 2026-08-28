@@ -215,7 +215,7 @@ def test_workspace_composite_partial_failure_does_not_turn_failure_into_zero(
     assert "10" in done["answer"]
     assert "4" in done["answer"]
     assert "收入为 0" not in done["answer"]
-    assert "核对最近收入" in done["answer"]
+    assert "【经营指标】" in done["answer"]
     assert "暂时无法判断" in done["answer"]
 
 
@@ -461,6 +461,37 @@ def test_workspace_deterministic_answer_preserves_every_verified_fact() -> None:
     assert "P50 为 3，P80 为 4，P95 为 5" in answer
     assert "库存计划质量为有效" in answer
     assert "库存计划证据新鲜度为已过期" in answer
+    assert answer_preserves_critical_values(answer, observations, require_all=True)
+
+
+def test_workspace_deterministic_answer_does_not_treat_model_objective_as_fact() -> None:
+    view = present_observation(
+        "list_recommendations",
+        {
+            "items": [
+                {
+                    "recommendation_id": "sim-rec-001",
+                    "recommendation_type": "保持观察",
+                    "state": "draft",
+                    "degraded": False,
+                }
+            ]
+        },
+    )
+    observations = [
+        {
+            "status": "success",
+            "objective": "查询当前状态、建议类型和证据状态摘要",
+            "tool_name": "list_recommendations",
+            "tool_label": "Business information",
+            "result": view,
+        }
+    ]
+
+    answer = WorkspaceAgent._deterministic_answer(observations, [])
+
+    assert "【商品经营建议】" in answer
+    assert "查询当前状态、建议类型和证据状态摘要" not in answer
     assert answer_preserves_critical_values(answer, observations, require_all=True)
 
 
@@ -1995,7 +2026,7 @@ def test_workspace_preserves_verified_facts_when_later_planning_is_invalid(
     assert any(event.get("stage") == "planning_fallback" for event in events)
     assert not any(event["event"] == "error" for event in events)
     done = events[-1]["response"]
-    assert "查看库存风险：当前查询范围内暂无数据" in done["answer"]
+    assert "【库存风险】当前查询范围内暂无数据" in done["answer"]
     assert done["degraded"] is True
     assert done["degraded_reasons"] == [
         "planning_output_invalid",
