@@ -4,17 +4,17 @@
 
 ## 当前版本
 
-- 当前公网统一 Demo（2026-08-29）：代码提交 845a0f52f728b931a5f8b739c421f6b24c9869a6 已推送到 origin/demo/main-multimodal-product-demo，并部署到服务器 /opt/yunpai-ecommerce-agent。/ 与 /app 均 302 到 /admin；/admin、/admin/advanced、/customer-test、持久统筹会话、直接粘贴及跨轮 Vision、商品/订单/库存/营销/利润/流量/预测/库存计划/生命周期建议和建议审计均由同一服务与 SQLite 数据库提供；schema v39、包版本 0.30.0 保持不变。执行前后源码/数据备份和发布后备份均已验证。公网只放行受鉴权 virtual 产品测试，不代表生产发布。
-- 下方此前公网产品测试部署条目保留为历史阶段证据；当前代码与服务器状态以本条和 E-20260829-001 为准。
+- 当前公网统一 Demo（2026-08-29）：代码提交 c3812313502493571f968c025969974893effd47 已推送到 origin/demo/main-multimodal-product-demo，并部署到服务器 /opt/yunpai-ecommerce-agent。/ 与 /app 均 302 到 /admin；/admin、/admin/advanced、/customer-test、持久统筹会话、直接粘贴及跨轮 Vision、商品/订单/库存/营销/利润/流量/预测/库存计划/生命周期建议和建议审计均由同一服务与 SQLite 数据库提供；schema v39、包版本 0.30.0 保持不变。执行前后源码/数据备份和发布后备份均已验证。追加修复后的历史会话条可在有限宽度内横向滚动到最右侧卡片。公网只放行受鉴权 virtual 产品测试，不代表生产发布。
+- 下方此前公网产品测试部署条目保留为历史阶段证据；当前代码与服务器状态以本条、E-20260829-001 和 E-20260829-002 为准。
 - 版本号：`0.30.0`。权威来源为 `pyproject.toml` 的 `[project].version` 与
   `src/ecommerce_agent/__init__.py::__version__`；两处必须一致。
 - 发布状态：`main` 已包含 0.30.0 之后的客服、M5-R、M6-R、F-322、知识库和 M7-R WP1～WP4 增量，但这些
   提交没有同步提升运行时包版本，因此不得把历史内部候选标签 `0.31.0`～`0.33.0` 写成
   当前运行时版本。生产放行继续阻塞。
 - 公网产品测试部署：服务器唯一电商实例当前运行
-  `origin/demo/main-multimodal-product-demo@845a0f52f728b931a5f8b739c421f6b24c9869a6`，
+  `origin/demo/main-multimodal-product-demo@c3812313502493571f968c025969974893effd47`，
   不可变发布目录为
-  `/opt/yunpai-ecommerce-agent-releases/845a0f52f728b931a5f8b739c421f6b24c9869a6`；原
+  `/opt/yunpai-ecommerce-agent-releases/c3812313502493571f968c025969974893effd47`；原
   `origin/codex/main-multimodal-product-demo` 已按用户要求删除，
   schema v39、包版本仍为 `0.30.0`。该实例通过首次访问链接签发 7 天
   Secure/HttpOnly/SameSite=Lax Cookie，只放行 virtual `/admin`、`/admin/advanced`、`/customer-test` 与对应
@@ -38,6 +38,7 @@
 
 ## 公网产品测试部署候选（未单独升应用版）
 
+- 2026-08-29 后续 UI 修复：部署对象为 GitHub `demo/main-multimodal-product-demo@c3812313`，不可变 release 为 `/opt/yunpai-ecommerce-agent-releases/c3812313502493571f968c025969974893effd47`。修复历史会话条被内容撑宽导致无法横向滚动的问题；红态 `clientWidth == scrollWidth`，绿态 `clientWidth=612`、`scrollWidth=3960`，实际 `scrollLeft=3348.5`，最右侧卡片可见。相关回归 `79 passed`，compileall 与 diff check 通过；公网 health/ready 仍为 200。证据 E-20260829-002；不改变 schema v39、包版本 0.30.0 或 virtual Demo 的生产边界。
 - 2026-08-29 统筹 Agent 完整能力发布：部署对象为 GitHub `demo/main-multimodal-product-demo@845a0f5`。公网 `/` 与 `/app` 均重定向到 `/admin`，不再进入 AgentLoop；统筹输入框支持直接 Ctrl/⌘+V 粘贴 PNG/JPEG/WebP，并可在后续轮次恢复已持久化、已脱敏、`semantic_authority=false` 的图片观察。统筹动态只读工具已覆盖商品、订单、库存、竞品、营销、利润、运营辅助、指标、流量实验、需求预测、库存计划、生命周期建议和建议审计；高级后台读取同一服务和数据库。流量实验绑定实验 ID 读取已固化 `effect_estimate` / `confidence_interval`。公网逐项实测、15 张截图、全量 `1511 passed, 1 skipped`、备份和部署链见 E-20260829-001；只放行受鉴权 virtual Demo。
 - 2026-08-28 统一统筹 Agent 发布：部署对象为 GitHub demo/main-multimodal-product-demo@51f5174；统筹前端、最新商品/预测/库存/生命周期后端和多模态客服共用一个 FastAPI 服务、SQLite 数据库与安全边界。/admin 为主入口，/admin/advanced 为高级后台，/customer-test 为受控图片客服；旧 workspace stream 仅作持久会话兼容入口。Nginx 受保护白名单已包含 /admin/advanced；发布前后备份、服务健康、公网 SSE、Vision/Polish、浏览器桌面/390px 和 console 检查均通过。证据 E-20260828-006；不豁免真实平台、写动作、完整媒体灾备、长稳或生产 Gate。
 - 运行核心：只使用最新电商 `main` 的 M7/M9/schema v39 路径；独立客服仓库只提供新版 UI

@@ -7,10 +7,12 @@
 ## 1. 当前交付版本
 
 - GitHub 分支：demo/main-multimodal-product-demo
-- 公网已部署代码：845a0f52f728b931a5f8b739c421f6b24c9869a6
+- 公网已部署代码：c3812313502493571f968c025969974893effd47
 - 服务器部署回执：/opt/yunpai-ecommerce-agent/.deploy-revision
-- 不可变发布目录：/opt/yunpai-ecommerce-agent-releases/845a0f52f728b931a5f8b739c421f6b24c9869a6
+- 不可变发布目录：/opt/yunpai-ecommerce-agent-releases/c3812313502493571f968c025969974893effd47
 - 当前应用、数据库 schema、模型和能力状态以 /health、/ready、能力 API 与 .deploy-revision 为权威来源；2026-08-29 验收时观测到包版本 0.30.0、schema 39。
+
+- 2026-08-29 后续修复：统筹 Agent 历史会话横向条已限制在聊天工作区宽度内，窄屏下可横向滚动到最右侧卡片；修复提交为 `c3812313502493571f968c025969974893effd47`。
 
 本次最终收口包括：
 
@@ -142,6 +144,9 @@ AgentLoop 的独立域名未改；不要再把 IP 实例的 /app 当成 AgentLoo
 - 图片：Ctrl/⌘+V 直接粘贴成功，Vision applied；不附图的后续轮次继续使用上一张图且未调用经营工具。
 - 客服：Qwen2.5-VL applied，Qwen3-14B polish applied。
 - 浏览器：/admin、/admin/advanced、/customer-test 的 console error/warning 均为 0。
+- 飞书文档：`统筹 Agent 多模态 Demo：公网入口、部署与使用说明` 已保存到云端；正文本轮追加 17 张图片（15 张选定验收图、1 张滚动修复图、1 张原始问题复现图），评论数为 0。既有历史图片块未删除。
+- 历史会话滚动修复：红态公网 `/admin` 的聊天容器被内容撑到约 4000px，滚动容器 `clientWidth == scrollWidth`；修复后会话条 `clientWidth=612`、`scrollWidth=3960`、`overflow-x=auto`，实际滚动到 `scrollLeft=3348.5`，最右侧卡片进入可视区。
+- 修复回归：`tests/test_workspace_conversations.py` 先红后绿；相关 workspace/presenter/multimodal 回归 `79 passed in 33.23s`，compileall 与 `git diff --check` 通过。该项是对 E-20260829-001 整合验收的追加修复，不重新声称已重跑全量测试。
 
 关键截图：
 
@@ -160,5 +165,6 @@ AgentLoop 的独立域名未改；不要再把 IP 实例的 /app 当成 AgentLoo
 - docs/evidence/20260829-845a0f5-advanced-finance.png
 - docs/evidence/20260829-845a0f5-advanced-traffic-lab.png
 - docs/evidence/20260829-845a0f5-customer-vision-polish.png
+- docs/evidence/20260829-c381231-admin-history-scroll-fixed.png
 
-对应验收台账：E-20260829-001 / G-UNIFIED-AGENT-DEMO-001。
+对应验收台账：E-20260829-001、E-20260829-002 / G-UNIFIED-AGENT-DEMO-001、G-UNIFIED-AGENT-DEMO-002。
