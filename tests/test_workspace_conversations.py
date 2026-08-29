@@ -635,3 +635,13 @@ def test_workspace_page_uses_server_conversation_history() -> None:
     assert "item.tool_label ?? processing.tool_label" in page
     assert "item.requires_confirmation ?? processing.requires_confirmation" in page
     assert "localStorage.setItem(conversationStorageKey()" not in page
+
+
+def test_workspace_history_strip_is_constrained_for_horizontal_scroll() -> None:
+    page = (Path(__file__).parents[1] / "docs" / "agent-workspace.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert "grid-template-columns: minmax(0, 1fr);" in page
+    assert ".chat-shell > .chat-head, .chat-shell > .message-list, .chat-shell > .composer { min-width: 0; }" in page
+    assert ".conversation-list { max-width: 100%; }" in page

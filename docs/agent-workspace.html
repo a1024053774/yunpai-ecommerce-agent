@@ -371,7 +371,9 @@
       backdrop-filter: none;
       box-shadow: var(--shadow);
     }
-    .chat-shell { border-radius: var(--radius); }
+    .chat-shell { border-radius: var(--radius); grid-template-columns: minmax(0, 1fr); }
+    .chat-shell > .chat-head, .chat-shell > .message-list, .chat-shell > .composer { min-width: 0; }
+    .conversation-list { max-width: 100%; }
     .chat-head {
       padding: 18px 20px 15px;
       border-bottom: 1px solid var(--line);
