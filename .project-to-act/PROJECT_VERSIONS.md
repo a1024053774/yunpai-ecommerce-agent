@@ -4,8 +4,8 @@
 
 ## 当前版本
 
-- 当前公网统一 Demo（2026-08-29）：代码提交 c3812313502493571f968c025969974893effd47 已推送到 origin/demo/main-multimodal-product-demo，并部署到服务器 /opt/yunpai-ecommerce-agent。/ 与 /app 均 302 到 /admin；/admin、/admin/advanced、/customer-test、持久统筹会话、直接粘贴及跨轮 Vision、商品/订单/库存/营销/利润/流量/预测/库存计划/生命周期建议和建议审计均由同一服务与 SQLite 数据库提供；schema v39、包版本 0.30.0 保持不变。执行前后源码/数据备份和发布后备份均已验证。追加修复后的历史会话条可在有限宽度内横向滚动到最右侧卡片。公网只放行受鉴权 virtual 产品测试，不代表生产发布。
-- 下方此前公网产品测试部署条目保留为历史阶段证据；当前代码与服务器状态以本条、E-20260829-001 和 E-20260829-002 为准。
+- 当前公网统一 Demo（2026-08-30）：代码提交 c3812313502493571f968c025969974893effd47 已推送到 origin/demo/main-multimodal-product-demo，并部署到服务器 /opt/yunpai-ecommerce-agent。/ 与 /app 均 302 到 /admin；/admin、/admin/advanced、/customer-test、持久统筹会话、直接粘贴及跨轮 Vision、商品/订单/库存/营销/利润/流量/预测/库存计划/生命周期建议和建议审计均由同一服务与 SQLite 数据库提供；schema v39、包版本 0.30.0 保持不变。执行前后源码/数据备份和发布后备份均已验证。追加修复后的历史会话条可在有限宽度内横向滚动到最右侧卡片。公网产品页面与 /v1/* API 当前共用 TLS + Nginx Basic Auth，旧 7 天 Cookie 入口已停用。公网只放行受鉴权 virtual 产品测试，不代表生产发布。
+- 2026-08-30 认证运维变更：不改变应用代码、schema 或包版本；Nginx 产品 locations 改用统一 Basic Auth，旧 Cookie map/access endpoint 停用。匿名产品请求为 401，认证后页面/API/health/ready 为 200，旧入口为 404；应用继续回环监听 127.0.0.1:8767。证据 E-20260830-001。
 - 版本号：`0.30.0`。权威来源为 `pyproject.toml` 的 `[project].version` 与
   `src/ecommerce_agent/__init__.py::__version__`；两处必须一致。
 - 发布状态：`main` 已包含 0.30.0 之后的客服、M5-R、M6-R、F-322、知识库和 M7-R WP1～WP4 增量，但这些
@@ -16,10 +16,10 @@
   不可变发布目录为
   `/opt/yunpai-ecommerce-agent-releases/c3812313502493571f968c025969974893effd47`；原
   `origin/codex/main-multimodal-product-demo` 已按用户要求删除，
-  schema v39、包版本仍为 `0.30.0`。该实例通过首次访问链接签发 7 天
-  Secure/HttpOnly/SameSite=Lax Cookie，只放行 virtual `/admin`、`/admin/advanced`、`/customer-test` 与对应
-  电商 API；不再使用用户名/密码，也不是新的语义版本、正式生产发布或 `G-PROD-001`
-  通过；GitHub `main` 未修改，也未创建或合并 PR。
+  schema v39、包版本仍为 `0.30.0`。该实例通过 Nginx TLS + Basic Auth 只放行 virtual
+  `/admin`、`/admin/advanced`、`/customer-test` 与对应电商 API；用户名文件和共享密码只保存在服务器
+  受限路径，密码不写入项目记录。旧 7 天 Cookie/access endpoint 已停用，不是新的语义版本、正式生产发布或
+  `G-PROD-001` 通过；GitHub `main` 未修改，也未创建或合并 PR。
 - 兼容性说明（0.30.0 运行时 + main 未升包增量）：schema v28 additive 新增 Traffic Lab 六类核心表、一张 metric 隔离表、索引、复合租户外键和 revision 不可变触发器；v27 可前向迁移。WP2 不改 schema 或依赖；虚拟 Connector capability 1.2 additive 增加 `listing_revision` / `traffic_metrics`，通用 sync 响应 additive 增加幂等、隔离计数和回执。WP3 沿用 v28、无新依赖/HTTP API，additive 导出 `TrafficFeatureEngine` 与版本化特征契约；`image-v1` 保留读侧与旧算法，`image-v2` 为当前版本，同一 asset 可显式选择版本重算且不更新资产。WP4 沿用 v28；Python 包不再公开任意统计载荷 `TrafficAnalysisRunCreate`，调用方改用只接收实验 ID 的 `TrafficAnalysisEngine`；当前新分析显式要求 `traffic-analysis-v2`，历史 v1 run 保持可读；黑盒 runner 报告 additive 增加 `ground_truth_boundary`，保留原 `analysis_imported_ground_truth` 字段但改由运行轨迹审计派生。WP5 沿用 v28、无新依赖或迁移，additive 增加管理员限定的 `/v1/traffic-lab/*` 工作流、`traffic_lab` available 模块与模型可见的只读 `get_listing_traffic_insights`；既有 API 响应契约、LangGraph 拓扑和语义路由不变，控制台只在管理员显式点击后运行分析，未加入自动发布、改标题/换图或投放动作。M6-R WP1–WP2 以 schema v29 固化 demand fact 与 forecast engine；WP3 以 schema v30 additive 增加 planning policy/plan、quantity/quality/risk evidence 和不可变边界，v29 可前向迁移且不重建既有表；WP4 沿用 v30，无依赖或迁移变化，additive 增加 `/v1/forecasting/*`、两个只读工具、D20 与显式运行后台，既有 API/路由/拓扑不变；WP5 仍沿用 v30，新增纯 Python Eval fixture/runner/report 与 D-039 oracle 边界，不改变依赖、持久 schema、API 或生产路由。F-322 未单独升版，使用 schema **v32**；**v31 已被 origin PR #11 占用**，合并时须保留两段迁移。v32 新增版本化 `(tenant,store)` IANA 业务日历和 nullable experiment 固化证据，并将 Traffic accepted/quarantine 重建为 `(tenant,connector,source_id)`；v30（或合并后的实际前序版本）可前向迁移，accepted 从不可变 revision 回填 connector，quarantine 仅从冻结 payload 读取，缺失写 `legacy_unscoped`。历史实验可读但缺日历证据时分析 blocked。灾备 manifest 继续精确匹配当前 schema：升级前以旧程序完成停机备份，升级后恢复写入前以 v32 程序生成并验证新全量备份；旧归档与匹配程序保留到隔离恢复演练通过。
 - M7-R 兼容性：WP1 以 schema v34 增加只读导入 manifest/隔离/字段证据；WP2 沿用 v34；WP3 以 schema v35 additive 增加商品身份与对账表；WP4 沿用 v35，additive 增加管理员 `/v1/readonly-data/*`、只读工作台、统一准备度投影和显式隔离 Demo，并统一带店铺 GET 的空白 ID 拒绝契约。WP1～WP4 已通过 E-20260820-001 的 WP5 代码级本机 Gate 并合入 `main`，未单独提升应用版，也未增加第三方依赖、Agent/LangGraph 语义、模型调用或平台写动作。
 - M9-R PR #19 本地候选以 schema v39 修复 item 写入隔离：库存表安全重建为 item 专属/未知

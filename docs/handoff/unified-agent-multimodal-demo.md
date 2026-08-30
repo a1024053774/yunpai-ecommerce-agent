@@ -1,8 +1,10 @@
 # 统筹 Agent 多模态 Demo：公网入口、部署与使用说明
 
-适用日期：2026-08-29。
+适用日期：2026-08-30。
 
-本说明对应受鉴权的 virtual 产品测试实例，不代表真实淘宝/天猫渠道、真实经营数据、平台写权限、长稳或正式生产 Gate 已放行。访问令牌、Cookie、管理员密钥和模型 API Key 不写入 GitHub、飞书正文、截图或工单。
+本说明对应受鉴权的 virtual 产品测试实例，不代表真实淘宝/天猫渠道、真实经营数据、平台写权限、长稳或正式生产 Gate 已放行。访问令牌、Cookie、管理员密钥、共享密码和模型 API Key 不写入 GitHub、飞书正文、截图或工单。
+
+当前公网产品 Demo 使用 TLS + Nginx HTTP Basic Auth。用户名为 `product-test`；共享密码只通过受控渠道交付，密码本身不写入仓库、文档、截图、日志或命令历史。
 
 ## 1. 当前交付版本
 
@@ -24,7 +26,7 @@
 - **客服润色**：`/customer-test` 已接入 Qwen2.5-VL 图片识别和 Qwen3-14B 文案润色，并展示调用、采用、模型和耗时状态；润色只改变表达，不改变已核实的业务数字。
 - **数据装载与实测**：装载 virtual 演示数据后，逐项验证了商品、库存、订单、营销、利润、预测、库存计划、生命周期、审计和流量实验调用；流量实验直接读取已固化的效果值、方向和置信区间，不在前端重算统计。
 - **体验修复**：历史会话条由内容撑宽的问题已修复，聊天区域现在限制在工作区宽度内并支持横向滚动；公网实测 `clientWidth=612`、`scrollWidth=3960`、`overflow-x=auto`，可滚动到最右侧会话卡片。
-- **验证与发布**：相关整合验收、workspace/presenter/multimodal 回归、`compileall`、`git diff --check` 和公网 `/health`、`/ready` 检查均已完成。部署链路为 GitHub 分支 → 不可变 release → 备份校验 → systemd → `127.0.0.1:8767` → Nginx TLS `:8800` → Cookie 门禁 → 客户浏览器；访问 Cookie 有效期为 7 天，访问链接和凭据不写入仓库或文档。
+- **验证与发布**：相关整合验收、workspace/presenter/multimodal 回归、`compileall`、`git diff --check` 和公网 `/health`、`/ready` 检查均已完成。部署链路为 GitHub 分支 → 不可变 release → 备份校验 → systemd → `127.0.0.1:8767` → Nginx TLS `:8800` → Basic Auth → 客户浏览器；页面和 `/v1/*` API 共用同一认证边界，不再依赖 7 天入口 Cookie。
 
 本次最终收口包括：
 
@@ -42,23 +44,22 @@
 - https://129.211.3.209:8800/admin/advanced：高级管理后台
 - https://129.211.3.209:8800/customer-test：图片识别与客服润色测试
 
-AgentLoop 的独立域名未改；不要再把 IP 实例的 /app 当成 AgentLoop 客户入口。无有效 Cookie 时，/admin、/admin/advanced 和 /customer-test 均返回 403。
+AgentLoop 的独立域名未改；不要再把 IP 实例的 `/app` 当成 AgentLoop 客户入口。未输入正确 Basic Auth 时，`/admin`、`/admin/advanced`、`/customer-test`、`/health`、`/ready` 和 `/v1/*` 均返回 401；认证后返回正常页面或 API 响应。
 
-## 3. 安全取得访问链接 / Cookie
+## 3. 公网认证与密码交付
 
-访问链接只保存在服务器。仅在受控终端执行：
+打开任一产品入口后，浏览器会显示 HTTP Basic Auth 对话框。客户使用：
 
-    ssh yunpai
-    sudo stat -c '%a %U %G %n' /etc/yunpai-product-demo/access-url
-    sudo cat /etc/yunpai-product-demo/access-url
+- 用户名：`product-test`
+- 密码：由维护者通过企业密码管理器、受控私聊或现场交接单独提供；不从本文档复制。
 
 要求：
 
-- 文件保持 0600 root:root。
-- 链接只通过企业密码管理器、受控私聊或现场交接发送。
-- 第一次打开短期链接后，Nginx 写入 7 天 Secure / HttpOnly / SameSite=Lax Cookie，并跳转 /admin。
-- 后续只使用干净的三个产品入口，不复制或查看 Cookie 内容。
-- 退出使用 /product-demo/logout；令牌轮换后重新打开维护者提供的新链接。
+- 入口统一使用 `https://129.211.3.209:8800/`；`/` 和 `/app` 会跳转到 `/admin`，不会进入 AgentLoop。
+- 页面与 `/v1/*` API 使用同一组 Basic Auth 凭据；通过一次浏览器认证后，可在当前浏览器会话访问统筹 Agent、高级管理和客服测试。
+- 不再存在可用的 7 天访问链接；`/product-demo/access/*` 和 `/product-demo/logout` 已停用并返回 404，旧 Cookie 不能绕过密码。
+- Basic Auth 凭据通常由浏览器缓存；需要重新输入或切换凭据时，使用隐私窗口或清除该站点的 HTTP Auth 凭据。
+- 密码轮换由服务器维护者完成：在受控终端交互更新 `/etc/yunpai-product-demo/product-test.htpasswd`，执行 `nginx -t` 后 reload Nginx；不得把新密码放在命令行、脚本、GitHub、飞书或日志中。
 
 ## 4. 使用说明
 
@@ -91,7 +92,7 @@ AgentLoop 的独立域名未改；不要再把 IP 实例的 /app 当成 AgentLoo
 
 ### 4.3 客服图片与润色
 
-进入 /customer-test，选择虚拟演示对象，可上传或直接粘贴图片。回复下方重点查看：
+进入 `/customer-test`，选择虚拟演示对象，可上传或直接粘贴图片。回复下方重点查看：
 
 - Qwen 视觉：已解析
 - Qwen 润色：已采用，或已调用、原文未变
@@ -121,7 +122,7 @@ AgentLoop 的独立域名未改；不要再把 IP 实例的 /app 当成 AgentLoo
       → 写入 .deploy-revision
       → systemd: yunpai-ecommerce-agent.service
       → FastAPI 仅监听 127.0.0.1:8767
-      → Nginx TLS :8800 + 访问链接/Cookie 门禁
+      → Nginx TLS :8800 + Basic Auth（产品页面与 /v1/* 共用）
       → 客户浏览器
 
 推理链路：
@@ -141,7 +142,7 @@ AgentLoop 的独立域名未改；不要再把 IP 实例的 /app 当成 AgentLoo
 5. rsync --delete release 到应用目录，显式排除 .env、.venv、data、backups 和部署回执。
 6. 运行 compileall；用新代码再次创建、验证停机加密备份。
 7. 写入 .release-commit 和 .deploy-revision，启动 systemd。
-8. 检查回环 /health、/ready，再检查公网重定向、403 门禁和有效 Cookie 下三个页面。
+8. 检查回环 `/health`、`/ready`，再检查公网重定向、匿名 401、认证后三个页面/API 200，以及旧入口 404。
 9. 执行商品/库存/订单、营销/利润、预测/计划、生命周期/审计、流量、统筹粘贴图片、跨轮图片和客服 Vision/Polish smoke。
 
 失败时停止新服务，使用 .deploy-revision 中的源码归档和匹配 schema 的已验证 .ypbak 回滚；不要临时关闭公网认证。
@@ -159,6 +160,14 @@ AgentLoop 的独立域名未改；不要再把 IP 实例的 /app 当成 AgentLoo
 - 飞书文档：`统筹 Agent 多模态 Demo：公网入口、部署与使用说明` 已保存到云端；正文本轮追加 17 张图片（15 张选定验收图、1 张滚动修复图、1 张原始问题复现图），评论数为 0。既有历史图片块未删除。
 - 历史会话滚动修复：红态公网 `/admin` 的聊天容器被内容撑到约 4000px，滚动容器 `clientWidth == scrollWidth`；修复后会话条 `clientWidth=612`、`scrollWidth=3960`、`overflow-x=auto`，实际滚动到 `scrollLeft=3348.5`，最右侧卡片进入可视区。
 - 修复回归：`tests/test_workspace_conversations.py` 先红后绿；相关 workspace/presenter/multimodal 回归 `79 passed in 33.23s`，compileall 与 `git diff --check` 通过。该项是对 E-20260829-001 整合验收的追加修复，不重新声称已重跑全量测试。
+
+## 9. 2026-08-30 共享密码认证切换
+
+- 公网产品 Demo 已从 7 天 Cookie 门禁切换为 Nginx HTTP Basic Auth；用户名保持为 `product-test`，密码不在本文档记录。
+- 认证范围包括 `/admin`、`/admin/advanced`、`/customer-test`、`/health`、`/ready`、`/knowledge-graph`、`/kg.html` 和 `^~ /v1/`；应用仍只监听 `127.0.0.1:8767`。
+- 切换前匿名请求为旧 Cookie 门禁 403，旧入口仍会签发 Cookie；切换后匿名请求为 `401 + WWW-Authenticate`，认证后页面/API/健康检查为 200，旧入口为 404，携带旧 Cookie 仍不能访问。
+- Nginx reload、systemd、4090 推理隧道、证书定时器和回环健康检查均保持正常；从公网访问 `8767` 未建立连接。旧 Cookie map 已移入服务器 root-only 备份目录，不再被 Nginx 加载。
+- 证据：E-20260830-001。服务器密码文件、共享密码、旧 token 和环境文件均未写入 GitHub、飞书、截图或本地台账。
 
 关键截图：
 

@@ -5,7 +5,7 @@
 
 ## 当前任务
 
-- 2026-08-29 当前交付：统筹 Agent 前端已同步到公网代码提交 c3812313502493571f968c025969974893effd47；/ 与 /app 均进入 /admin，/admin 可直接 Ctrl/⌘+V 粘贴图片并跨轮使用已脱敏的非权威观察，/admin/advanced 与同一数据库中的商品、订单、库存、营销、利润、流量、预测、库存计划、生命周期建议和建议审计已接通，/customer-test 的 Qwen2.5-VL 与 Qwen3-14B 润色已实测。追加修复了历史会话横向条的有限宽度与滚动：公网实测 `clientWidth=612`、`scrollWidth=3960`、`scrollLeft=3348.5`，最右侧卡片可见。公网产品测试入口为 https://129.211.3.209:8800/，最新可复核证据见 E-20260829-001、E-20260829-002 和 G-UNIFIED-AGENT-DEMO-002。该状态只代表受鉴权 virtual Demo，不代表真实渠道或生产放行。
+- 2026-08-30 当前交付：统筹 Agent 前端已同步到公网代码提交 c3812313502493571f968c025969974893effd47；/ 与 /app 均进入 /admin，/admin 可直接 Ctrl/⌘+V 粘贴图片并跨轮使用已脱敏的非权威观察，/admin/advanced 与同一数据库中的商品、订单、库存、营销、利润、流量、预测、库存计划、生命周期建议和建议审计已接通，/customer-test 的 Qwen2.5-VL 与 Qwen3-14B 润色已实测。追加修复了历史会话横向条的有限宽度与滚动：公网实测 `clientWidth=612`、`scrollWidth=3960`、`scrollLeft=3348.5`，最右侧卡片可见。公网产品测试入口为 https://129.211.3.209:8800/，当前使用 TLS + Nginx Basic Auth，页面与 `/v1/*` 共用同一认证，旧 7 天 Cookie 入口已停用。最新可复核证据见 E-20260829-001、E-20260829-002、E-20260830-001 和 G-UNIFIED-AGENT-DEMO-002。该状态只代表受鉴权 virtual Demo，不代表真实渠道或生产放行。
 - 本文件只提供任务入口，不复制实时状态。M4、M5-R、M6-R 及后续 M7-R～M10-R 的任务书统一位于 `docs/tasks/`；总路线见 `docs/tasks/ECOMMERCE_CLOSED_LOOP_ROADMAP.md`，负责人、排期和执行状态在负责人工作台网页维护。
 - 本地虚拟展示数据的能力范围以 `PROJECT_FEATURES.md` 的 F-121 / F-310 为准，验收结果以 `PROJECT_ACCEPTANCE.md` 的 E-20260810-002 为准。
 - M6-R 的稳定代码范围见 F-317 至 F-321；WP5 开发者证据见 E-20260813-001，覆盖 WP1–WP5 的单会话独立对抗结论见 E-20260813-002，整链合入与分支清理证据见 E-20260813-004。实时生产放行状态仍只在负责人工作台维护。
@@ -16,11 +16,12 @@
   `docs/works/15-feature-m7r-readonly-data/README.md`。F-323 的“已完成”只表示上述代码级本机
   范围；真实淘宝/天猫字段全量确认、真实经营结论、生产发布/权限/写能力与 M8-R～M10-R
   仍未放行。
-- 2026-08-28 阶段的 `main` + 多模态/Qwen/新版客服界面公网产品测试部署证据统一见
+- 2026-08-28 阶段（历史认证方式）的 `main` + 多模态/Qwen/新版客服界面公网产品测试部署证据统一见
   E-20260828-001 至 E-20260828-005 /
   G-PRODUCT-DEMO-001；当前 `/admin` 与
-  `/customer-test` 共用首次访问链接写入的 7 天安全 Cookie，不再要求用户名/密码。该记录
-  只说明受鉴权 virtual Demo 可供产品测试；对应实现已推送 GitHub 分支
+  `/customer-test` 当时共用首次访问链接写入的 7 天安全 Cookie，不再要求用户名/密码；该
+  Cookie 方案已由 2026-08-30 的 Basic Auth 运维变更取代。该记录只说明受鉴权 virtual Demo
+  可供产品测试；对应实现已推送 GitHub 分支
   `demo/main-multimodal-product-demo`，旧 `codex/` 分支已删除；未修改 `main`、未创建或
   合并 PR。主模型已因 DeepSeek 账户余额不足切换到 4090 Qwen3.6-35B，14B 润色与
   Qwen-VL 保持原职责；实时服务状态仍以
