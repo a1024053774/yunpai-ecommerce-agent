@@ -22,8 +22,17 @@
   waterline 正常重放保持 idempotent，而其它同水位载荷差异仍按 D-014 冲突；退款来源未知时
   `net_sales` 不再以 gross 冒充正式净销。应用仍未单独升包，最终 PR Head 必须是
   `2e7fa58` 的后代；这不得视为已发布 schema 或正式独立验收通过，见 E-20260825-001。
+- 本 PR 面向 `main` 的 1688 A1 候选使用 schema **v41**：在已执行的 v40 渠道可售量表之上，
+  additive `_apply_v41` 新增唯一边界表 `connector_sync_checkpoints`
+  （tenant/connector/store/resource + full/incremental 窗口身份、cursor、watermark、
+  租约/版本）。不得把新表并入 `_apply_v40`。v40→v41 为前向迁移；灾备 manifest 仍精确
+  匹配当前 schema，升级后必须立即生成并验证新的全量备份，v40 归档只能由匹配旧 schema
+  的程序在隔离环境恢复。服务器当前仍为 v40 overlay
+  release 1688-a1-v40-82c16d0，尚未执行 v41。应用包版本仍为 `0.30.0`，候选未合并。
+  证据：E-20260903-1688-a1-p1-checkpoint-001。
 - 占号状态：PR #10 已合入 main `1906365`，schema **v33** 在 `main`（knowledge_key 唯一索引 + retrieval_logs）。F-322 **v32** 已在 main。PR #11 的 `_apply_v31`（workspace 会话表）仍未进入 `main`。M7-R WP1 的 **v34** 与 WP3 的 **v35** 均已在 `main`；M9-R WP3 的 **v36** 仅完成占号，运行迁移未合并。schema 迁移占号以 `CONTRIBUTING.md` 第 9 节“Schema 版本号占用登记”为唯一权威来源，本文不复制“下一空闲号”。
-- 最后更新：2026-08-25
+- 占号状态补充：本 PR 按 `CONTRIBUTING.md` 登记并实现 1688 A1 的 **v40** 与 P1 **v41**；阶梯价格 Source Offer / Pricing 域不得复用这两号。
+- 最后更新：2026-09-04（main 候选：v40 渠道可售量 + v41 connector_sync_checkpoints）
 
 ## M7-R WP5 独立验收与整链合入（未单独升应用版）
 

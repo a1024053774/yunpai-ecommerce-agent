@@ -141,30 +141,45 @@ def verify_signature(params: Mapping[str, Any], app_secret: str) -> bool:
 
 
 class CredentialCipher:
-    def __init__(self, encoded_key: str):
+    def __init__(
+        self,
+        encoded_key: str,
+        *,
+        key_name: str = "TAOBAO_CREDENTIAL_KEY",
+        associated_data: bytes = b"yunpai-taobao-v1",
+        credential_name: str = "Taobao",
+    ):
         try:
             key = base64.urlsafe_b64decode(encoded_key.encode("ascii"))
         except Exception as exc:
-            raise TaobaoError("TAOBAO_CREDENTIAL_KEY must be URL-safe base64") from exc
+            raise TaobaoError(f"{key_name} must be URL-safe base64") from exc
         if len(key) != 32:
-            raise TaobaoError("TAOBAO_CREDENTIAL_KEY must decode to exactly 32 bytes")
+            raise TaobaoError(f"{key_name} must decode to exactly 32 bytes")
         self._cipher = AESGCM(key)
+        self._associated_data = associated_data
+        self._credential_name = credential_name
 
     def encrypt(self, value: Mapping[str, Any]) -> str:
         nonce = secrets.token_bytes(12)
         plaintext = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        encrypted = self._cipher.encrypt(nonce, plaintext, b"yunpai-taobao-v1")
+        encrypted = self._cipher.encrypt(nonce, plaintext, self._associated_data)
         return base64.urlsafe_b64encode(nonce + encrypted).decode("ascii")
 
     def decrypt(self, value: str) -> dict[str, Any]:
         try:
             payload = base64.urlsafe_b64decode(value.encode("ascii"))
-            plaintext = self._cipher.decrypt(payload[:12], payload[12:], b"yunpai-taobao-v1")
+            plaintext = self._cipher.decrypt(
+                payload[:12], payload[12:], self._associated_data
+            )
             result = json.loads(plaintext.decode("utf-8"))
         except Exception as exc:
-            raise TaobaoError("stored Taobao credential cannot be decrypted") from exc
+            raise TaobaoError(
+                f"stored {self._credential_name} credential cannot be decrypted"
+            ) from exc
         if not isinstance(result, dict):
-            raise TaobaoError("stored Taobao credential has an invalid shape")
+            raise TaobaoError(
+                f"stored {self._credential_name} credential has an invalid shape"
+            )
         return result
 
 

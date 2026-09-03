@@ -19,6 +19,8 @@ from fastapi import (
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from . import __version__
+from .alibaba_1688_api import build_alibaba_1688_router
+from .alibaba_icbu_api import build_alibaba_icbu_router
 from .auth import AdminPrincipal, AuthError, Principal
 from .admin_api import build_admin_router
 from .channel_agent import ChannelAgentError
@@ -185,6 +187,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ) from exc
 
     app.include_router(build_operations_router(service, require_admin))
+    app.include_router(build_alibaba_1688_router(service, require_admin))
+    app.include_router(build_alibaba_icbu_router(service, require_admin))
     app.include_router(build_forecasting_router(service, require_admin))
     app.include_router(build_traffic_lab_router(service, require_admin))
     app.include_router(build_ops_assistant_router(service, require_admin))

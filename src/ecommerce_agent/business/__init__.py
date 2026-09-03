@@ -1,4 +1,11 @@
 from .catalog import CatalogItemUpsert, CatalogService
+from .channel_availability import (
+    AvailabilityScope,
+    CHANNEL_AVAILABLE_ROLE,
+    ChannelAvailabilityRecordInput,
+    ChannelAvailabilityService,
+    ChannelAvailabilitySnapshotInput,
+)
 from .competitive import (
     CompetitiveAlertTransition,
     CompetitiveCustomDimension,
@@ -37,6 +44,11 @@ from .orders import AfterSaleCaseType, OrderService, OrderUpsert
 __all__ = [
     "CatalogItemUpsert",
     "CatalogService",
+    "AvailabilityScope",
+    "CHANNEL_AVAILABLE_ROLE",
+    "ChannelAvailabilityRecordInput",
+    "ChannelAvailabilityService",
+    "ChannelAvailabilitySnapshotInput",
     "AfterSaleCaseType",
     "CompetitiveIntelligenceService",
     "CompetitiveAlertTransition",

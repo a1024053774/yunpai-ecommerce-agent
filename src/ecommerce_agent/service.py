@@ -22,6 +22,8 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 
 from .auth import AuthenticationService, Principal
 from .admin import AdminConsoleService
+from .alibaba_1688 import Alibaba1688IntegrationService
+from .alibaba_icbu import AlibabaIcbuIntegrationService
 from .business import OperationsService
 from .channel_agent import ChannelAgentRuntime
 from .channel_sdk import ChannelAdapterRegistry
@@ -201,6 +203,14 @@ class AgentService:
             self.evaluation_recovery = self.evaluations.recover_interrupted_runs()
             self.maintenance = MaintenanceService(self.db, self.settings)
             self.taobao = TaobaoIntegrationService(self.db, self.settings)
+            self.alibaba_icbu = AlibabaIcbuIntegrationService(
+                self.db, self.settings
+            )
+            self.alibaba_1688 = Alibaba1688IntegrationService(
+                self.db,
+                self.settings,
+                operations=self.operations,
+            )
             self.channel_adapters = ChannelAdapterRegistry()
             self.channel_adapters.register(
                 TaobaoChannelAdapter(self.taobao, self.settings)
@@ -991,6 +1001,12 @@ class AgentService:
             },
             "connectors": self.operations.connector_catalog(),
             "taobao": self.taobao.capabilities(self.settings.bootstrap_tenant_id),
+            "alibaba_icbu": self.alibaba_icbu.capabilities(
+                self.settings.bootstrap_tenant_id
+            ),
+            "alibaba_1688": self.alibaba_1688.capabilities(
+                self.settings.bootstrap_tenant_id
+            ),
             "outbox": self.taobao.outbox_summary(self.settings.bootstrap_tenant_id),
             "channel_agent": self.channel_agents.summary(
                 self.settings.bootstrap_tenant_id
@@ -1452,6 +1468,8 @@ class AgentService:
             self.stop_session_idle_worker()
             self.stop_competitive_monitor_worker()
             self.channel_agents.close()
+            self.alibaba_1688.close()
+            self.alibaba_icbu.close()
             self.taobao.close()
             self.model.close()
             self.tools.close()
