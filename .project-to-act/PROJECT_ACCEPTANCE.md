@@ -5,6 +5,136 @@
 
 ## 当前验收结论
 
+- 最新结论（2026-09-03）：1688 A1 P1 本地候选已完成，并收口四处可恢复缺口。incremental 窗口 `totalRecords` 不得写入 `upstream_total`；店铺不可用与非法 cursor 不得停在 `running`；`cursor_invalid` 只来自 `_page`/调用方 cursor，拉取循环其它 `Alibaba1688Error` 标 `request_invalid` 且保留 resume cursor；非法 cursor 服务层抛错、API 409。聚焦 1688/A1+迁移 `59 passed`，compileall、`git diff --check` 与台账 `--validate` 退出 0。工作树 HEAD `cfeceed`。服务器仍为 v40，未做 v41 迁移或生产入口真实 smoke。独立 acceptance-auditor 在 bounded 窗口内超时，未形成 PASS。真实 WMS/ERP 仍 INCOMPLETE，1688 采购写操作仍 BLOCKED。证据：E-20260903-1688-a1-p1-checkpoint-001。
+
+- 独立验收补充（2026-09-03）：针对冻结候选的 acceptance-auditor 返回 INCOMPLETE。服务器真实证据确认全量返回链、数据库落库、增量幂等和业务表隔离，但指出生产 sync_availability 仍由单页入口加外部续跑脚本完成，尚无按 tenant/connector/store 的持久 checkpoint/watermark；现有 recon 也没有平台 totalRecords 或脱敏商品 ID manifest 作为独立上游 oracle。P1/P2 修复前不得把一次服务器回补扩大为生产级全量能力。证据：E-20260903-1688-channel-availability-acceptance-002。
+
+- 历史结论（2026-09-03）：服务器外部回补、增量探针和独立数据库对账证据为 PASS；当时生产 `sync_availability` 仍是单页入口。该缺口已由 2026-09-03 本地 v41 候选覆盖，但仍未在服务器验证。详见 E-20260903-1688-channel-availability-p2-p1-gate-003。
+
+
+- 结论：2026-09-03 对候选库存来源《商品库存管理.xlsx》完成只读结构核验。实际 worksheet XML 含 24 条明细、23 个表头；有商品/SKU、仓库编码、可售库存和预占库存字段，但仓库编码仅覆盖 12/24 行，skuId/sku 编码各缺 1 行，未提供在途数量、导出时间、来源系统/账套/店铺范围，且没有可直接映射的 on_hand。结论：可作为字段映射样本，不能作为生产 WMS/ERP 真源，也不能据此回填 inventory_balances；真实仓储接入 Gate 保持 INCOMPLETE。证据：E-20260903-wms-source-workbook-001，文件 SHA-256 为 6cec6aee3d2eb5e4010c39a7a419d94cb38c8834a985f8840b542ceb4ac4cf87。
+
+- 结论：2026-09-03 19:02–19:27（Asia/Taipei）在关闭加密 DNS 后，Cursor 通过官方原生日常测试入口完成一次 hosted OAuth；服务器 callback HTTP 200，并新增授权审计事件，存在 1 条未过期 authorized 连接。独立服务器只读探针的 capabilities、订单列表和商品列表均为 HTTP 200；首个 A1 分页同步使用 limit=20，真实返回 20 个商品、映射 411 条可售量记录（20 商品级、391 SKU 级、0 拒绝），持久化查询返回 411 条。同页重跑 applied=0、idempotent=20，快照/记录数不增长；commerce_orders=22,767、inventory_balances=13 未变化，语义、非负、仓库字段和 SQLite 完整性检查通过。结论：A1 首个真实分页持久化 Gate 为 PASS；全量回补、增量水位/对账、生产商家和 WMS/ERP 仍为 INCOMPLETE。证据：E-20260903-1688-channel-availability-persistence-001。
+
+- 结论：2026-09-03 18:32–18:39（Asia/Taipei）在小火箭新增 DOMAIN,www.agentloop.top,DIRECT 后，通过 Cursor 让 1688 开发者账号使用官方原生 UI 重新生成日常测试入口，并在 alitestforisv02:云湃智算 卖家会话中只读打开。主账号授权墙提示已消失，未出现最终授权按钮；但测试壳中的 AgentLoop callback iframe 仍为 transferSize=0/status=null，服务器没有新的 callback、授权成功事件或未过期凭证。服务器仍为 authorized=1、error=1、未过期 authorized=0，A1 两张表仍为 0 行。本机 DNS 仍返回 198.18.0.73（fake-IP），所以 DIRECT 只改变路由而未解除 fake-IP 解析。Gate 继续为 INCOMPLETE；下一步是添加 fake-IP 排除/真实 DNS 例外或切换到 Redir-Host 后重新生成全新入口。证据：E-20260903-1688-oauth-transport-002（追加在 docs/evidence/20260903-1688-oauth-transport-001.md）。
+
+- 结论：2026-09-03 通过 Cursor 的官方日常测试入口确认 1688 主账号对子账号的应用授权墙已解除：卖家会话不再显示“当前子账号尚未获得授权”，原生测试壳也未出现最终授权按钮。但 OAuth callback 仍未形成服务器换票落库：服务器运行库截至 2026-09-03 17:05（台北时间）仍为 authorized=1、error=1，两条凭证均已过期，最新 alibaba_1688.oauth.authorized 为 2026-09-02T12:38:10Z；A1 两张渠道可售量表仍为 0 行。Cursor 观测到 callback 跨域 iframe transferSize=0/status=null，本机 DNS/代理将 www.agentloop.top 解析到合成地址并导致 TLS 失败；公网 callback 无参数探针本身可返回 422，且 Nginx 返回 X-Frame-Options: DENY。因此 Gate 仍为 INCOMPLETE：主账号权限墙通过，OAuth 到达/换票和真实持久化 smoke 未通过；未重放旧回调、未输出 code/token/secret、未执行同步或平台写动作。证据：E-20260903-1688-oauth-transport-001。
+- 结论：2026-09-03 已按受控发布链将 1688 A1 v40 候选部署到服务器。发布 release 为 /opt/yunpai-ecommerce-agent-releases/1688-a1-v40-82c16d0，基线为 cfeceeda38789eafe73676362c8821787aa94ad0；v39 停机加密备份与 v40 迁移后备份均已验证。线上 schema=40，channel_availability_snapshots 与 channel_availability_records 已创建，服务 active，health/ready 均为 200，OpenAPI 已暴露 A1 查询和同步路由。部署前后 commerce_orders=22,767、catalog_items=7、inventory_balances=13，渠道可售量两表当前均为 0 行，SQLite integrity=ok、外键错误为 0。Capabilities 已声明 persistence=true、inventory_read=false、writes=false。Cursor 最新只读核验确认卖家子账号尚未获得应用 5043656 授权，未出现最终授权按钮；因此没有调用真实同步，也没有把空集合当成成功。A1 服务器 Gate 仍为 INCOMPLETE，独立验收 PASS、有效商家授权和真实持久化 smoke 仍待完成。证据为 E-20260903-1688-channel-persistence-deploy-001。
+- 证据索引：本轮更新后的本地 1688 实施文档 SHA-256 为 ef80fdda9417d6c5c842464f2c472c68f53c7fc9f26962aaee3c532d92ef1fb1；飞书文档已回读至 revision 126，包含服务器回补证据、P2 总量校验、P1 checkpoint 授权阻塞和仓储/采购边界。
+- 授权探针补充：Cursor 在当前子账号会话打开 5043656 标准 /oauth/authorize，只读看到登录表单、会员信息权限和“授权并登录”按钮；未输入凭据、未勾选或提交授权。标准入口不能绕过当前卖家主账号/子账号权限阻塞。新增证据为 E-20260903-1688-auth-standard-oauth-001。
+
+- 结论：2026-09-03 在用户明确授权后完成 1688 A1 渠道可售量持久化的本地代码候选，并修复独立验收指出的来源版本幂等缺口。当前非 `main` 分支已在 `CONTRIBUTING.md` 登记 schema v40；`database.py` 新增 additive `_apply_v40` 及 schema 校验，`channel_availability_*` 两表保存商品级/SKU 级 `amountOnSale`，批量同步使用真实商品列表 `needDetail=true` 响应，查询只返回 `semantic_role=channel_available`，不写 `inventory_balances`。D-014 旧版本/同版本幂等/同版本冲突/新版本整组替换、旧 SKU 删除、tenant/store 隔离、紧凑时间戳规范化，以及缺少稳定来源时间时的 fail-closed 均有回归证据；1688/A1 聚焦 `23 passed`，全量 `1542 passed, 1 skipped`（253.30 秒），compileall、`git diff --check`、managed 台账校验和 v40 加密备份/验证/恢复探针均通过。独立 acceptance-auditor `01a06550-8c48-7192-87dc-4392e87e1245` 的结论仍为 INCOMPLETE：其发现已修复，但未取得新的独立 PASS。候选尚未合并、部署或完成服务器真实持久化 smoke；未调用 1688 平台写 API，生产仍以 schema v39/A0 实时读取为准。证据为 E-20260903-1688-channel-persistence-fix-002。
+
+- 结论：2026-09-03 完成 A1 渠道可售量持久化实施前 Reality Gate。直接读取 M7-R 导入链、InventoryService、数据库迁移和 Alibaba 1688 调用方后确认：readonly 三表只保存 manifest/字段证据/行问题，`inventory_balances` 的权威语义与消费者均为 `on_hand/reserved/inbound`，没有可安全复用的现有事实表。可复现红态为 `POST /v1/integrations/alibaba-1688/sync/availability` 返回 404，临时 schema 检查缺 `channel_availability_snapshots` 与 `channel_availability_records`，命令 exit 1。正确方向是独立 v40 渠道可售量域；当前分支不是 main，而仓库规则要求在 `CONTRIBUTING.md` 权威表先占号并禁止未获明确授权在非 main 修改，因此实现保持 INCOMPLETE。未新增 fallback、未写业务库、未修改 `CONTRIBUTING.md`。证据为 E-20260903-1688-channel-persistence-red-001。
+
+- 结论：2026-09-03 已将 1688 订单详情、商品详情和单商品渠道可售量接口发布到服务器，并完成真实 product-only 与 SKU 商品 smoke。服务 active，`health=200`、`ready=200`，部署文件与本地冻结哈希一致，OpenAPI availability 路由计数为 1；所有可售量记录均为 `semantic_role=channel_available`，商品级与 SKU 级分离，`warehouse_code=null`，不包含或写入 `on_hand/reserved/inbound`。调用前后 `commerce_orders=22,767`、`catalog_items=7`、`inventory_balances=13`，SQLite quick_check=ok、外键错误 0；本机相邻 33 passed，compileall、`git diff --check` 和 managed 台账校验通过。A0 真实实时读取通过；A1 独立持久化、完整独立复审、生产业务商家、真实 WMS/ERP 和采购权限仍为 INCOMPLETE，任何平台写动作继续 BLOCKED。证据为 E-20260903-1688-channel-availability-001。
+
+- 结论：2026-09-02 按用户确认的第 1 项完成 1688 订单全量同步。新日常测试入口经 Cursor 只读核验已越过 1688 授权确认，但 AgentLoop 嵌入结果页为空，服务器未新增授权记录；同步使用服务器现有 1 条 `authorized` 商家连接，旧连接仍为 `error`。订单从第 1 页至第 1,138 页分段处理，共接收、映射并应用 22,756 条，0 条拒绝；`commerce_orders` 从 11 增至 22,767，重复订单组为 0。服务 active，`health=200`、`ready=200`，SQLite `integrity_check=ok`、外键错误 0。`catalog_items` 保持 7、`inventory_balances` 保持 13，日志未出现商品同步；本轮未调用商品同步或平台写接口。商品同步仍因阶梯价/无 SKU 部分缺少可安全写入现有单值 `sale_price` 的字段而保持阻塞。证据为 E-20260902-1688-014。
+
+- 结论：2026-09-02 已完成 1688 商家测试连接的真实只读复核和商品映射修复部署。服务器发布目录中的 `alibaba_1688.py` 与本地候选哈希一致，服务通过健康检查并自动重启到新进程；只读订单与商品 GET 均返回 HTTP 200。当前连接状态为 `authorized:1,error:1`，其中旧连接在令牌刷新失败后按 fail-closed 规则转为 error。有效连接首屏返回 20 个商品、391 个 SKU；35 个 SKU 有直接 `price`，391 个有 `consignPrice`，20 个商品有商品级阶梯价。内存映射按官方字段口径仅用 `price` 写 `sale_price`，并保留零售价、分销基准价、拿样价和阶梯价为独立属性；结果为 35 个 SKU 可映射、15 个商品显式拒绝（13 个缺直接价格、2 个缺 `skuInfos`），没有用 `consignPrice` 或商品总可售量补造销售价/库存。业务表计数保持 `commerce_orders=11`、`catalog_items=7`、`inventory_balances=13`；本轮未调用同步接口。相关聚焦/相邻回归 30 项通过，compileall 与 managed 台账校验通过。真实 API/同步 Gate 仍为 **INCOMPLETE**，下一决策点是是否为阶梯价扩展领域模型，或由业务明确授权某一替代价格口径；在此之前不执行商品同步落库。证据为 E-20260902-1688-012。
+
+- 结论：2026-09-02 已完成一次新的 5043656 商家日常授权与真实只读联调。Cursor 侧边浏览器确认日常测试入口不再提示“当前用户无法授权，请把当前账号添加为应用的日常测试账号”，并将结果指向 AgentLoop 回调；页面本身曾出现空白嵌入页/旧结果页时间戳验证失败，因此不单独作为成功证据。服务器只读核验记录到最新一次 alibaba_1688.oauth.authorized（hosted，凭证有过期时间），连接总数仍为 2，属于同店铺连接 upsert 更新；按更新时间排序的最新授权连接订单 GET 返回 HTTP 200，本次 limit=1 返回 1 条且存在下一页。商品 GET 已到达成功 JSON，但工作区解析器此前不识别真实包裹 result.pageResult.resultList 和分页 result.pageResult.totalRecords，已在当前工作树最小修复并补红→绿回归；本地 1688/ICBU/Taobao/API/Operations 相关测试共 28 项通过，compileall、空白检查和 managed 台账校验通过。修复尚未部署，商品 SKU 字段映射、商品同步、真实业务表落库和另一条旧连接的失败状态仍未验收；本轮未调用同步接口，业务表未变化。真实 API/同步 Gate 继续为 **INCOMPLETE**。证据为 E-20260902-1688-011。
+
+- 结论：2026-09-02 对阿里国际站应用 512464 完成了真实数据接入前的方向核验。用户提供的控制台截图显示国际站基础权限包、国际站服务市场权限包和 System API Permission Group 有效；国际站订单管理权限包、ICBU 物流/快递权限包无效。官方商品列表和商品详情页当前只列 sign_method=hmac 或 md5，并要求授权会话；现有客户端原先发送 hmac-sha256，按官方契约建立的红态已复现，随后已改为 hmac。ICBU 聚焦与相邻回归共 27 项通过，compileall、git diff --check 和 managed 台账校验通过。本轮没有真实国际站卖家 OAuth、真实商品响应或领域同步落库；现有 ICBU 代码仍是 OAuth、商品列表/详情/SKU 库存读取连接器，domain_sync 保持关闭。结论是 512464 可以作为真实国际站本店商品/SKU/库存的下一条 API 路径，但前提是有店铺的 Alibaba.com 卖家账号完成授权；国际站普通交易订单仍不能作为当前接入目标，真实数据 Gate 继续为 **INCOMPLETE**。证据为 E-20260902-ICBU-001。
+
+- 结论：2026-09-02 已完成 5043656 真实联调阻断的交叉核验。Cursor 登录态的「我的授权」显示该应用授权状态为「已取消」（2026-09-02 10:52:53）；同一登录工作台显示为买家且未开店，未进入卖家店铺后台。官方订单文档要求授权会员必须等于订单卖家，商品列表文档为卖家自有商品查询。服务器 live 库仍有 2 条本地 authorized 连接，但上游对订单/商品请求均返回 HTTP 401、error_code=401、Request need user authorized，与本地持有已失效/已取消授权的推断一致。业务表计数仍为 commerce_orders=11、catalog_items=7、inventory_balances=13；本轮未同步写入、未改代码/配置/schema。相关本地回归 27 项通过。下一步必须用有店铺的卖家主账号完成有效授权（如使用子账号，先由主账号授权并按平台规则分配使用权限），再重跑同一组订单/商品 smoke；真实 API/同步 Gate 继续为 **INCOMPLETE**。证据为 E-20260902-1688-010。
+
+- 结论：2026-09-01 晚间已按用户确认对 5043656 做真实日常 OAuth 联调，**未完成授权**。
+  已生成日常测试链接并在新标签顶层访问 `auth.1688.com/oauth/managed`（`sceneId=daily_homepage`，
+  无额外跟踪参数）。平台返回「当前用户无法授权，请把当前账号添加为应用的日常测试账号」。
+  测试抽屉日常测试账号列表已有 1 条，按用户要求未重复添加。带 `spm` 的同链返回「签名错误」。
+  WEB `/oauth/authorize` 出现授权确认页（仅「会员信息」），但迷你登录 iframe 未复用已有
+  1688 SSO，无法在侧边浏览器完成「授权并登录」。回环 capabilities HTTP 200，
+  `connections=0` 且 `authorized_connections=0`，连接数未从 0 变为 1。未做订单/商品
+  真实 API smoke、未调用同步入口、未改代码、未 commit/push。证据为
+  E-20260901-1688-009。G-ALIBABA-1688-001 对真实 OAuth/API 仍为 INCOMPLETE。
+
+- 结论：2026-09-01 的 1688 开放平台 Reality Gate 对“按官方协议实现只读候选”判定为
+  PASS，对“真实商家 API 已联通并可生产同步”仍为 INCOMPLETE。已在登录态官方页面复核
+  1688 API HMAC-SHA1 签名串、getToken 换票/刷新协议、5043656 已购且生效中的
+  “订单管理解决方案（加密服务商新版）”，以及订单和本店商品 API 的公开字段；9034901
+  关联方案为空。两应用流量仍为 0/5000，“我的授权”和“已获取能力”为空，未发现真实商家
+  授权或调用流水。本批只允许实现默认关闭的 5043656 订单/本店商品只读客户端，并经现有
+  CatalogService / OrderService 写入同一事实层；不迁移 SQLite，不接商机/跨境 ERP，不做
+  物流、退款、面单或任何平台写操作。真实 OAuth、真实空结果/有数据响应、字段差异和配额
+  仍需后续受控联调，不能由 mock 豁免。证据为 E-20260901-1688-001，Gate 为
+  G-ALIBABA-1688-001。
+
+- 结论：同一 Gate 下的初始 WEB-only 代码候选曾完成。新增 1688 HMAC-SHA1 / getToken 客户端、
+  OAuth 加密凭证与精确店铺边界、订单/本店商品只读及同步 API；订单经现有
+  `OrderService.merge_order_lines_snapshot` 写入，商品经现有 `CatalogService` 写入，不新增
+  事实表或 schema，不把只有 `amountOnSale` 的部分库存写入 `inventory_balances`。测试保留
+  模块不存在的红态，随后 3 项聚焦测试、13 项相邻平台回归和 17 项 API/Operations 回归
+  全绿；`git diff --check`、目标 compileall 与 managed 台账校验通过。本地完整资料与脱敏截图
+  已同步到飞书正文 revision 33。上一轮结构复审因候选快照移动而 INCOMPLETE；本轮按固定
+  SHA-256 重新冻结后，核验子智能体在三个连续 60 秒有界等待窗口内仍未返回最终结论，故
+  复审状态继续为 INCOMPLETE，不能写成独立 PASS。代码、文档与复审证据为
+  E-20260901-1688-002/004；该候选已被后续托管式证据 E-20260901-1688-006 证伪并由
+  E-20260901-1688-007 取代，不代表真实商家 API 联通、自动周期同步或生产放行。
+
+- 结论：2026-09-01 已完成 1688 真实联通前的只读运行环境与路由烟测。当前进程环境、本机
+  `env.md`、公网服务器 `/opt/yunpai-ecommerce-agent/.env` 均没有配置任何
+  `ALIBABA_1688_*` 运行值；服务器仍部署 `c3812313`，源码没有 1688 路由，回环请求为
+  404。公网 IP 产品入口的 `^~ /v1/` 统一包含 Basic Auth，故 capabilities 与 OAuth callback
+  均返回 401；`www.agentloop.top:8800` 当前代理另一服务，1688 callback 返回 404。使用隔离
+  临时 SQLite 启动本地候选后，health 与 capabilities 为 200，伪造 state 的 callback 为预期
+  400，OpenAPI 注册 7 条 1688 路径；全过程未调用 1688 平台。聚焦测试 3 passed，且在
+  `HEAD` 导出的旧源码上复现 `ecommerce_agent.alibaba_1688` 模块不存在的反事实。结论是
+  本地路由可运行，但公网回调、应用凭据、部署和真实 OAuth 仍未就绪；不得把本次 smoke
+  写成真实 API 联通。证据为 E-20260901-1688-003。
+
+- 结论：2026-09-01 已通过 Cursor 登录态只读补齐 5043656 的回调配置事实。日常详情页的
+  “日常使用入口”为空；API 对接文案称其为“日常授权回调地址”，两者实际打开同一输入，
+  用于接收授权 code。编辑基本信息页另有红星必填“回调地址”（内部字段 `homepage`），
+  当前为空；生产环境显示“生产使用入口（授权回调地址）”为无。页面明确提示“服务市场
+  售卖应用必须填写聚石塔内回调地址”。官方 OAuth 文档只明确 WEB `redirect_uri` 的域名
+  必须与应用注册回调域名匹配，没有公开确认 HTTPS 原始 IP、非 443 端口 `8800`、备案或
+  完整路径逐字匹配规则；保存后的服务端校验因未试填/未保存仍为 unknown。当前
+  `https://129.211.3.209:8800/...` 不能据此视为已获平台认可，生产售卖还受聚石塔约束。
+  全程未查看密钥/Token、未保存、未测试、未发起 OAuth、未修改代码或文档。证据为
+  E-20260901-1688-005。
+
+- 结论：同日追加的托管式授权原文推翻了“5043656 只需 WEB OAuth”的实现假设，1688
+  Reality Gate 已重新打开。官方服务市场托管式流程只保证应用市场把一次性 `code` 带到
+  app 入口，并明确生产代码不需要自行获取 code；`state` 只属于 ISV 自行发起的 WEB/客户端
+  authorize，且为可选。当前候选 callback 强制 `code + state`，因此不能接住 5043656 的
+  托管式入口。托管式在换票前没有可验证的 member/店铺/订购实例字段，换票后才可用
+  `memberId` 识别授权会员；官方也没有给出托管式 CSRF/state 或多租户绑定方案。本轮决定
+  只实现默认关闭、显式固定 tenant 的单租户托管式路径：无 state 时先换票，以必需的
+  `memberId` 作为 store_id；保留现有带 state 的 WEB 路径。若未配置固定 tenant，则必须在
+  网络调用前拒绝 code-only callback。该决定不泛化为多租户 SaaS 绑定方案，证据为
+  E-20260901-1688-006。
+
+- 结论：托管式授权的最小修正已完成。`ALIBABA_1688_HOSTED_TENANT_ID` 默认空，只有显式
+  固定单租户时 code-only callback 才可换票；无固定 tenant 时在平台请求前返回 400。换票后
+  必须取得 `memberId` 并作为 store_id，连接 metadata 记录 `authorization_mode=hosted`；带
+  state 的 WEB 路径继续消费原有一次性 state。capabilities 仅对被固定的 tenant 声明 hosted
+  可用。两条新测试先稳定复现 callback 因缺 state 返回 422，修正后 2 passed；完整 1688 为
+  5 passed，相邻 1688+ICBU+Taobao 为 15 passed，1688+API+Operations+Taobao API+limits 为
+  19 passed。隔离 Uvicorn smoke 显示 code 必填、state 非必填；默认关闭时 code-only 命中
+  业务配置门并返回 400，不调用真实平台。compileall、`git diff --check` 通过，无 schema
+  迁移，SQLite 事实层不变。代码证据为 E-20260901-1688-007；新候选仍未获得独立结构
+  PASS；冻结后发起的独立复审在单个 60 秒有界窗口内未返回，状态为 INCOMPLETE，见
+  E-20260901-1688-008。该结论不代表真实 OAuth 或生产联通。
+
+- 结论：2026-08-30 金蝶真实数据适配 Reality Gate 为 INCOMPLETE，但供对方导出数据的
+  示例准备已完成并通过现有导入契约反证。运行时 REPORT_ADAPTERS 实测仍以
+  generic-cn-v1 支持商品、库存、订单行、履约物流、经营日报、推广日报、退款售后和
+  结算单；真实金蝶产品/版本、账套组织、原始表头、粒度、枚举、金额口径和受控脱敏样本
+  尚未取得，因此未新增猜测性的金蝶适配器或公开上传入口。生成的工作簿包含当前能力说明、
+  导出清单、只读导出字段参考、导出说明/隐私自检、八类示例数据和采购成本/采购单/运输周期/
+  翻新成本等待适配缺口；根据用户进一步确认，已删除让对方填写黄色映射列或表单的要求，
+  明确由对方保留金蝶原始表头、先提供脱敏小样，我方收到后完成字段映射。首次真实导入验证
+  保留了红态：履约表因所有报表共用同一
+  data_as_of 出现 3 条 domain_source_conflict，另有 1 个 Excel 日期序列在隐私值扫描前
+  被误识别为敏感号码而缺字段；仅调整示例为 ISO 8601 日期文本，并按订单→物流→售后的
+  实际水位顺序分别传入 data_as_of，未修改生产导入代码。相同验证随后八类报表全部
+  passed、共接收 32 行、0 隔离/拒绝；readiness 为 8 个数据域均非 missing、整体
+  attention，诚实保留 4 项 open gap，且声明 read_only=true、model_used=false、
+  platform_write_performed=false。证据为 E-20260830-002，Gate 为
+  G-KINGDEE-IMPORT-001；本结论不代表已兼容任一真实金蝶版本，也不豁免真实样本确认、
+  字段映射、业务签收、真实经营结论或生产 Gate。
+
 - 结论：2026-08-30 已将公网产品 Demo 的访问边界从 7 天 Cookie 门禁切换为 Nginx HTTP Basic Auth，未改变应用代码、schema v39 或包版本 0.30.0。认证范围覆盖 `/admin`、`/admin/advanced`、`/customer-test`、`/health`、`/ready`、知识图谱页面和 `/v1/*`；页面与产品 API 共用同一密码文件，应用仍只监听 `127.0.0.1:8767`，AgentLoop 独立域名保持原链路。
   切换前匿名产品请求为 403，旧 access endpoint 为 302 且会签发 Cookie；候选认证烟测首次暴露密码目录为 700 导致 Nginx `13 Permission denied`，未把该失败状态作为通过。将目录最小调整为 710 后，`nginx -t`、reload、systemd、回环健康检查和 4090 隧道均正常。
   切换后从服务器回环与本机公网地址分别验证：匿名 `/admin`、`/admin/advanced`、`/customer-test`、`/v1/modules`、`/health`、`/ready` 均为 401 且带 `WWW-Authenticate`；认证后同组页面/API/健康端点均为 200；`/` 与 `/app` 302 到 `/admin`，认证后最终为 200；旧 access/logout 为 404 且不签发 Cookie，携带旧 Cookie 仍为 401；公网 8767 未建立连接。证据为 E-20260830-001。
@@ -712,6 +842,164 @@
 
 ## 证据索引
 
+- E-20260903-1688-channel-availability-p2-p1-gate-003：独立重跑 A1/P2 聚焦测试 `24 passed`、迁移测试 `18 passed`，compileall、diff check 和 managed validate 退出 0；确认 P2 的 `upstream_total` 反例已实现，P1 仍缺 store-scoped 持久 checkpoint/watermark。v40 已在服务器执行，新增 checkpoint 不能静默回写 `_apply_v40`，需先取得 v41 占号授权；本轮未部署、未访问真实 API、未执行平台写操作。
+
+- E-20260903-1688-channel-availability-persistence-001：关闭加密 DNS 后 hosted OAuth callback HTTP 200；服务器出现新的授权审计且有 1 条未过期 authorized 连接。真实订单/商品只读探针 HTTP 200；A1 首页 limit=20 收到 20 个商品、映射 411 条记录，首次 applied=20，重复同页 applied=0/idempotent=20，持久化 GET 411 条；订单与 WMS 行数不变，semantic_role/数量/仓库字段/SQLite 完整性检查通过。仅证明首个真实分页和幂等，不证明全量回补、对账、生产商家或 WMS。
+
+- E-20260903-1688-channel-persistence-fix-002：在恢复原有无 SKU 测试函数边界后重新冻结当前候选。最终 1688/A1 聚焦 `23 passed`，全量 `1542 passed, 1 skipped`（253.30 秒）；`compileall`、`git diff --check` 和 `.project-to-act --validate` 均通过。最终文件 SHA-256：`src/ecommerce_agent/alibaba_1688.py=82c16d0e...a5172`、`tests/test_alibaba_1688.py=034d5099...4da8`。来源版本 P1 的两条红态反证及修复后的绿色回归均保留；独立 acceptance-auditor 仍为 INCOMPLETE，候选未合并/未部署，未执行服务器持久化 smoke，未调用平台写 API。
+
+- E-20260903-1688-channel-persistence-fix-001：独立验收指出缺少 `lastUpdateTime/createTime` 时使用本机观测时间，导致同一外部载荷可能重复应用。先添加两条针对性回归：旧实现的缺时间路径为 `1 failed`，临时恢复 `_availability_snapshot_input` 读取观测时间的旧实现为 `1 failed`；恢复后 1688/A1 聚焦为 `23 passed`。修复限定在来源版本边界：`PullRecord.source_version` 必须是可解析的稳定来源时间，`payload-sha256:*` 或其它无时间版本直接拒绝，持久化转换不再读取观测时间作为来源版本。全量为 `1542 passed, 1 skipped`（255.37 秒），`compileall`、`git diff --check` 和 managed 台账校验通过；关键文件 SHA-256：`alibaba_1688.py=82c16d0e...a5172`、`test_alibaba_1688.py=4bfc7145...1879`。独立 acceptance-auditor 的原始结论保持 INCOMPLETE；未部署、未执行服务器持久化 smoke、未调用平台写 API。
+
+- E-20260903-1688-channel-persistence-local-001：用户授权后的 A1 本地候选验收。候选范围包含 `CONTRIBUTING.md` v40 登记、`database.py` `_apply_v40`/校验、`channel_availability.py`、1688 connector/API 注册和回归测试。紧凑时间戳修复前的专门测试先得到 exit 1（`20260903120000000+0800` 被误解析为 `12:00 UTC`，期望 `04:00 UTC`），修复后同一测试 exit 0；删除旧 SKU 与 tenant/store 隔离的突变也分别得到预期失败后恢复。A1 + 迁移/灾备组合为 `55 passed`，全量为 `1540 passed, 1 skipped`；`compileall`、`git diff --check`、`init_project_management.py --validate` 和 v40 加密备份/验证/恢复探针均 exit 0。关键文件 SHA-256：`database.py=37e7f8f8...617fd`、`channel_availability.py=3308d398...b5fb7`、`alibaba_1688.py=cfddbfb0...46fb6e`、`alibaba_1688_api.py=47617f5c...0e814`、`test_channel_availability.py=54be39d3...97cb`、`test_alibaba_1688.py=324afd70...d97a`。独立 acceptance-auditor `01a06550-8c48-7192-87dc-4392e87e1245` 在 120 秒窗口内超时，故独立复审为 INCOMPLETE；候选未合并、未部署、未完成服务器真实持久化 smoke，也未调用平台写 API。
+
+- E-20260903-1688-channel-persistence-red-001：A1 渠道可售量持久化缺口与方向反证。读取 `readonly_data/ingestion.py`、`readonly_data/service.py`、`business/inventory.py`、`database.py`、`alibaba_1688.py` 和 M7-R/M10-R 任务书，确认 readonly 证据层不保存渠道可售量事实，WMS 表不可复用。使用临时数据库和当前 FastAPI app 执行最小行为探针：目标 `POST /v1/integrations/alibaba-1688/sync/availability` 为 HTTP 404，schema 缺 `channel_availability_snapshots` / `channel_availability_records`，脚本以 `RED: A1 channel availability persistence is not implemented`、exit 1 结束。当前 schema v39、`CONTRIBUTING.md` 的 40+ 尚未登记；正确实现需独立 v40、D-014 快照门和原子记录替换。证据在路由、schema 或占号状态变化前有效；不授权绕过权威占号、写入 `inventory_balances` 或使用 metadata/manifest 假持久化。
+- E-20260903-1688-channel-availability-001：1688 订单/商品详情与真实渠道可售量最终发布证据。冻结源文件 SHA-256：`alibaba_1688.py=37d47a25681c313e5b87639292bd884b0ec25e627ac381b0f6133051cb3d2315`、`alibaba_1688_api.py=08ff28c44fef88143cdb6fbfcc1e4ffdd54c1d7ecb7c2a2cbf8845348e39de44`、`tests/test_alibaba_1688.py=882341d887400962a8d5bf43f8b790a5f1c6ad8c262d7d789f6bf30b327c0e39`。发布后服务 active，`/health`、`/ready` 为 200，OpenAPI availability 路由计数为 1；回滚备份位于 `/opt/yunpai-ecommerce-agent/.deploy-backups/1688-channel-availability.cGMa49`，overlay manifest 位于 `/opt/yunpai-ecommerce-agent/.deploy-overlays/1688-channel-availability-current`。真实 product-only 商品返回 product scope=1、SKU scope=0；真实 SKU 商品返回 product scope=1 且 SKU scope 与来源 SKU 一致，所有数量非负、`semantic_role=channel_available`、`warehouse_code=null`、无 `on_hand/reserved/inbound`。capability 为 `channel_availability_read.available=true/persistence=false`，`inventory_read.available=false`；调用前后 `commerce_orders=22,767`、`catalog_items=7`、`inventory_balances=13`，连接 metadata 未变化，SQLite quick_check=ok、外键错误 0、服务 warning 0，未调用任何平台写 API。2026-09-03 本机相邻 33 passed，compileall、`git diff --check` 通过。该证据在源文件哈希、部署 overlay、授权连接、平台契约或服务配置变化前有效；不证明渠道可售量持久化、完整 WMS、生产业务商家、采购权限或任何写动作。
+- E-20260903-1688-detail-001：1688 订单/商品详情本地只读候选与反证。真实外部契约来源为 E-20260903-1688-api-smoke-001：订单详情返回顶层 result，商品详情返回顶层 productInfo。新增公开管理员 GET 详情接口并复用现有授权店铺连接；返回 PullRecord，订单敏感字段和未批准商品字段被脱敏/丢弃，缺失 productInfo 明确失败。实现前聚焦 2 failed，修复后 2 passed；相邻组合 32 passed，compileall、whitespace 通过。冻结文件 SHA-256 为 59a9b17a... / 291fe10a... / 441ff34b...。首轮独立 acceptance-auditor 最终为 INCOMPLETE：审查目标遗漏 config.py/service.py/api.py，复合快照没有公开 Alibaba 路由，且审查期间账本变化使快照失效；这不是实现 PASS，也不是当前工作树的最终 FAIL。该历史证据当时未部署且无 schema/配置/平台写动作；其“未部署”状态已由 E-20260903-1688-channel-availability-001 取代。
+- E-20260902-1688-011：5043656 新商家日常授权、真实订单只读响应与商品响应包裹修复。Cursor 侧边浏览器只读确认日常测试账号提示已消失，未输出或记录账号名、OAuth code、Token、memberId、Secret 或完整回调查询串；页面结果存在空白嵌入/旧时间戳错误，不能单独作为成功证据。服务器 live 库只读显示最新 alibaba_1688.oauth.authorized 事件为 2026-09-02 12:38 UTC（台北时间 20:38），最新 hosted 连接有凭证过期时间；连接总数仍为 2，说明是同店铺 upsert。最新连接订单 GET HTTP 200，limit=1 返回 1 条且 has_more=true；商品 GET 在旧工作区代码返回“invalid list payload”。受控结构探针只记录字段路径，确认真实成功 JSON 使用 result.pageResult.resultList，分页总数使用 result.pageResult.totalRecords，商品对象包含 saleInfo 等嵌套结构。新增回归测试先在旧代码红灯（1 failed，失败点为 _list_result），最小修改 _list_result 与 _total 后同一测试通过；随后 tests/test_alibaba_1688.py、tests/test_alibaba_icbu.py、tests/test_taobao.py、tests/test_api.py、tests/test_operations_modules.py 共 28 passed，目标 compileall、空白检查和 init_project_management.py --validate 通过。当前文件哈希：src/ecommerce_agent/alibaba_1688.py=e069c57076d02c059bab8b364c87a1a4f1bb0a2c32f541db3b02f32e7f3360e1，tests/test_alibaba_1688.py=56bf33fbd2d401f3ba17cb745b42846e79e1568afa64bf937b01e0f175fb6292。本轮未部署、未调用同步接口、未写业务表；商品 SKU 字段映射与真实同步仍是 INCOMPLETE。
+
+- E-20260902-1688-012：1688 商品价格口径、映射修复、部署与真实只读复核。官方商品模型定义确认 `skuInfos[].price` 为 SKU 报价，`priceRange`/`saleInfo.priceRanges` 为阶梯报价，`retailPrice` 为建议零售价，`consignPrice` 为分销基准价，`takeSamplePrice` 为拿样价；这些字段不能互换。先为“保留价格角色且不以 consignPrice 替代 sale_price”建立反例：旧映射聚焦测试按预期失败，修复后通过。当前实现仅以直接 `price` 写 `sale_price`，并在受控属性中保留其他价格字段和阶梯价；无直接价格或无 `skuInfos` 的商品继续显式拒绝，不填零、不伪造 SKU/库存。聚焦 1688、ICBU、API、Operations、Taobao 共 30 项测试通过，compileall 与 managed validate 通过。候选哈希 `src/ecommerce_agent/alibaba_1688.py=ec31150a95208940124e514c3356781a6388247c500e017262b6046489c7200c`；服务器发布目录 `1688-price-ranges-20260902-ec31150a` 中同文件哈希一致，服务自动重启后 active、health 200。服务器真实只读 GET：有效连接订单 200、商品 200，返回 20 个商品/391 个 SKU；35 个直接 price、391 个 consignPrice、20 个商品级阶梯价，内存映射 35 个 SKU、15 个商品拒绝（13 个缺直接价格、2 个缺 skuInfos）；连接状态为 `authorized:1,error:1`。业务表计数前后不变（orders 11、catalog 7、inventory 13），未调用 `/sync/*`。对一个缺直接价格商品的 `alibaba.product.get` 详情只读探针返回 200，但仍无直接 SKU price，仅有 consignPrice 与商品级阶梯价，因此不能安全写入现有单值 `sale_price`。真实 API/同步 Gate 仍为 INCOMPLETE；下一决策是扩展阶梯价领域模型，或由业务明确授权某一替代价格口径，确认前不执行商品同步。全程未输出或记录凭据、授权码、完整回调查询串或敏感原始商品值。
+
+- E-20260902-1688-013：在同一有效商家连接上完成订单只读映射演练。`GET /orders?limit=20` 返回 HTTP 200、20 条记录，20 条均可通过现有 `_order_upsert` 映射，0 条拒绝，并返回下一页游标；演练前后 `commerce_orders`、`catalog_items`、`inventory_balances` 计数均未变化，未调用同步接口。订单路径具备落库条件，但本轮按边界未执行写入；商品阶梯价口径仍是整体同步 Gate 的阻塞项。
+
+- E-20260902-1688-014：按用户确认的第 1 项完成 1688 订单全量同步。新日常测试入口由 Cursor 只读核验确认已越过授权确认，但 AgentLoop 嵌入结果页为空，服务器未新增授权记录；实际使用现有 1 条 `authorized` 商家连接。第 1–1,138 页共接收 22,756 条订单，全部映射并应用，0 条拒绝；`commerce_orders` 为 22,767，订单唯一性分组重复数 0。服务 active，health/ready 均 200，SQLite integrity 为 ok，外键错误 0；`catalog_items` 为 7、`inventory_balances` 为 13，最近日志未出现 `/sync/products`。本轮没有平台写接口调用。
+
+- E-20260902-ICBU-001：阿里国际站 512464 真实接入前的权限与请求契约核验。用户提供的控制台截图显示国际站基础权限包、服务市场权限包和 System API Permission Group 有效，普通交易订单及 ICBU 物流/快递权限包无效。2026-09-02 读取官方商品列表/详情页后确认公共参数 sign_method 当前列为 hmac 或 md5、商品接口需要授权会话。对现有 ICBU 客户端执行独立 HMAC-MD5 契约探针，修复前因发送 hmac-sha256 按预期失败，修复后通过；随后 tests/test_alibaba_icbu.py、tests/test_alibaba_1688.py、tests/test_api.py、tests/test_operations_modules.py、tests/test_taobao.py 共 27 项通过，compileall、git diff --check 和 managed 台账校验通过。现有 ICBU 连接器仍未做真实商家 OAuth、真实响应或领域同步，未查看/输出任何凭据，未调用写接口。该证据只证明官方请求契约与本地只读候选已对齐，不证明真实国际站卖家数据已接入。
+
+- E-20260902-1688-010：5043656 真实 API 401 与平台授权状态交叉核验。Cursor 只读打开官方 API 授权说明、订单/商品 API 页面及登录态「我的授权」；页面显示该 AppKey 的授权状态为「已取消」，当前工作台显示买家且未开店，应用控制台/已获能力入口对当前身份重定向为游客/注册页。官方订单页面写明授权会员必须等于订单卖家，商品列表页面为卖家查询自有商品；生产代码路径、方法和必填签名/令牌参数与页面一致。服务器只读复核显示 platform_connections=2、两条本地状态为 authorized、commerce_orders=11、catalog_items=7、inventory_balances=13；此前两家连接的订单/商品请求均得到上游 HTTP 401、error_code=401、Request need user authorized。本轮未查看或输出 Token、memberId、OAuth code、Secret，未修改平台、代码、配置、数据库或调用写接口；本地 1688/相邻平台/API/Operations 回归共 27 项通过。结论是本地授权记录已落后于平台授权状态，且当前测试身份不满足卖家视角接口；真实 API/同步仍为 INCOMPLETE。
+
+- E-20260901-1688-009：5043656 真实日常 OAuth 联调阻断。部署提交 `cfeceed`；回环
+  `GET /v1/integrations/alibaba-1688/capabilities` 200，`enabled=true`/`configured=true`，
+  `connections=0`/`authorized_connections=0`。日常测试链接为托管式 `/oauth/managed`，
+  查询键仅记录名称：`client_id`、`sceneId`、`_aop_timestamp`、`_aop_timestamp_diff`、
+  `_aop_signature`；`sceneId=daily_homepage`。无 `spm` 时平台文案为无法授权/需添加日常
+  测试账号；带 `spm` 时为签名错误。WEB authorize 出现授权页但 iframe 登录未完成。
+  未重复添加测试账号，未进入生产/消息通道/聚石塔/售卖，未调用真实订单或商品 API，
+  未同步落库。脱敏正文即本条；不保存 code、token、memberId 或完整查询串。
+  该证据不把真实 OAuth 或 API 写成通过。
+
+- E-20260901-1688-008：托管式修正后的独立结构复审。向新核验子智能体 Cicero
+  （agent `01a05b84-314e-79f1-b9b5-6917dd66e528`）提交只读审查，范围只含 E-007 所列
+  7 个冻结代码/配置/测试文件及其 SHA-256，明确托管式 caller、显式单租户边界、memberId
+  店铺键、WEB state 路径与真实 API 未验收状态。主智能体审查期间未编辑候选代码、未提交、
+  未部署或修改外部系统；唯一一个 60 秒有界等待窗口 `timed_out=true`，未取得 PASS、FAIL
+  或 finding。按 Design Integrity Review 规则结果为 INCOMPLETE，不继续轮询、不自动关闭、
+  不重启或再开 reviewer。该证据不证明代码无结构问题。
+
+- E-20260901-1688-007：1688 托管式授权最小实现与反证。新增默认空配置
+  `ALIBABA_1688_HOSTED_TENANT_ID`；同一 callback 的 state 改为可选。code+state 继续走
+  既有 WEB state 消费；code-only 仅在显式固定 tenant 时换票，并要求 getToken 返回
+  `memberId` 作为 store_id。连接 metadata 记录 web/hosted 模式，capabilities 不向其他 tenant
+  宣称 hosted 可用。红态命令 `.venv/bin/python -m pytest -q tests/test_alibaba_1688.py -k
+  'hosted_callback'` 为 2 failed，均因缺 state 返回 422；实现后同命令 2 passed，完整 1688
+  5 passed，相邻平台 15 passed，API/Operations 组合 19 passed。一次组合命令曾因误写不存在的
+  `tests/test_operations.py` 退出 4，改用仓库真实文件 `tests/test_operations_modules.py` 后 19
+  passed，属于命令路径错误而非产品失败。隔离 HTTP smoke：capabilities 200；未配置时
+  `callback?code=probe` 400；OpenAPI 参数为 code required、state optional；未访问平台。目标
+  compileall、`git diff --check` 均退出 0。冻结前代码范围聚合 SHA-256 为
+  `e222b979336b3fbb121f0faca4f5dfaefa5689eacf2668b2ddeb1f5da9d1218e`；关键文件分别为
+  `alibaba_1688.py=5b03f1d20ab484962ef72a243732fc36accb1a33d2539ef7c119e4eaaa523ba9`、
+  `alibaba_1688_api.py=7204772a9cf455dfc04db35a26ad5b83b5b42b80b3c27aff9cb725965390e01f`、
+  `config.py=31fe671b2c53c2855a45df8a2c492e64be8944365acf3cceffe473c139ad9b91`、
+  `tests/test_alibaba_1688.py=89074a8c77b31c6ea6b52359209d652b3df54c449d1b0716d7c5905336d3fb31`。
+  不豁免真实托管式回调形态、memberId 语义、多租户 SaaS 绑定、平台配额或生产 Gate。
+
+- E-20260901-1688-006：1688 托管式授权 Reality Gate 重开。Cursor 只读核对
+  `https://open.1688.com/doc/appJoin.htm`、`https://open.1688.com/doc/apiAuth.htm#4ever-bi-556`
+  与官方授权测试工具；未填密钥、未获取 code、未保存配置。Observed：托管式 302 原文与
+  时序图只列 `code`；生产托管式由应用市场发授权请求，ISV 只用传入 code 调 getToken；
+  `state` 只在 WEB/客户端 authorize 中出现且可选。托管式回跳未公开 memberId、aliId、
+  userId、site、sp、订购实例、appKey 或自定义绑定参数。getToken 后才返回 `memberId`
+  （会员接口 id）、`aliId` 与 `resource_owner`；换票前无法安全确定本系统 tenant/store。
+  对照代码，`src/ecommerce_agent/alibaba_1688_api.py` 当前把 state 定义为必填 query，
+  `Alibaba1688IntegrationService.complete_authorization` 也只接受已登记 state，故现候选对
+  托管式入口不兼容。最小可证伪修正为：code-only 仅在显式固定 tenant 配置存在时开放，
+  换票后要求 memberId 并用其作为 store_id；无固定 tenant 时不得调用平台。未改外部系统。
+
+- E-20260901-1688-005：1688 应用 5043656 回调/入口规则只读取证。通过已登录 Cursor
+  侧边浏览器读取应用详情、编辑基本信息和官方 `apiAuth.htm` / `appJoin.htm` /
+  `appCheck.htm`；精确入口为 `https://open.1688.com/develop/app/detail?appKey=5043656` 与
+  `https://open.1688.com/develop/app/edit?appkey=5043656`。Observed：日常使用入口为空；API
+  对接第 3 步要求配置日常授权回调地址，前端指向同一 `inlet` 输入；生产使用入口为无；
+  编辑页 `homepage` 标签为红星必填“回调地址”，只做非空/1–200 长度前端校验，帮助原文
+  要求服务市场售卖应用使用聚石塔内回调。OAuth 协议原文要求 WEB `redirect_uri` 域名与
+  注册回调域名匹配；未发现独立第三套 OAuth 回调输入。Unknown：服务端是否接受原始 IP、
+  `:8800`、是否要求 HTTPS/备案，以及完整 path 是否必须逐字一致；按硬边界未试填或保存。
+  `appSafe.htm` 正文为没有找到相关内容。未记录页面暴露的联系方式或其他个人信息；Cursor
+  最终明确未改任何文件。该证据在平台页面、前端校验、应用类型或配置状态变化前有效。
+
+- E-20260901-1688-004：1688 候选第二次独立结构复审。向既有核验子智能体 Locke 提交
+  只读审查，明确 Reality Gate、结构审查范围、无真实 API 结论和 8 个冻结文件的 SHA-256；
+  submission ID 为 `01a05b66-af8a-7651-b3c4-7cbdfb8ee60b`。主智能体在复审期间未编辑、
+  提交、部署或修改外部系统；三个连续 60 秒有界等待窗口均 `timed_out=true`，未取得 PASS、
+  FAIL 或可操作 finding。按 Design Integrity Review 规则结果为 INCOMPLETE，不自动关闭、
+  中断、重启或另开 reviewer。该证据只证明复审不可用，不证明代码无结构问题；候选代码、
+  审查范围或 reviewer 后续返回变化时需重新判定。
+
+- E-20260901-1688-003：1688 真实联通前环境核对与本地 HTTP smoke。只输出
+  `ALIBABA_1688_*` 的 configured/missing 状态，未读取或记录值；本机进程、`env.md` 和服务器
+  `.env` 均为 missing。服务器 `.deploy-revision` 为
+  `c3812313502493571f968c025969974893effd47`，部署源码不含 `alibaba-1688`，回环
+  capabilities/callback 均为 404；公网 `https://129.211.3.209:8800` 对两条路径均为 401，
+  Nginx 证据为 `/etc/nginx/snippets/yunpai-product-demo-locations.conf` 的 `location ^~ /v1/`
+  引入统一 Basic Auth。隔离临时目录启动当前候选后，`/health` 200、
+  `/v1/integrations/alibaba-1688/capabilities` 200 且 `enabled=false/configured=false`、伪造
+  state 的 callback 400，OpenAPI 精确包含 authorize、capabilities、callback、orders、products
+  及两条 sync，共 7 条路径；服务正常关闭并清理临时目录。
+  `.venv/bin/python -m pytest -q tests/test_alibaba_1688.py` 为 3 passed；将 `HEAD` 导出到隔离
+  目录后导入同一模块退出 1，错误为预期的 missing module。冻结前 1688 代码范围聚合
+  SHA-256 为 `aa9457716900f4c60687a9001a7f0ea0aa2b4e366e99891aba1c7aebf3da5af3`。
+  该证据不证明开放平台接受所选公网 host、真实 OAuth、真实空/非空响应、配额、字段映射、
+  周期同步或生产放行；部署代码、Nginx 边界、环境配置或候选代码变化后失效。
+
+- E-20260901-1688-002：1688 默认关闭的只读代码候选与文档同步。新增
+  `src/ecommerce_agent/alibaba_1688.py`（SHA-256
+  `72fb83e981896cbe7e0b1a3fe702afcb8bebf4b87ebc95d3907a291de5a1c16b`）、
+  `src/ecommerce_agent/alibaba_1688_api.py`
+  （`0f476c2e4e9f44ca12795ace9bf36740d17a149834f931e8863ae903fd57a6c2`）和
+  `tests/test_alibaba_1688.py`
+  （`7b0fd44e82b8db6c7c87c691623fcde552191a7829f9aedce5e3b18e1d3adaa8`），
+  并接入现有 Settings / AgentService / FastAPI。测试首次因模块不存在退出 2；实现后聚焦
+  3 passed，相邻 1688+ICBU+Taobao 13 passed，1688+API+Operations+Taobao API+limits
+  17 passed。订单样本中的敏感联系方式未进入规范化事件快照，未授权店铺返回 409，刷新
+  传输失败将连接置为 error。未运行真实 OAuth 或真实 API。最终本地总资料
+  `/Users/luckye/Desktop/yunpai-docs/电商平台入驻/1688/00_完整资料.md` SHA-256 为
+  `4506f32b4816e8c8ed32d61d14842cb2cf512d3d6cdbce737bf3659a239a7793`，飞书文档
+  `WRPOddlBUoQh05xx3A5cojhgnqd` 已覆盖并插入脱敏截图，最终 revision 33。结构复审 reviewer
+  超时，因此 review 结果是 INCOMPLETE 而非 PASS。代码、测试、平台协议或文档 revision
+  变化后本证据失效。
+
+- E-20260901-1688-001：1688 开放平台实施前取证与方向门。使用已登录官方控制台只读核对
+  `open.1688.com` 的已购方案、应用详情、OAuth、签名和订单/商品 API 文档；未查看密钥、
+  未授权、未配置、未订购、未提交资质或调用真实 API。脱敏事实文档位于
+  `/Users/luckye/Desktop/yunpai-docs/电商平台入驻/1688/05_1688_开发前置事实补全_20260901.md`
+  （SHA-256 `d38ebcbeb52fa2a3d9f9574802e744e292f6d29580e2b2e05dac58b430614bb5`），
+  9034901 空关联方案截图位于同目录
+  `evidence/20260901-9034901-associated-solutions-empty.png`
+  （SHA-256 `9b061e457800d18ca6dec6f7cf2e1693138c6765d7a28d643ae19fd223da35f7`）。
+  证据在平台协议、应用方案状态或文件内容变化前有效；不证明真实商家授权、真实响应、
+  生产配额、字段完整性或写操作安全。
+
+- E-20260830-002：金蝶数据导出与适配示例准备。基于代码对象
+  cfeceeda38789eafe73676362c8821787aa94ad0 直接读取运行时 REPORT_ADAPTERS、
+  M7-R readiness policy 与模块注册表，生成
+  outputs/01a05270-b92e-7e83-9632-1fd0bd6a705b/金蝶数据导出与云湃适配示例_v1.xlsx
+  （43,214 bytes，SHA-256
+  e056f477098b1162d29db3755bd27a4be5d8935be8d1e872dbeebb3ece67118c）。工作簿以
+  artifact-tool 生成并逐页渲染复核；导入反证使用项目 .venv 调用真实
+  ReadonlyReportIngestionService。前态因同水位订单/物流载荷冲突和 Excel 日期序列的
+  敏感值误判退出 1；仅修改示例日期表示及验证水位后，同一验证退出 0：
+  catalog 4、inventory 5、order 8、fulfillment 4、operations 1、marketing 6、refund 2、
+  settlement 2 行全部通过且 issue 为 0，readiness 可见 8/8 域、4 个明确缺口，边界仍为
+  read-only/no-model/no-platform-write。工作簿重新导入检查得到 13 个工作表，关键范围值完整，
+  公式错误扫描 0 命中；视觉复核覆盖所有工作表。用户可见工作簿全局搜索确认“黄色”、
+  “对方填写”、“请填写实际列名”、旧字段映射表名和旧接入参数表名均为 0 命中，同时明确
+  出现“无需修改原始表头”“不用填写字段映射模板”和“导出字段参考（不用填写）”。独立行为
+  验收另以工作簿外部哨兵修改商品标题并从公共 CatalogService 读回，证明结果依赖输入；跨店
+  行被标记 cross_store_row，坏店铺表头的 4 行全部 rejected，经营日报 XLSX 按当前格式契约
+  拒绝，候选文件哈希保持不变。
+  证据在运行时注册表、M7-R 契约或工作簿内容变化前有效；真实金蝶适配仍等待脱敏原始样本，
+  不得从本证据推断已兼容具体版本。
+
 - E-20260830-001：公网产品 Demo 共享密码认证切换。先记录旧 Cookie 门禁的匿名 403 与旧入口 302/Set-Cookie 红态，备份 Nginx 路由、Cookie map、密码文件和旧受限凭据；再将产品页面、健康端点和 `/v1/*` 改为统一 Basic Auth，停用旧 map/access/logout 路径，运行 `nginx -t` 与 reload。第一次认证烟测发现密码目录缺少 Nginx worker 的搜索权限，日志明确为 `Permission denied`；将目录设为 710、保留密码文件 640 `root:www-data` 后，同一烟测恢复。服务器回环和本机公网两组探针均得到匿名 401、认证后页面/API/health/ready 200、旧入口 404，`/` 与 `/app` 仍跳转 `/admin`，8767 未对公网开放；不记录共享密码或 hash。
 
 - E-20260828-006：统筹 Agent 与多模态 Demo 的最终整合、提交、GitHub 推送和公网发布。
@@ -991,10 +1279,34 @@
 | E-20260726-001 | 2026-07-26 | 渠道适配器 SDK 契约（能力版本/验签/防重放/标准信封/上下文/去重/回放/发送/回执/错误分类/限流声明与执行）双适配器测试、跨渠道运行时/注册表/平台隔离/API 专项、渠道相关 71 项回归、全量 pytest、channel_sdk branch coverage | 0 | 0.24.0；schema v23 | 14 项契约用例 × taobao/mockchat 全通过；mockchat 采用不同验签协议仍复用同一入站落库/草稿/归属/outbox；`ChannelAgentRuntime` 经注册表处理 mockchat 任务（send/handoff/blocked/rejected）；outbox claim 平台隔离；`GET /v1/channels/adapters` 鉴权可用；channel_sdk 各模块分支覆盖 90–100%；全量 252 通过，另 14 项为 schema v23 后 migrations/backup 期望未同步的既有失败（独立任务修复，与本功能无关） | `src/ecommerce_agent/channel_sdk/`、`tests/test_channel_sdk_contract.py`、`tests/test_channel_sdk_runtime.py`、`src/ecommerce_agent/channel_agent.py`、`src/ecommerce_agent/outbox.py` | channel_sdk 契约、信封/回执/错误分类、注册表、入站落库器、outbox 平台隔离或双适配器实现变化前 |
 | E-HIST-001 | 历史记录 | 项目测试与离线评测 | 历史通过 | `0.5.0` | 47 tests、20/20 offline eval | `docs/project-ledger.md`、`tests/` | 代码变化后过期，完成声明前必须重跑 |
 
+## Gate 历史追加记录
+
+- 2026-09-03（E-20260903-1688-auth-standard-oauth-001）：Cursor 使用当前卖家子账号和开发者 ISV 会话做标准 OAuth 只读探针。5043656 的 /oauth/authorize 页面可达，但显示登录表单、会员信息权限和最终“授权并登录”按钮；当前子账号登录态未自动复用。未输入密码或其他敏感信息，未点击授权/同意/确认，未修改账号、配置、Token、代码、数据库或部署。结论：标准 OAuth 入口也不能替代卖家主账号授权；真实同步继续 INCOMPLETE。
+
+- 2026-09-03（E-20260903-1688-channel-persistence-deploy-001）：A1 v40 服务器部署与授权阻塞核验。旧 v39 程序在维护窗口创建并验证停机加密备份；基于服务器当前 A0 状态建立不可变 release，替换 A1 四个运行文件，compileall 和隔离 v40 迁移探针通过；切换后线上 schema=40、两张渠道可售量表存在，health/ready=200，A1 OpenAPI 路由存在，v40 post-deploy 加密备份验证通过。线上业务表计数保持订单 22,767、商品 7、WMS 库存 13，渠道可售量表为 0 行，未调用同步或平台写 API。Cursor 只读核验显示卖家子账号尚未获 5043656 应用授权，授权页没有最终同意按钮；真实持久化 smoke 因此保持 INCOMPLETE。
+
+- 2026-09-03（E-20260903-1688-channel-persistence-local-001）：A1 v40 本地代码门通过。用户授权后在当前非 `main` 分支完成占号和实现；独立渠道可售量两表、真实商品列表批量同步、查询、D-014 版本门、product/SKU 分层、旧 SKU 清除、tenant/store 隔离和 1688 紧凑时间规范化均通过本机证据。v40 加密备份/验证/恢复保留两条记录，WMS 表保持零写入。独立验收子智能体在有界窗口内超时，不能签署 PASS；服务器部署和真实持久化 smoke 仍未完成，任何平台写动作继续 BLOCKED。
+
+- 2026-09-03（E-20260903-1688-channel-persistence-red-001）：A1 实施前对现有数据层做最小可证伪检查。M7-R readonly 表只承担证据与隔离，实际事实仍经领域 service；WMS `inventory_balances` 不能承载 `amountOnSale`。当前目标同步路由 404、两张目标表缺失，证明持久化尚未实现；安全方向必须是独立 v40，而不是旧表/metadata/fallback。因当前非 main 分支修改 `CONTRIBUTING.md` 需要用户明确授权，保留红态并等待授权。
+- 2026-09-03（E-20260903-1688-channel-availability-001）：将订单详情、商品详情和单商品渠道可售量接口发布到服务器，并用现有真实 authorized 商家连接完成 product-only 与 SKU 商品 smoke。availability 仅投影真实 `amountOnSale`，商品级与 SKU 级用 scope 分离，缺失/非法/负数 fail closed，不广播、不相加，不返回 WMS 字段；capability 明确 persistence=false 和 inventory_read=false。发布前后业务表与连接 metadata 均未变化，SQLite、服务健康和日志检查通过；本机相邻 33 passed、compileall、whitespace 通过。A0 实时读取由“候选”升级为“已部署真实技术联调通过”，A1 独立持久化、完整独立复审、生产业务商家、真实 WMS/ERP 与采购权限仍为 INCOMPLETE。
+- 2026-09-03（E-20260903-1688-detail-001）：基于同日真实服务器 200 响应契约，为 5043656 新增订单详情和商品详情的本地只读候选。公开管理员接口分别为 GET /v1/integrations/alibaba-1688/orders/{order_id} 与 /products/{product_id}；均复用现有 tenant/store authorized 连接，不刷新 token、不写业务表。订单解析真实 result 包裹并复用脱敏函数，联系人、电话、地址和 nativeLogistics 不返回；商品解析真实顶层 productInfo，保留 amountOnSale、invReduceType 与 direct/consign/tiered 价格角色。旧代码聚焦反证为 2 failed（路由 404、get_product 不存在），修复后同一聚焦 2 passed，1688+ICBU 19 passed，1688/ICBU/API/Operations/Taobao 相邻 32 passed，目标 compileall 与 whitespace 通过。代码哈希：alibaba_1688.py=59a9b17a...、alibaba_1688_api.py=291fe10a...、test_alibaba_1688.py=441ff34b...；无 schema、配置、部署或平台写动作。独立 acceptance-auditor Bernoulli（01a0639c-0253-7143-a79d-f53b0dd12834）最终返回 INCOMPLETE：首轮冻结仅含三个详情文件，遗漏当前工作树中负责配置、服务实例化和路由注册的 config.py/service.py/api.py，且审查期间项目账本变化；其 HEAD + 三文件快照无 Alibaba 路由，不能形成 PASS 或最终 FAIL。下一步只允许一次完整依赖范围的定向复审。
+- 2026-09-03（E-20260903-1688-api-smoke-001）：用开发者控制台与服务器现有未过期 authorized 连接完成 5043656 四接口只读复核；未刷新 token、未写库、未调用任何平台写 API，临时脱敏脚本执行后删除。订单列表/详情、商品列表/详情均 HTTP 200；订单 pageSize=5 返回 5/22,756，商品 pageSize=5 返回 5/21,196。首个商品样本 84/84 SKU 有 amountOnSale 与 consignPrice、0/84 有 direct price，商品级 priceRanges 1 档，证明渠道可售量可真实接入但不能把代销价/最低阶梯价冒充 sale_price。9034901 的 1668600046917 仍为 pending/审核中，实际生效日期为空；采购方案 1612505416731 仍因角色不符无法订购。代码/测试基线 17 passed；本地实施文档 SHA-256 94cfa284...，飞书修订版 39；证据位置为本地 07 文档、docs/evidence/20260903-9034901-solution-1668600046917-ordered.png 与 Cursor 只读会话。本证据在应用方案、授权连接、token、API 契约或样本变化前有效，不证明生产商家、完整 WMS、采购权限或平台写动作。
+- 2026-09-03（E-20260903-1688-warehouse-procurement-001）：完成 1688 阶梯价格、仓储与采购真实能力 Gate。官方页面确认当前已购订单方案只提供本店商品/订单及可售量，不含 warehouse/on_hand/reserved/inbound 或库存流水读取；采购方案 1612505416731 包含预览、快速下单、买家订单/物流/退款、收银台链接、免密与采购金接口，但当前 5043656 未获权且需要采购服务商资质/买家授权。现有库存、预测和 advisory 补货代码可复用；生产仓储仍缺真实 WMS/ERP 来源，自动下单与付款继续 BLOCKED。
+- 2026-09-02（E-20260902-1688-014）：订单全量同步完成，22,756 条全部映射/应用，唯一性、SQLite 完整性和服务健康检查通过；商品与库存未写入。新授权入口未新增连接，旧连接仍为 error；商品阶梯价/无 SKU 口径仍使整体 1688 同步 Gate 保持 INCOMPLETE。
+- 2026-09-02（E-20260902-1688-013）：订单只读映射 20/20 通过且返回下一页，业务表未变化；订单路径可在单独确认后落库。商品阶梯价和无 SKU 商品仍未解除，G-ALIBABA-1688-001 继续保持 INCOMPLETE。
+- 2026-09-02（E-20260902-1688-012）：价格字段口径已核实，商品映射修复已部署并完成真实订单/商品只读复核；直接价格可映射部分通过，阶梯价/无 SKU 部分仍阻塞单值目录同步。连接刷新失败已 fail closed，业务表未变化。G-ALIBABA-1688-001 保持 INCOMPLETE，不以本条替代真实同步与生产 Gate。
+- 2026-09-02（E-20260902-1688-011）：本轮新鲜证据显示最新商家授权已记录，订单 GET 已返回 200；商品真实响应包裹已在当前工作树修复，但修复尚未部署，商品 SKU 映射与同步仍未验收。原 Gate 行保留其当时状态，不以本条历史记录替代全链路 Gate 结论。
+
 ## Gate 记录
 
 | Gate ID | 日期 | Gate | 对象 | 结果 | 证据 ID | 豁免与确认人 |
 |---|---|---|---|---|---|---|
+| G-1688-CHANNEL-PERSISTENCE-SERVER-001 | 2026-09-03 | 1688 A1 渠道可售量服务器部署 Gate | v39→v40 迁移、A1 release、健康/完整性、A1 路由与真实授权前置条件 | PASS（首个真实分页已完成并通过同页幂等、持久化读回和隔离检查）；INCOMPLETE（全量回补、增量/对账、生产商家、WMS/ERP 和采购权限仍未验收） | E-20260903-1688-channel-availability-persistence-001 | 不豁免全量商品同步、生产业务账号、WMS/ERP、采购权限或平台写动作 |
+| G-1688-CHANNEL-PERSISTENCE-LOCAL-001 | 2026-09-03 | 1688 A1 渠道可售量本地持久化 Gate | 当前非 `main` 分支的 v40 迁移、`channel_availability_*` 两表、1688 真实商品列表批量同步与查询；D-014 来源版本、幂等、冲突、替换和租户/店铺隔离 | INCOMPLETE（本地候选已实现；缺少稳定来源时间的 P1 已按红→绿证据修复，1688/A1 聚焦 23 passed、全量 1542 passed/1 skipped；独立 acceptance-auditor 原始审查未签发 PASS，且候选尚未合并、部署或完成服务器真实持久化 smoke） | E-20260903-1688-channel-persistence-fix-001 / E-20260903-1688-channel-persistence-local-001 | 不豁免独立复审、服务器迁移/恢复、真实持久化 smoke、生产商家、WMS/ERP、采购权限或任何平台写动作 |
+| G-1688-WAREHOUSE-PROCUREMENT-001 | 2026-09-03 | 1688 仓储与自动采购 Reality Gate | 当前仓储/预测/补货代码；订单方案 1626059919957 的真实商品可售量；ICBU 仓编码库存候选；采购方案 1612505416731 的预览、下单、买家订单/物流/退款、收银台、免密和采购金接口；当前角色/应用权限与生产证据边界 | PASS（5043656 商品列表/详情和已发布 availability 真实读取，商品/SKU `amountOnSale` 与 `invReduceType` 可进入独立 channel_available；现有库存风险/预测/补货底座可复用）；INCOMPLETE（渠道可售量独立持久化、真实生产商家、真实 WMS/ERP 库存样本、source offer/pricing、采购服务商资质/方案订购/买家 OAuth）；BLOCKED（用 amountOnSale 冒充 WMS、当前 5043656 调采购 API、未审批自动下单或付款） | E-20260903-1688-warehouse-procurement-001 / E-20260903-1688-api-smoke-001 / E-20260903-1688-channel-availability-001 | 不豁免真实业务账号、仓储字段口径、SKU/料号/供应商映射、采购方案业务量门槛、写操作幂等/读回/补偿、财务审批、资金限额、双人授权、长稳或 G-PROD-001 |
+| G-ALIBABA-1688-001 | 2026-09-03 | 1688 API 接入 Reality Gate | 官方签名/OAuth、5043656 托管式授权、已购订单方案、订单/本店商品真实响应；公开 HTTP 路由；服务器授权连接、详情与 availability 真实只读 smoke | PASS（5043656 订单列表/详情、商品列表/详情均 HTTP 200；订单全量 22,756 已同步；订单/商品详情和 availability 已发布；product-only 与 SKU 商品 smoke 通过；商品真实 envelope、amountOnSale、invReduceType、consign/direct/tiered 字段边界已测；相邻 33 passed）；INCOMPLETE（首轮独立验收冻结范围不完整、authorized 连接与侧边浏览器账号的登录名映射、渠道可售量/阶梯价独立持久化、生产业务商家、9034901 审核与聚石塔生产回调）；BLOCKED（任何平台写动作） | E-20260901-1688-001/002/003/004/005/006/007/008/009/010；E-20260902-1688-011/012/013/014；E-20260903-1688-api-smoke-001；E-20260903-1688-detail-001；E-20260903-1688-channel-availability-001 | 不豁免多租户 SaaS 绑定、生产商家身份、配额、隐私、独立复审、聚石塔、长稳、写操作或 G-PROD-001 |
+| G-ALIBABA-ICBU-001 | 2026-09-02 | 阿里国际站 ICBU API 接入 Reality Gate | 应用 512464 的基础/服务市场/System API 权限观察；官方商品列表/详情请求契约；OAuth、商品、SKU 库存只读候选；真实卖家授权与领域同步 | PASS（只读候选与官方 sign_method 契约对齐、聚焦/相邻回归通过）；INCOMPLETE（无真实 Alibaba.com 卖家 OAuth、无真实商品/库存响应、domain_sync 未实现、普通交易订单和物流权限无效） | E-20260902-ICBU-001 | 不豁免真实卖家授权、字段映射、真实空/非空响应、库存语义、配额、领域同步、平台写操作或生产 Gate |
+| G-KINGDEE-IMPORT-001 | 2026-08-30 | 金蝶真实数据接入 Reality Gate | 当前运行时八类 generic-cn-v1 报表契约、对外导出示例、受控导入反证；真实金蝶产品/版本/账套/表头/粒度/口径/脱敏样本 | INCOMPLETE（真实适配）；示例工作簿与当前通用契约验证通过，等待对方真实脱敏导出后建立专用 mapping version | E-20260830-002 | 不豁免真实金蝶兼容、字段口径确认、采购/运输/整备缺口、业务签收、真实经营结论、公开上传入口或 G-PROD-001 |
 | G-UNIFIED-AGENT-DEMO-003 | 2026-08-30 | 统筹 Agent 公网共享密码认证门 | Nginx TLS :8800；产品页面、健康端点与 /v1/* 统一 Basic Auth；旧 Cookie map/access/logout 旁路停用；127.0.0.1:8767 回环；AgentLoop 独立域名 | 通过；匿名 401、认证后页面/API/health/ready 200、旧入口 404、公网 8767 未开放；仅为受鉴权 virtual Demo 访问门 | E-20260830-001 | 不豁免真实平台渠道/数据/写权限、媒体异机灾备、长稳、正式独立 WP5 或 G-PROD-001；共享密码不写入台账、GitHub、飞书或截图 |
 | G-UNIFIED-AGENT-DEMO-002 | 2026-08-29 | 统筹 Agent 历史会话横向滚动修复门 | 提交 c3812313；`.chat-shell` 有限宽度；`#conversationList` 可横向滚动；公网最右侧历史卡片可见；systemd/Nginx/health/ready | 通过；仅追加验收已发布 virtual Demo 的 UI 修复 | E-20260829-002 | 不豁免真实平台渠道/数据/写权限、媒体异机灾备、24/72 小时长稳、正式独立 WP5 或 G-PROD-001；访问凭据不写入台账 |
 | G-UNIFIED-AGENT-DEMO-001 | 2026-08-29 | 统筹 Agent 与多模态 Demo 公网发布门 | 提交 845a0f5；/ 与 /app 进入 /admin；/admin 直接粘贴与跨轮非权威 Vision；/admin/advanced 同库高级后台；/customer-test Vision/Polish；商品、订单、库存、营销、利润、流量、预测、库存计划、生命周期建议与审计；持久会话与 verified_final SSE；Nginx/systemd/备份/端口隔离 | 通过；可交付的受鉴权 virtual 产品测试 | E-20260829-001 | 不豁免真实平台渠道/数据/写权限、完整媒体异机灾备、24/72 小时长稳、正式独立 WP5 或 G-PROD-001；访问凭据不写入台账 |

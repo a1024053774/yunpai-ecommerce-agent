@@ -51,8 +51,12 @@ class Database:
     # WP5 验收修复最终形态已并入本分支 v36（复合主键 + stale + 内容不可变触发器）。
     # v39（本分支）：item 隔离写路径。库存按 item 共存；订单保持一个平台订单
     # 一个聚合根，商品归属下沉到 commerce_order_lines.item_id。
+    # v40（本分支）：渠道可售量当前事实。独立保存商品级/SKU 级 available_qty，
+    # 不把 amountOnSale 写入 WMS inventory_balances。
+    # v41（本分支）：连接器同步 checkpoint/watermark。按店铺与窗口身份恢复分页，
+    # 不改写已执行的 v40 渠道可售量表。
     # 防同名方法静默覆盖事故，见 CONTRIBUTING「Schema 版本号占用登记」。
-    SCHEMA_VERSION = 39
+    SCHEMA_VERSION = 41
 
     def __init__(self, path: Path):
         self.path = path
@@ -204,9 +208,16 @@ class Database:
             if 39 not in applied:
                 self._apply_v39(conn)
                 conn.execute("INSERT INTO schema_migrations VALUES (39, ?)", (utc_now(),))
+            if 40 not in applied:
+                self._apply_v40(conn)
+                conn.execute("INSERT INTO schema_migrations VALUES (40, ?)", (utc_now(),))
+            if 41 not in applied:
+                self._apply_v41(conn)
+                conn.execute("INSERT INTO schema_migrations VALUES (41, ?)", (utc_now(),))
             # MERGE-GATE：v36 已含 M9-R 生命周期最终形态（复合主键 + stale + 内容不可变
             # 触发器）。v37/v38 归 M10-R（群公告占号 08-20），本分支不再占用。
-            # v39 由本分支占用（库存重建 + 订单行 item 归属）。
+            # v39 由本分支占用（库存重建 + 订单行 item 归属）；v40 为渠道可售量事实；
+            # v41 为连接器同步 checkpoint，不得并入已执行的 _apply_v40。
             conn.execute(f"PRAGMA user_version = {self.SCHEMA_VERSION}")
             self._validate_schema(conn)
 
@@ -3690,6 +3701,151 @@ class Database:
         )
 
     @staticmethod
+    def _apply_v40(conn: sqlite3.Connection) -> None:
+        """v40：渠道可售量当前事实。
+
+        快照保存一个商品在某个来源版本下的共同元数据；记录保存该快照中的
+        商品级或 SKU 级数量。两张表不复用 WMS inventory_balances，也不把
+        商品级数量广播到 SKU。
+        """
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS channel_availability_snapshots (
+                snapshot_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                connector_id TEXT NOT NULL,
+                store_id TEXT NOT NULL,
+                source_product_id TEXT NOT NULL,
+                semantic_role TEXT NOT NULL
+                    CHECK(semantic_role = 'channel_available'),
+                unit TEXT,
+                inventory_reduce_type TEXT,
+                source_id TEXT,
+                source_updated_at TEXT NOT NULL,
+                observed_at TEXT NOT NULL,
+                payload_hash TEXT NOT NULL CHECK(length(payload_hash) = 64),
+                record_count INTEGER NOT NULL CHECK(record_count >= 1),
+                version INTEGER NOT NULL DEFAULT 1 CHECK(version >= 1),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(tenant_id, snapshot_id),
+                UNIQUE(tenant_id, connector_id, store_id, source_product_id),
+                UNIQUE(
+                    tenant_id, snapshot_id, connector_id, store_id, source_product_id
+                )
+            );
+            CREATE INDEX IF NOT EXISTS idx_channel_availability_snapshots_scope
+                ON channel_availability_snapshots(
+                    tenant_id, connector_id, store_id, source_product_id,
+                    source_updated_at DESC
+                );
+
+            CREATE TABLE IF NOT EXISTS channel_availability_records (
+                record_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                snapshot_id TEXT NOT NULL,
+                connector_id TEXT NOT NULL,
+                store_id TEXT NOT NULL,
+                source_product_id TEXT NOT NULL,
+                semantic_role TEXT NOT NULL
+                    CHECK(semantic_role = 'channel_available'),
+                scope TEXT NOT NULL CHECK(scope IN ('product', 'sku')),
+                source_sku_id TEXT,
+                warehouse_code TEXT,
+                available_qty TEXT NOT NULL,
+                source_updated_at TEXT NOT NULL,
+                payload_hash TEXT NOT NULL CHECK(length(payload_hash) = 64),
+                version INTEGER NOT NULL CHECK(version >= 1),
+                created_at TEXT NOT NULL,
+                UNIQUE(tenant_id, record_id),
+                FOREIGN KEY(
+                    tenant_id, snapshot_id, connector_id, store_id, source_product_id
+                ) REFERENCES channel_availability_snapshots(
+                    tenant_id, snapshot_id, connector_id, store_id, source_product_id
+                ),
+                CHECK(
+                    (scope = 'product' AND source_sku_id IS NULL)
+                    OR
+                    (scope = 'sku' AND source_sku_id IS NOT NULL
+                        AND length(trim(source_sku_id)) > 0)
+                ),
+                CHECK(available_qty <> ''),
+                CHECK(source_updated_at <> '')
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_channel_availability_record_key
+                ON channel_availability_records(
+                    tenant_id, connector_id, store_id, source_product_id, scope,
+                    COALESCE(source_sku_id, ''), COALESCE(warehouse_code, '')
+                );
+            CREATE INDEX IF NOT EXISTS idx_channel_availability_records_lookup
+                ON channel_availability_records(
+                    tenant_id, connector_id, store_id, source_product_id,
+                    scope, source_sku_id
+                );
+            """
+        )
+
+    @staticmethod
+    def _apply_v41(conn: sqlite3.Connection) -> None:
+        """v41：连接器同步 checkpoint / watermark。
+
+        单一边界表按 tenant/connector/store/resource 与稳定窗口身份恢复分页。
+        resource 不编码店铺。full 窗口起止为空串，避免 SQLite UNIQUE 把 NULL
+        当成互异。不改写 v40 渠道可售量表。
+        """
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS connector_sync_checkpoints (
+                checkpoint_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                connector_id TEXT NOT NULL,
+                store_id TEXT NOT NULL,
+                resource TEXT NOT NULL,
+                window_kind TEXT NOT NULL
+                    CHECK(window_kind IN ('full', 'incremental')),
+                window_start TEXT NOT NULL DEFAULT '',
+                window_end TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL
+                    CHECK(status IN ('running', 'failed', 'complete')),
+                cursor TEXT NOT NULL DEFAULT '',
+                watermark TEXT,
+                watermark_kind TEXT
+                    CHECK(
+                        watermark_kind IS NULL
+                        OR watermark_kind IN ('source_time', 'exhausted')
+                    ),
+                upstream_total INTEGER,
+                pages_completed INTEGER NOT NULL DEFAULT 0
+                    CHECK(pages_completed >= 0),
+                records_received INTEGER NOT NULL DEFAULT 0
+                    CHECK(records_received >= 0),
+                records_applied INTEGER NOT NULL DEFAULT 0
+                    CHECK(records_applied >= 0),
+                last_error TEXT,
+                last_error_kind TEXT,
+                lease_owner TEXT,
+                lease_expires_at TEXT,
+                row_version INTEGER NOT NULL DEFAULT 1 CHECK(row_version >= 1),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(
+                    tenant_id, connector_id, store_id, resource,
+                    window_kind, window_start, window_end
+                )
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_connector_sync_checkpoints_identity
+                ON connector_sync_checkpoints(
+                    tenant_id, connector_id, store_id, resource,
+                    window_kind, window_start, window_end
+                );
+            CREATE INDEX IF NOT EXISTS idx_connector_sync_checkpoints_lease
+                ON connector_sync_checkpoints(
+                    tenant_id, connector_id, store_id, status, lease_expires_at
+                );
+            """
+        )
+
+    @staticmethod
     def _ensure_column(conn: sqlite3.Connection, table: str, column: str, declaration: str) -> None:
         columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
         if column not in columns:
@@ -4268,6 +4424,28 @@ class Database:
                 "from_state", "to_state", "actor", "occurred_at",
                 "payload_hash",
             },
+            "channel_availability_snapshots": {
+                "snapshot_id", "tenant_id", "connector_id", "store_id",
+                "source_product_id", "semantic_role", "unit",
+                "inventory_reduce_type", "source_id", "source_updated_at",
+                "observed_at", "payload_hash", "record_count", "version",
+                "created_at", "updated_at",
+            },
+            "channel_availability_records": {
+                "record_id", "tenant_id", "snapshot_id", "connector_id",
+                "store_id", "source_product_id", "semantic_role", "scope",
+                "source_sku_id", "warehouse_code", "available_qty",
+                "source_updated_at", "payload_hash", "version", "created_at",
+            },
+            "connector_sync_checkpoints": {
+                "checkpoint_id", "tenant_id", "connector_id", "store_id",
+                "resource", "window_kind", "window_start", "window_end",
+                "status", "cursor", "watermark", "watermark_kind",
+                "upstream_total", "pages_completed", "records_received",
+                "records_applied", "last_error", "last_error_kind",
+                "lease_owner", "lease_expires_at", "row_version",
+                "created_at", "updated_at",
+            },
         }
         tables = {
             row[0]
@@ -4290,6 +4468,9 @@ class Database:
             "uq_inventory_balances_item",
             "uq_inventory_balances_shared",
             "idx_commerce_order_lines_item",
+            "uq_channel_availability_record_key",
+            "idx_channel_availability_records_lookup",
+            "uq_connector_sync_checkpoints_identity",
         ):
             if conn.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='index' AND name=?",

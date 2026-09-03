@@ -33,8 +33,23 @@
   waterline 正常重放保持 idempotent，而其它同水位载荷差异仍按 D-014 冲突；退款来源未知时
   `net_sales` 不再以 gross 冒充正式净销。应用仍未单独升包，最终 PR Head 必须是
   `2e7fa58` 的后代；这不得视为已发布 schema 或正式独立验收通过，见 E-20260825-001。
+- 当前非 main 工作树的 1688 A1 候选使用 schema **v41**：在已执行的 v40 渠道可售量表之上，
+  additive `_apply_v41` 新增唯一边界表 `connector_sync_checkpoints`
+  （tenant/connector/store/resource + full/incremental 窗口身份、cursor、watermark、
+  租约/版本）。不得把新表并入 `_apply_v40`。v40→v41 为前向迁移；灾备 manifest 仍精确
+  匹配当前 schema，升级后必须立即生成并验证新的全量备份，v40 归档只能由匹配旧 schema
+  的程序在隔离环境恢复。服务器当前仍为 v40 overlay
+  release 1688-a1-v40-82c16d0，尚未执行 v41。应用包版本仍为 `0.30.0`，候选未合并。
+  证据：E-20260903-1688-a1-p1-checkpoint-001。
 - 占号状态：PR #10 已合入 main `1906365`，schema **v33** 在 `main`（knowledge_key 唯一索引 + retrieval_logs）。F-322 **v32** 已在 main。PR #11 的 `_apply_v31`（workspace 会话表）仍未进入 `main`。M7-R WP1 的 **v34** 与 WP3 的 **v35** 均已在 `main`；M9-R WP3 的 **v36** 仅完成占号，运行迁移未合并。schema 迁移占号以 `CONTRIBUTING.md` 第 9 节“Schema 版本号占用登记”为唯一权威来源，本文不复制“下一空闲号”。
-- 最后更新：2026-08-29
+- 2026-09-03 18:32–18:39（Asia/Taipei）重试记录：小火箭新增 DOMAIN,www.agentloop.top,DIRECT 后，官方原生 UI 能生成新入口且卖家页不再显示授权墙，但本机 DNS 仍是 fake-IP 198.18.0.73，iframe transferSize=0/status=null，服务器无新 callback 或未过期授权；A1 两表仍为空。需先配置 fake-IP 排除/真实 DNS 例外或切换 Redir-Host，再重试。证据：E-20260903-1688-oauth-transport-002。
+- 2026-09-03 19:02–19:27（Asia/Taipei）成功重试并完成 A1 首个真实分页：关闭加密 DNS 后 hosted callback HTTP 200，新增 1 条未过期 authorized 连接；真实订单/商品只读探针 HTTP 200，A1 limit=20 首次写入 20 个快照/411 条记录（20 商品级、391 SKU 级），同页重跑 applied=0、idempotent=20，持久化 GET 411 条。订单和 WMS 库存未变化；全量回补、增量水位和对账仍未完成。证据：E-20260903-1688-channel-availability-persistence-001。
+- 占号状态补充：当前分支已按 `CONTRIBUTING.md` 登记并实现 1688 A1 的 **v40** 与 P1 **v41**；阶梯价格 Source Offer / Pricing 域不得复用这两号，待模型冻结后另行占用后续空闲版本。
+- 最后更新：2026-09-03（`cursor_invalid` 仅限 `_page`/调用方 cursor；其它拉取 `Alibaba1688Error` 保留 resume cursor）
+
+- 2026-09-03 A1 收口：独立验收发现的来源版本缺口已修复。可售量持久化只接受稳定可解析的 `PullRecord.source_version` 时间戳，缺失来源时间不再以观测时间冒充；全量 `1542 passed, 1 skipped`，但本候选仍未合并、部署或升包。证据：E-20260903-1688-channel-persistence-fix-002。
+
+- 2026-09-03 A1 服务器部署：在服务器当前 A0 基线之上部署 v40 overlay，完成 v39 停机备份、v40 迁移、v40 迁移后备份验证、health/ready 和 SQLite 完整性检查；线上订单 22,767、商品 7、WMS 库存 13 未变化，渠道可售量两表为 0 行。真实商家授权由 Cursor 核验仍被 1688 子账号权限墙阻断，未运行真实同步；应用包版本仍为 `0.30.0`，A1 尚未合并。证据：E-20260903-1688-channel-persistence-deploy-001。
 
 ## 公网产品测试部署候选（未单独升应用版）
 

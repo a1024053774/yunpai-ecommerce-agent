@@ -103,6 +103,25 @@ class Settings:
     taobao_oauth_authorize_url: str = "https://oauth.taobao.com/authorize"
     taobao_oauth_token_url: str = "https://oauth.taobao.com/token"
     taobao_callback_max_skew_seconds: int = 600
+    alibaba_icbu_enabled: bool = False
+    alibaba_icbu_app_key: str = ""
+    alibaba_icbu_app_secret: str = ""
+    alibaba_icbu_redirect_uri: str = ""
+    alibaba_icbu_credential_key: str = ""
+    alibaba_icbu_top_gateway: str = "https://gw.api.taobao.com/router/rest"
+    alibaba_icbu_oauth_authorize_url: str = "https://oauth.alibaba.com/authorize"
+    alibaba_icbu_oauth_token_url: str = "https://oauth.alibaba.com/token"
+    alibaba_1688_enabled: bool = False
+    alibaba_1688_app_key: str = ""
+    alibaba_1688_app_secret: str = ""
+    alibaba_1688_redirect_uri: str = ""
+    alibaba_1688_credential_key: str = ""
+    alibaba_1688_gateway: str = "https://gw.open.1688.com"
+    alibaba_1688_oauth_authorize_url: str = (
+        "https://auth.1688.com/oauth/authorize"
+    )
+    alibaba_1688_oauth_site: str = "1688"
+    alibaba_1688_hosted_tenant_id: str = ""
     mockchat_enabled: bool = False
     mockchat_auto_reply_enabled: bool = False
     mockchat_secret: str = ""
@@ -292,6 +311,53 @@ class Settings:
             taobao_callback_max_skew_seconds=max(
                 60, int(os.getenv("TAOBAO_CALLBACK_MAX_SKEW_SECONDS", "600"))
             ),
+            alibaba_icbu_enabled=_as_bool(os.getenv("ALIBABA_ICBU_ENABLED")),
+            alibaba_icbu_app_key=os.getenv("ALIBABA_ICBU_APP_KEY", "").strip(),
+            alibaba_icbu_app_secret=os.getenv("ALIBABA_ICBU_APP_SECRET", "").strip(),
+            alibaba_icbu_redirect_uri=os.getenv(
+                "ALIBABA_ICBU_REDIRECT_URI", ""
+            ).strip(),
+            alibaba_icbu_credential_key=os.getenv(
+                "ALIBABA_ICBU_CREDENTIAL_KEY", ""
+            ).strip(),
+            alibaba_icbu_top_gateway=os.getenv(
+                "ALIBABA_ICBU_TOP_GATEWAY",
+                "https://gw.api.taobao.com/router/rest",
+            ).rstrip("/"),
+            alibaba_icbu_oauth_authorize_url=os.getenv(
+                "ALIBABA_ICBU_OAUTH_AUTHORIZE_URL",
+                "https://oauth.alibaba.com/authorize",
+            ),
+            alibaba_icbu_oauth_token_url=os.getenv(
+                "ALIBABA_ICBU_OAUTH_TOKEN_URL",
+                "https://oauth.alibaba.com/token",
+            ),
+            alibaba_1688_enabled=_as_bool(os.getenv("ALIBABA_1688_ENABLED")),
+            alibaba_1688_app_key=os.getenv(
+                "ALIBABA_1688_APP_KEY", ""
+            ).strip(),
+            alibaba_1688_app_secret=os.getenv(
+                "ALIBABA_1688_APP_SECRET", ""
+            ).strip(),
+            alibaba_1688_redirect_uri=os.getenv(
+                "ALIBABA_1688_REDIRECT_URI", ""
+            ).strip(),
+            alibaba_1688_credential_key=os.getenv(
+                "ALIBABA_1688_CREDENTIAL_KEY", ""
+            ).strip(),
+            alibaba_1688_gateway=os.getenv(
+                "ALIBABA_1688_GATEWAY", "https://gw.open.1688.com"
+            ).rstrip("/"),
+            alibaba_1688_oauth_authorize_url=os.getenv(
+                "ALIBABA_1688_OAUTH_AUTHORIZE_URL",
+                "https://auth.1688.com/oauth/authorize",
+            ),
+            alibaba_1688_oauth_site=os.getenv(
+                "ALIBABA_1688_OAUTH_SITE", "1688"
+            ).strip(),
+            alibaba_1688_hosted_tenant_id=os.getenv(
+                "ALIBABA_1688_HOSTED_TENANT_ID", ""
+            ).strip(),
             mockchat_enabled=_as_bool(os.getenv("MOCKCHAT_ENABLED")),
             mockchat_auto_reply_enabled=_as_bool(os.getenv("MOCKCHAT_AUTO_REPLY_ENABLED")),
             mockchat_secret=os.getenv("MOCKCHAT_SECRET", "").strip(),

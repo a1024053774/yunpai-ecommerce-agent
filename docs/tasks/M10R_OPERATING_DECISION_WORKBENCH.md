@@ -22,6 +22,28 @@
 
 对应功能：F-326（预测补货与订购单）和 F-327（利润准备度与经营决策台）。
 
+### 当前真实来源 Gate（2026-09-03）
+
+`REALITY GATE: INCOMPLETE`
+
+- **observed**：1688 A1 已完成真实全量回补、增量水位与对账，但其语义仅为
+  `channel_available`，不提供仓库、物理现货、订单预占或采购在途。
+- **measured**：《商品库存管理.xlsx》有 24 条库存明细，但缺来源系统/账套/店铺范围、
+  data_as_of、在途列和完整仓库/SKU 稳定键；不能直接映射 `on_hand / reserved / inbound`。
+- **observed**：Cursor 只读核验开发者身份没有“服务市场采购服务商”角色，采购方案
+  `1612505416731` 显示角色不符、未订购、无法订购；采购执行继续 BLOCKED。
+- **unknown**：Cursor 侧边浏览器未形成可复核的商家工作台标签，尚未看到真实仓储、库存
+  流水、ERP/WMS 对接或导出页；“未看到”只表示未取得证据，不表示商家没有仓储数据。
+- **next minimal probe**：先由账号持有人在 Cursor 侧边浏览器打开 `work.1688.com` 并确认
+  商家身份，再由 Cursor 只读核验仓储/库存/ERP/WMS 页面；若页面不存在，则取得一份带日期的
+  脱敏 xlsx/csv 或正式 API 文档，至少包含来源系统、账套/店铺范围、仓、SKU/料号、
+  `on_hand / reserved / inbound`、单位和 data_as_of。
+- **decision consequence**：真实来源通过前不实现生产 WMS 导入、不写 `inventory_balances`、
+  不生成正式补货数量；采购只推进内部未发送 draft/人工导出契约，不调用 1688 采购 API。
+
+证据：E-20260903-1688-channel-availability-full-001、
+E-20260903-wms-source-workbook-001、E-20260903-1688-wms-procurement-browser-001。
+
 ### 模块具体需求
 
 #### 具体需求一：预测输入的正确分层

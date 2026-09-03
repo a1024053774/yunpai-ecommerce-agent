@@ -289,10 +289,12 @@ available。旧代码、API、数据库迁移和测试仍需保持兼容。
 | **37** | M10-R WP3 | 订购单草稿与交付跟踪 | `purchase_order_drafts`（`_apply_v37`） | 已占号（群公告 08-20），未合并 |
 | **38** | M10-R WP4 | 费用底账与三层利润 | 利润 ledger（`_apply_v38`） | 已占号（群公告 08-20），未合并 |
 | **39** | M9-R WP5 | 商品事实 item 隔离修复 | `inventory_balances` item 部分唯一索引 + `commerce_order_lines.item_id`（`_apply_v39`）；订单头仍按外部订单四字段唯一，不按 item 拆分 | **已预留，运行迁移未合并** |
-| 40+ | *（空闲）* | | | |
+| **40** | M10-R / 1688 A1 | 渠道可售量持久化 | 独立 `channel_availability_snapshots` / `channel_availability_records`，保存 `amountOnSale` 的商品级/SKU 级事实与来源版本；不写入 WMS `inventory_balances` | **服务器 A1 候选已完成真实全量/增量/对账并通过；未合并，未升应用包版本** |
+| **41** | M10-R / 1688 A1 P1 | 连接器同步 checkpoint | 独立 `connector_sync_checkpoints`：按 tenant/connector/store/resource + full/incremental 窗口身份持久化 cursor、watermark、租约与对账统计；不把店铺编码进 resource，不改写已执行的 `_apply_v40` | **本地候选已完成；服务器尚未执行 v41** |
+| 42+ | *（空闲）* | | | |
 
 旧 M5 工作包 3 对 v28 的预留已随路线冻结取消；M5-R 的 `_apply_v28` 已合入 `main`。
-26–30、32、33、34、35 已在 `main`。**31 仍未进入 `main`**，`main` 的 `initialize()` 目前是 30→32→33→34→35，故意没有 `_apply_v31`。**35 由 M7-R WP3（Product Identity）占用，36 由 M9-R WP3（生命周期建议）占用，37 由 M10-R WP3（订购单）占用，38 由 M10-R WP4（费用底账）占用，39 由 M9-R WP5（商品事实 item 隔离修复）占用**，下一空闲号从 **40** 起。
+26–30、32、33、34、35 已在 `main`。**31 仍未进入 `main`**，`main` 的 `initialize()` 目前是 30→32→33→34→35，故意没有 `_apply_v31`。**35 由 M7-R WP3（Product Identity）占用，36 由 M9-R WP3（生命周期建议）占用，37 由 M10-R WP3（订购单）占用，38 由 M10-R WP4（费用底账）占用，39 由 M9-R WP5（商品事实 item 隔离修复）占用，40 由本分支 A1 渠道可售量持久化占用，41 由本分支 A1 P1 checkpoint/watermark 占用**，下一空闲号从 **42** 起。v41 只追加 `connector_sync_checkpoints`；灾备 manifest 仍精确匹配当前 schema，升级后必须立即生成并验证新的全量备份，v40 归档只能由匹配旧 schema 的程序在隔离环境恢复。
 
 ### 合并 PR #11 前必扫（PR #10 与 M7-R WP1/WP3 合入后）
 
