@@ -2,6 +2,26 @@
 
 一个面向本地一体机的轻量电商经营 Agent。业务按商品、订单、仓储、竞品、营销、财务、指标和客服拆分模块；LLM 在 LangGraph 中负责理解目标、选择工具并根据 Observation 继续规划，固化代码负责事实、权限、指标、幂等、后置验证、RAG、自进化、审计和人工接管。默认以 `MODEL_ENABLED=false` 安全启动。
 
+## 当前进度与开发分支
+
+截至 2026-09-04，本 README 以 GitHub `main` 的功能合并基线
+[`b77dfeb`](https://github.com/a1024053774/yunpai-ecommerce-agent/commit/b77dfeb97583084214afc726ade367f3a7d99cea)（[PR #19](https://github.com/a1024053774/yunpai-ecommerce-agent/pull/19)）为准。`main` 已包含 M9-R 的商品经营读模型、流量诊断与受控实验、生命周期建议和只读经营工作台等增量；真实平台接入、生产发布、长稳和权限 Gate 仍需按验收文档单独确认。
+
+下面是当前主要开发方向的快照。表中未合入 `main` 的分支不属于 `main` 的能力承诺；分支是否开放、可合并或已合入，以 GitHub 的 PR 和分支页面为准。
+
+| 分支 / PR | 当前开发方向（2026-09-04 快照） | 入口 |
+| --- | --- | --- |
+| `main` | 已合入能力的集成与验收基线，最新功能合并为 M9-R | [main](https://github.com/a1024053774/yunpai-ecommerce-agent/tree/main) · [PR #19](https://github.com/a1024053774/yunpai-ecommerce-agent/pull/19) |
+| `codex/1688-a1-p1-main` | 1688 渠道可用性持久化与可恢复分页同步 | [PR #27](https://github.com/a1024053774/yunpai-ecommerce-agent/pull/27) |
+| `codex/1688-a1-p1-api` | 1688 API / Connector 配套实现与同步路径验证 | [分支](https://github.com/a1024053774/yunpai-ecommerce-agent/tree/codex/1688-a1-p1-api) |
+| `feature/m8r-customer-service-loop` | M8-R 销售与售后客服闭环 | [PR #25](https://github.com/a1024053774/yunpai-ecommerce-agent/pull/25) |
+| `feature/m10r-wp4-profit-ledger` | M10-R 预测补货、订购单草稿与利润账本 | [PR #24](https://github.com/a1024053774/yunpai-ecommerce-agent/pull/24) |
+| `codex/m8r-qwen-polish` | 单图多模态客服、跨轮记忆与媒体隐私打磨 | [分支](https://github.com/a1024053774/yunpai-ecommerce-agent/tree/codex/m8r-qwen-polish) |
+| `demo/main-multimodal-product-demo` | 统一 Agent 多模态产品演示与部署说明 | [分支](https://github.com/a1024053774/yunpai-ecommerce-agent/tree/demo/main-multimodal-product-demo) |
+| 工作区 PR #9/#11/#12 | 统一工作区、会话持久化与复合查询（草稿 PR） | [PR #9](https://github.com/a1024053774/yunpai-ecommerce-agent/pull/9) · [PR #11](https://github.com/a1024053774/yunpai-ecommerce-agent/pull/11) · [PR #12](https://github.com/a1024053774/yunpai-ecommerce-agent/pull/12) |
+
+未列出的远程分支主要是历史验收或合并辅助分支。需要核对实时状态时，请查看 [开放 PR](https://github.com/a1024053774/yunpai-ecommerce-agent/pulls) 和 [全部分支](https://github.com/a1024053774/yunpai-ecommerce-agent/branches)；本表不替代项目验收、发布或权限 Gate。
+
 ## 系统结构
 
 ```mermaid
@@ -12,7 +32,7 @@ flowchart LR
     agent --> context["上下文构建 / RAG / SOP"]
     agent --> model["LLM 结构化决策"]
     agent --> tools["动态工具目录与执行器"]
-    tools --> modules["商品 / 订单 / 仓储 / 竞品 / 营销 / 财务 / 指标"]
+    tools --> modules["商品 / 订单 / 仓储 / 竞品 / 流量诊断 / 生命周期 / 营销 / 财务 / 指标"]
     tools --> connectors["Connector SDK / 虚拟淘宝"]
     agent --> handoff["后置验证 / 人工接管"]
     service --> workers["渠道 / Outbox / 监控 / 派单 Worker"]
@@ -26,7 +46,7 @@ flowchart LR
 ## 核心能力
 
 - LLM 驱动链路：认证、会话绑定、输入脱敏、RAG 上下文、结构化决策、通用路由、动态工具目录、有界 ReAct、后置验证和持久化。
-- 156 条内置电商问法，覆盖商品、库存、价格、活动、支付、订单、发货、物流、退换、退款、投诉、隐私和安全。
+- 内置电商问法与对抗样例覆盖商品、库存、价格、活动、支付、订单、发货、物流、退换、退款、投诉、隐私和安全；具体清单以代码注册表与验收文档为准。
 - 受控自进化：负反馈和证据来源生成租户级候选话术，经过安全、检索碰撞和回归门禁、管理员批准后才进入线上知识库，并可回滚。
 - 学习效果回归：三轮隔离实验验证目标问法从旧答案切换到已批准答案，同时保持离线信任边界、检索与安全基线全通过。
 - 低成本复用：高置信度的人工批准进化答案可直接通过后置安全门返回，不再重复调用模型。
@@ -42,16 +62,13 @@ flowchart LR
 - 商品事实：SPU/SKU、渠道商品状态、售价、属性、来源时间、载荷哈希和版本按租户持久化，拒绝旧版本和同版本冲突。
 - 订单事实：订单行、脱敏买家引用、物流快照、售后单和不可变版本历史在同一事务内更新，不执行退款或赔付。
 - 仓储管理：库存余额、可售库存、覆盖天数、缺货/滞销判断和补货建议，保留来源、时间和版本证据。
-- 竞品分析：同款候选以 GTIN、品牌、型号、标题和关键属性生成可解释评分，经版本化人工批准后，价格、商品卖点与脱敏聚合口碑才进入 Agent 建议；拒绝匹配会自动撤销相关告警资格。
-- 竞品监控：按店铺/SKU 保存带乐观锁版本的低价、降价和新鲜度阈值；原子重评形成持久告警，支持确认、解决、条件清除和新证据复发重开，不自动改价。
-- 智能客服工作台：统一查看客服指标、会话回放、知识证据和受控对话测试；人工任务支持确定性队列路由、优先级、原子认领、短租约心跳、绝对时间及周期批量排班、自动/人工派单隔离、技能/队列成员、全局与队列容量、持久自动派单、SLA、转派、升级、复核和不可变事件历史。
-- 受控指标：六项固定指标由代码定义，查询只接受严格 `QuerySpec`，返回定义版本、数据水位、质量与证据数量。
-- 管理后台：本地 `/admin` 页面聚合经营总览、智能客服、商品库存、订单售后、竞品分析、模块状态和审计记录。
-- 虚拟店铺验收：内置“晴川生活电器旗舰店”关联数据包，覆盖 6 个 SKU、10 条双仓库存、8 个订单、物流/售后、3 个竞品候选、价格/口碑、4 条店铺知识和 13 个跨模块运营需求；重复导入按来源版本幂等复用，所有 7 个当前可用业务模块必须有通过场景，并明确禁止作为生产数据证据。
-- 经营 Agent 工具：商品、订单、库存、竞品和经营指标五个只读工具已进入动态目录；订单工具同时绑定可信订单号与店铺号。
+- 商品经营闭环：`main` 已包含商品经营读模型、流量诊断、受控实验、生命周期建议和只读经营工作台；建议仍需人工确认，不触发平台写动作。
+- 受控指标：指标定义由代码注册表统一维护，查询只接受严格 `QuerySpec`，返回定义版本、数据水位、质量与证据数量。
+- 虚拟店铺验收：内置“晴川生活电器旗舰店”关联数据包，覆盖商品、库存、订单、竞品、知识和客服等跨域场景；场景清单、模块状态和运行结果以业务模块注册表、fixture 与验收文档为准，所有虚拟数据明确禁止作为生产数据证据。
+- 经营 Agent 工具：商品、订单、库存、竞品和经营指标等只读工具由动态注册表暴露；订单工具同时绑定可信订单号与店铺号。
 - 工具执行器：实际执行超时、只读异常重试、写超时不确定态和后置条件失败降级，不再把元数据当作空声明。
 - 分层知识治理：平台、行业、店铺、商品和进化知识支持店铺/SKU 范围、不可变内容版本、评测、批准、停用和回滚，Agent 只检索当前范围内的已批准版本。
-- SOP 执行引擎：类型化 DSL 覆盖稳定步骤 ID、必需可信上下文、读取、评估、提案、动作、人工审批、重试上限、补偿工具和后置条件；版本按 `draft -> evaluated -> approved -> active -> retired` 发布。会话固定启动版本，schema v13 逐步持久化 `pending/running/succeeded/uncertain/compensated` 等状态，重启时只安全恢复读取，写入和补偿中断必须人工核对。
+- SOP 执行引擎：类型化 DSL 覆盖稳定步骤 ID、必需可信上下文、读取、评估、提案、动作、人工审批、重试上限、补偿工具和后置条件；版本按 `draft -> evaluated -> approved -> active -> retired` 发布。会话固定启动版本并逐步持久化执行状态，重启时只安全恢复读取，写入和补偿中断必须人工核对。
 - 质检与 VOC：代码化规则区分证据缺失、模型降级、漏转人工、敏感信息、渠道发送和高风险回复；结果必须人工确认或驳回，不自动修改线上规则。
 - 客服操作闭环：渠道会话使用所有权乐观锁，支持暂停、人工接管、恢复、建议改写、结构化 diff 和草稿幂等发送；暂停后的自动发送会被发送前二次检查拦截。
 - 可靠发送：API 先把加密载荷写入 SQLite outbox，再由带租约的 worker 逐条派发；连接建立失败按指数退避重试并进入死信，进程在外呼后中断则标记 `uncertain`，未经人工核对不会重发。
@@ -129,11 +146,11 @@ yunpai-agent serve --host 127.0.0.1 --port 8080
 
 必须确认 `python --version` 为 3.11 或更高，且 `which yunpai-agent` 指向当前虚拟环境（`<项目根>/.venv/bin/yunpai-agent`）。系统自带的 `/usr/bin/python3` 通常低于 3.11，请改用 Homebrew 等安装的 `python3.11`/`python3.12` 创建虚拟环境；未激活虚拟环境时可用 `./.venv/bin/python -m ecommerce_agent.cli <command>` 显式调用。
 
-`MODEL_ENABLED=false` 时不会发出模型网络请求；除完全匹配且经过人工批准的进化答案外，需规划的请求会安全建单转人工。轻量档默认使用 `glm-4.7-flash`、关闭 thinking、检索 3 条知识、限制为 240 个输出 token，并通过 SSE 接收供应商输出；账户限流立即降级，只有平台过载或 5xx 才短重试一次。`MODEL_MOCK_MODE=true` 仅供自动化测试和离线演示。
+`MODEL_ENABLED=false` 时不会发出模型网络请求；除完全匹配且经过人工批准的进化答案外，需规划的请求会安全建单转人工。模型、检索、输出预算和重试策略以运行时配置与代码中的权威定义为准；`MODEL_MOCK_MODE=true` 仅供自动化测试和离线演示。
 
 GLM Coding Plan 可作为显式的本机测试模型，通过标准 Chat Completions 接口接入；配置 `/api/coding/` 时需设置 `MODEL_ALLOW_CODING_PLAN=true`，并使用非流式调用。正式环境默认仍使用标准 GLM API。详见 [GLM 接入说明](docs/glm-integration.md)。
 
-当前模块设计和实现路径见 [0.22.0 虚拟店铺模拟说明](docs/VIRTUAL_STORE_SIMULATION_0.22.0.md)，逐场景真实输入输出展示见 [0.22.1 场景证据工作台](docs/VIRTUAL_STORE_EVIDENCE_0.22.1.md)，完整验证证据和生产边界见 [0.22.1 测试报告](docs/TEST_REPORT_0.22.1.md)。0.21.0 自动派单设计仍见 [技术实现说明](docs/TECHNICAL_IMPLEMENTATION_0.21.0.md)。
+当前实现和最新交付边界优先查看 [M9-R 交付与验收证据包](docs/works/15-feature-m9r-lifecycle/README.md)、[M9-R 完整执行计划](docs/plans/m9r-complete-plan.md)、[项目版本](.project-to-act/PROJECT_VERSIONS.md) 和 [项目验收](.project-to-act/PROJECT_ACCEPTANCE.md)。虚拟店铺、自动派单和历史候选材料仍保留在 `docs/`，但其中的测试数字只代表对应日期和提交的历史证据。
 
 ## API 示例
 
@@ -346,9 +363,9 @@ POST /v1/finance/reconciliation/tasks/{task_id}/transition
 
 电商知识库：采集 → 清洗 → 结构化 → 双引擎（知识图谱 + Wiki）→ 运行时 RAG 的完整链路。
 
-**数据**：`knowledge_graph_output/` — 222 节点 / 240 边（8 实体类 + 5 关系类型），
-含原始采集（01_raw）、清洗结果（02_clean）、Schema 契约（03_dictionary）、
-Neo4j 导入文件（04_import）、校验报告（06_report）。
+**数据**：`knowledge_graph_output/` 包含原始采集（01_raw）、清洗结果（02_clean）、
+Schema 契约（03_dictionary）、Neo4j 导入文件（04_import）和校验报告（06_report）。
+节点、关系和校验结果以对应的 manifest/report 为准，不在 README 固定快照数字。
 
 **功能**：
 - **Wiki 前台**：控制台「知识库」模块（`/admin` → 知识库），词条浏览/分类/分页/
@@ -356,7 +373,7 @@ Neo4j 导入文件（04_import）、校验报告（06_report）。
 - **图谱检索 API**：`/v1/graph/*`（实体查询/关系遍历/多跳推理/关键词检索/统计），需 Neo4j
 - **知识引擎**：`src/ecommerce_agent/knowledge_engine/`（模型/加载/梦循环/运行时桥/评测）
 - **梦循环**：每天自动增量摄取 + 一致性校验 + 合并记忆（`scheduler.py`）
-- **评测**：35 题检索质量评测（`scheduler.py --eval`）
+- **评测**：检索质量评测由 `scheduler.py --eval` 及其版本化数据集维护。
 
 **Neo4j 部署**：`docker compose up -d` 一键启动，导入见 `knowledge_graph_output/04_import/README.md`。
 连接参数走 env（`NEO4J_URI` / `NEO4J_USER` / `NEO4J_PASSWORD`，默认本地开发值）。
