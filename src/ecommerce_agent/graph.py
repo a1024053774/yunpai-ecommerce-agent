@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import time
 import uuid
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from langgraph.graph import END, START, StateGraph
@@ -10,6 +11,18 @@ from pydantic import ValidationError
 
 from .config import Settings
 from .context_builder import ContextBuilder
+from .customer_service_content import (
+    CustomerServiceContentService,
+    CustomerServiceContextRequest,
+)
+from .customer_service_loop import (
+    build_customer_service_suggestion,
+    customer_service_delivery_claim_authorized,
+    customer_service_content_for_model,
+    enrich_customer_service_tool_result,
+    validate_customer_service_draft,
+    verified_customer_service_business_action,
+)
 from .database import Database, utc_now
 from .decision import AgentDecision
 from .handoff import HandoffService
@@ -43,6 +56,102 @@ if TYPE_CHECKING:
 MODEL_UNAVAILABLE_HANDOFF_ANSWER = (
     "当前无法可靠完成自动处理，我会把现有信息和执行记录转给人工客服。"
 )
+
+
+@dataclass(frozen=True, slots=True)
+class GenerationPlan:
+    fixed_text: str | None
+    messages: list[dict[str, str]]
+    model_fallback: bool
+    trace_step: str
+    budget_trace: str
+
+
+def prepare_generation(
+    state: dict[str, Any],
+    settings: Settings,
+) -> GenerationPlan:
+    """Prepare one generation contract for both chat transports."""
+
+    verified_result = (
+        state.get("tool_result")
+        if state.get("tool_result", {}).get("postcondition_met")
+        else None
+    )
+    if not state.get("retrieved") and not verified_result:
+        return GenerationPlan(
+            fixed_text="当前知识库中没有足够信息，我会为您转人工客服进一步核对。",
+            messages=[],
+            model_fallback=True,
+            trace_step="generate:no_evidence",
+            budget_trace="context:budget:kept0/dropped0",
+        )
+    top_document = state.get("retrieved", [None])[0] if state.get("retrieved") else None
+    if (
+        top_document
+        and state.get("decision", {}).get("reason") == "approved_knowledge_reuse"
+        and settings.rag_direct_approved_answer
+        and str(top_document.get("source") or "").startswith("evolution:")
+        and normalize_text(str(top_document.get("question") or ""))
+        == normalize_text(str(state.get("normalized_input") or ""))
+    ):
+        return GenerationPlan(
+            fixed_text=str(top_document["answer"]),
+            messages=[],
+            model_fallback=False,
+            trace_step="generate:approved_knowledge",
+            budget_trace="context:budget:approved_exact_match",
+        )
+    total = int(settings.model_context_limit_tokens * settings.context_budget_ratio)
+    available = max(
+        0,
+        total
+        - count_tokens(SYSTEM_PROMPT)
+        - count_tokens(str(state.get("normalized_input") or "")),
+    )
+    context_bundle = state.get("context_bundle") or {}
+    history_meta = context_bundle.get("recent_history_meta") or {}
+    messages = build_messages(
+        question=str(state.get("normalized_input") or ""),
+        documents=list(state.get("retrieved") or []),
+        context=context_bundle,
+        history=list(context_bundle.get("recent_history") or []),
+        verified_tool_result=verified_result,
+        knowledge_budget_tokens=available * 6 // 10,
+        prompt_variant=(state.get("intent_routing") or {}).get("prompt_variant"),
+    )
+    if settings.rag_scene_prompts and messages and state.get("retrieved"):
+        try:
+            from .knowledge_engine.prompt_templates import render_prompt
+
+            context_text = "\n".join(
+                document.get("answer") or document.get("question") or ""
+                for document in state.get("retrieved", [])[:5]
+            )
+            scene_instructions = render_prompt(
+                _map_scene(str(state.get("intent") or "")),
+                context_text,
+                str(state.get("normalized_input") or ""),
+            )
+            messages[0] = {
+                "role": "system",
+                "content": (
+                    f"{messages[0]['content']}\n\n"
+                    f"【本会话场景指令】\n{scene_instructions}"
+                ),
+            }
+        except (ValueError, ImportError):
+            pass
+    return GenerationPlan(
+        fixed_text=None,
+        messages=messages,
+        model_fallback=False,
+        trace_step="generate:model",
+        budget_trace=(
+            f"context:budget:kept{history_meta.get('kept', 0)}"
+            f"/dropped{history_meta.get('dropped', 0)}"
+        ),
+    )
 
 
 def _map_scene(intent: str) -> str:
@@ -86,10 +195,67 @@ def _bounded_product_context_ready(state: AgentState) -> bool:
     return isinstance(candidates, list) and len(candidates) == 1 and bool(candidates[0])
 
 
+def _approved_customer_service_answers(state: dict[str, Any]) -> list[str]:
+    approved_ids = {
+        str(item.get("id"))
+        for item in (state.get("customer_service_content") or {}).get("scripts", [])
+        if item.get("id")
+    }
+    return [
+        str(document.get("answer") or "")
+        for document in state.get("retrieved", [])
+        if str(document.get("id")) in approved_ids and document.get("answer")
+    ]
+
+
+def _review_customer_facing_answer(
+    state: dict[str, Any],
+    answer: str,
+) -> tuple[bool, str]:
+    evidence = " ".join(
+        str(document.get("answer") or "")
+        for document in state.get("retrieved", [])
+    )
+    evidence += " " + json.dumps(
+        state.get("context_bundle") or {},
+        ensure_ascii=False,
+    )
+    approved_answers = _approved_customer_service_answers(state)
+    approved_exact = any(
+        normalize_text(approved_answer) == normalize_text(answer)
+        for approved_answer in approved_answers
+    )
+    customer_service_passed, customer_service_reason = validate_customer_service_draft(
+        answer,
+        state.get("tool_result") or {},
+        question=state.get("normalized_input"),
+        approved_answers=approved_answers,
+    )
+    if not customer_service_passed:
+        return False, customer_service_reason
+    tool_result = state.get("tool_result") or {}
+    return review_output(
+        answer,
+        evidence,
+        verified_business_action=verified_customer_service_business_action(
+            tool_result
+        ),
+        approved_commitment=approved_exact,
+        verified_delivery_commitment=customer_service_delivery_claim_authorized(
+            answer,
+            tool_result,
+            approved_answers=approved_answers,
+            question=state.get("normalized_input"),
+        ),
+        question=state.get("normalized_input"),
+    )
+
+
 def verify_response(state: AgentState) -> dict[str, Any]:
-    evidence = " ".join(document["answer"] for document in state["retrieved"])
-    evidence += " " + json.dumps(state["context_bundle"], ensure_ascii=False)
-    passed, reason = review_output(state["draft"], evidence)
+    passed, reason = _review_customer_facing_answer(
+        state,
+        state["draft"],
+    )
     verified_result = state.get("tool_result", {}).get("postcondition_met") is True
     if state.get("model_retry_advised") and not verified_result:
         return {
@@ -213,6 +379,7 @@ def persist_response(
                 "context_snapshot_id": state.get("context_snapshot_id"),
                 "context_readiness": state.get("context_readiness"),
                 "evidence_ids": state.get("context_evidence_ids", []),
+                "suggestion": state.get("customer_service_suggestion"),
             }
             cursor = conn.execute(
                 """
@@ -250,6 +417,17 @@ def persist_response(
             "context_snapshot_id": state.get("context_snapshot_id"),
             "context_readiness": state.get("context_readiness"),
             "evidence_ids": state.get("context_evidence_ids", []),
+            "suggestion_contract": (
+                (state.get("customer_service_suggestion") or {}).get(
+                    "contract_version"
+                )
+            ),
+            "delivery_status": (
+                (state.get("customer_service_suggestion") or {}).get(
+                    "delivery_status"
+                )
+            ),
+            "suggestion": state.get("customer_service_suggestion"),
             "trace": state["trace"],
         },
         state["tenant_id"],
@@ -274,6 +452,7 @@ def build_graph(
     tools: ToolRegistry,
     sops: SopService,
     contexts: ContextBuilder,
+    customer_service_content: CustomerServiceContentService | None = None,
     memory: KnowledgeMemoryService | None = None,
 ) -> StateGraph:
     builder = StateGraph(AgentState)
@@ -359,6 +538,8 @@ def build_graph(
             "context_readiness": "pending",
             "context_evidence_ids": [],
             "context_conflicts": [],
+            "customer_service_content": {},
+            "customer_service_suggestion": None,
         }
 
     def precheck(state: AgentState) -> dict[str, Any]:
@@ -541,10 +722,35 @@ def build_graph(
             memory_recalled=_memory_recalled,
             latency_ms=(time.monotonic() - _retrieve_start) * 1000,
         )
+        service_content: dict[str, Any] = {}
+        if customer_service_content is not None and store_id:
+            try:
+                raw_content = customer_service_content.build_context(
+                    state["tenant_id"],
+                    CustomerServiceContextRequest(
+                        question=state["normalized_input"],
+                        store_id=str(store_id),
+                        sku_id=effective_context.get("sku_id")
+                        or effective_context.get("sku"),
+                    ),
+                )
+                service_content = customer_service_content_for_model(
+                    raw_content,
+                    documents,
+                )
+            except (TypeError, ValueError):
+                db.audit(
+                    "customer_service.context_unavailable",
+                    "graph:retrieve",
+                    state["trace_id"],
+                    {"stage": "wp1_context"},
+                    state["tenant_id"],
+                )
         return {
             "route": "build_decision_context",
             "context": effective_context,
             "retrieved": documents,
+            "customer_service_content": service_content,
             "citations": [document["id"] for document in documents],
             "trace": [
                 *state["trace"],
@@ -574,6 +780,7 @@ def build_graph(
             history=history,
             history_budget_tokens=history_budget,
             tool_result=state.get("tool_result") or None,
+            customer_service_content=state.get("customer_service_content") or None,
             parent_snapshot_id=state.get("context_snapshot_id"),
         )
         route = "handoff" if snapshot.readiness == "handoff_required" else "deliberate"
@@ -736,6 +943,15 @@ def build_graph(
             if route in {"answer", "finish"}:
                 route = "handoff"
                 reason = "tool_result_not_verified"
+        response_policy = (
+            (state.get("tool_result", {}).get("output") or {}).get("response_policy")
+            or {}
+        )
+        if route in {"answer", "finish"} and response_policy.get(
+            "facts_usable_for_response"
+        ) is False:
+            route = "handoff"
+            reason = "customer_service_fact_blocked"
         if route == "answer":
             reason = "knowledge_answer_allowed"
         elif route == "clarify":
@@ -749,9 +965,6 @@ def build_graph(
         business_action = is_business_action_request(state["normalized_input"])
         if business_action and route != "refuse":
             risk_level = "high"
-        if business_action and route not in {"act", "handoff", "refuse", "finish"}:
-            route = "handoff"
-            reason = "business_action_requires_verified_execution"
         # M6 基线：低置信度 answer/finish → 转人工（对齐 origin/main decision_gate）
         if (
             decision.confidence < settings.handoff_confidence_threshold
@@ -974,6 +1187,7 @@ def build_graph(
     def execute_tool(state: AgentState) -> dict[str, Any]:
         name = state["selected_tool"] or ""
         result: ToolResult
+        tool_kind: str | None = None
         try:
             spec, arguments = tools.validate_selection(
                 name=name,
@@ -981,6 +1195,7 @@ def build_graph(
                 requested_mode=state["decision_mode"],  # type: ignore[arg-type]
                 context=execution_context(state),
             )
+            tool_kind = spec.kind
             result = tools.execute(
                 spec=spec,
                 arguments=arguments,
@@ -988,9 +1203,11 @@ def build_graph(
             )
             tool_result = {
                 "tool_name": name,
+                "tool_kind": tool_kind,
                 "intent": state["intent"],
                 **result.model_dump(),
             }
+            tool_result = enrich_customer_service_tool_result(tool_result)
             trace_step = f"tool_execute:{name}:{result.status}"
         except Exception as exc:
             result = ToolResult(
@@ -1001,6 +1218,7 @@ def build_graph(
             )
             tool_result = {
                 "tool_name": name,
+                "tool_kind": tool_kind,
                 "intent": state["intent"],
                 **result.model_dump(),
             }
@@ -1079,6 +1297,7 @@ def build_graph(
             history=history,
             history_budget_tokens=history_budget,
             tool_result=state.get("tool_result") or None,
+            customer_service_content=state.get("customer_service_content") or None,
             parent_snapshot_id=state.get("context_snapshot_id"),
         )
         route = "handoff" if snapshot.readiness == "handoff_required" else "generate"
@@ -1106,76 +1325,37 @@ def build_graph(
         }
 
     def generate(state: AgentState) -> dict[str, Any]:
-        verified_result = (
-            state.get("tool_result")
-            if state.get("tool_result", {}).get("postcondition_met")
-            else None
-        )
-        if not state["retrieved"] and not verified_result:
+        plan = prepare_generation(state, settings)
+        if plan.fixed_text is not None:
             return {
-                "draft": "当前知识库中没有足够信息，我会为您转人工客服进一步核对。",
-                "model_fallback": True,
-                "trace": [*state["trace"], "generate:no_evidence"],
+                "draft": plan.fixed_text,
+                "model_fallback": plan.model_fallback,
+                "model_retry_advised": False,
+                "trace": [*state["trace"], plan.budget_trace, plan.trace_step],
             }
-        top_document = state["retrieved"][0] if state["retrieved"] else None
-        if (
-            top_document
-            and state["decision"].get("reason") == "approved_knowledge_reuse"
-            and settings.rag_direct_approved_answer
-            and top_document["source"].startswith("evolution:")
-            # 精确匹配才复用（对齐 deliberate 同逻辑）
-            and normalize_text(top_document["question"]) == state["normalized_input"]
-        ):
-            return {
-                "draft": top_document["answer"],
-                "model_fallback": False,
-                "trace": [*state["trace"], "generate:approved_knowledge"],
-            }
-        history, history_meta, knowledge_budget = budgeted_history(
-            state,
-            SYSTEM_PROMPT,
-        )
-        messages = build_messages(
-            question=state["normalized_input"],
-            documents=state["retrieved"],
-            context=state["context_bundle"],
-            history=history,
-            verified_tool_result=verified_result,
-            knowledge_budget_tokens=knowledge_budget,
-            prompt_variant=(state.get("intent_routing") or {}).get("prompt_variant"),
-        )
-        # M3 场景 Prompt 接入：按 intent 映射场景，叠加防幻觉指令（RAG_SCENE_PROMPTS 默认开）
-        if settings.rag_scene_prompts and messages and state["retrieved"]:
-            scene = _map_scene(state.get("intent") or "")
-            try:
-                from .knowledge_engine.prompt_templates import render_prompt
-
-                context_text = "\n".join(
-                    doc.get("answer") or doc.get("question") or ""
-                    for doc in state["retrieved"][:5]
-                )
-                scene_instructions = render_prompt(
-                    scene, context_text, state["normalized_input"]
-                )
-                messages[0] = {
-                    "role": "system",
-                    "content": f"{messages[0]['content']}\n\n【本会话场景指令】\n{scene_instructions}",
-                }
-            except (ValueError, ImportError):
-                pass  # 场景注入失败不阻塞回答（保持原 SYSTEM_PROMPT）
-        budget_trace = (
-            f"context:budget:kept{history_meta['kept']}"
-            f"/dropped{history_meta['dropped']}"
-        )
         try:
-            draft = model.generate(messages)
+            draft = model.generate(plan.messages)
             fallback = False
-            trace_step = "generate:model"
+            trace_step = plan.trace_step
             retry_advised = False
         except ModelError as exc:
             retry_advised = False
+            verified_result = (
+                state.get("tool_result")
+                if state.get("tool_result", {}).get("postcondition_met")
+                else None
+            )
             if verified_result:
-                draft = "操作已完成，业务系统已经确认处理结果。"
+                if state.get("tool_result", {}).get("tool_name") in {
+                    "get_customer_sales_facts",
+                    "get_customer_after_sales_facts",
+                }:
+                    draft = (
+                        "已取得相关业务快照，但当前模型服务暂时不可用，"
+                        "无法可靠生成客服建议，请稍后重试或转人工核对。"
+                    )
+                else:
+                    draft = "操作已完成，业务系统已经确认处理结果。"
                 trace_step = "generate:verified_result_fallback"
             elif isinstance(exc, ModelUnavailableError):
                 draft = ""
@@ -1196,7 +1376,7 @@ def build_graph(
             "draft": draft,
             "model_fallback": fallback,
             "model_retry_advised": retry_advised,
-            "trace": [*state["trace"], budget_trace, trace_step],
+            "trace": [*state["trace"], plan.budget_trace, trace_step],
         }
 
     def verify(state: AgentState) -> dict[str, Any]:
@@ -1226,9 +1406,23 @@ def build_graph(
             # The model drafted a question about SKU/item ids a shopper cannot
             # answer; ask for what they can actually provide instead.
             answer = fallback
+        passed, safety_reason = _review_customer_facing_answer(state, answer)
+        if not passed:
+            return {
+                "answer": "为避免给出未经核实的承诺，我会将这个问题转给人工客服。",
+                "requires_human": True,
+                "route": "handoff",
+                "route_reason": safety_reason,
+                "trace": [
+                    *state["trace"],
+                    f"clarify:unsafe_response:{safety_reason}",
+                    "postcondition:handoff",
+                ],
+            }
         return {
             "answer": answer,
             "requires_human": False,
+            "route": "persist",
             "trace": [*state["trace"], "clarify", "postcondition:input_required"],
         }
 
@@ -1264,13 +1458,20 @@ def build_graph(
         else:
             decision_response = state.get("decision", {}).get("response")
             answer = decision_response or state.get("answer") or "当前问题存在无法自动消除的不确定性，我会为您转接人工客服。"
+        passed, safety_reason = _review_customer_facing_answer(state, answer)
+        safety_trace: list[str] = []
+        if not passed:
+            reason = safety_reason
+            answer = "为避免给出未经核实的承诺，我会将这个问题转给人工客服。"
+            safety_trace.append(f"handoff:unsafe_response:{safety_reason}")
         if state.get("execution_mode") == "shadow":
             return {
                 "answer": answer,
                 "requires_human": True,
+                "route_reason": reason,
                 "handoff_id": None,
                 "handoff_status": None,
-                "trace": [*state["trace"], "shadow_handoff_observed"],
+                "trace": [*state["trace"], *safety_trace, "shadow_handoff_observed"],
             }
         safe_question, _ = redact_sensitive(state["normalized_input"])
         tool_arguments = state.get("tool_arguments") or {}
@@ -1322,9 +1523,15 @@ def build_graph(
         return {
             "answer": answer,
             "requires_human": True,
+            "route_reason": reason,
             "handoff_id": task.id,
             "handoff_status": task.status,
-            "trace": [*state["trace"], "human_handoff", f"postcondition:handoff_{task.status}"],
+            "trace": [
+                *state["trace"],
+                *safety_trace,
+                "human_handoff",
+                f"postcondition:handoff_{task.status}",
+            ],
         }
 
     def refuse(state: AgentState) -> dict[str, Any]:
@@ -1332,14 +1539,34 @@ def build_graph(
             answer = "我只能使用本店已授权的信息，不能提供其他店铺或其他买家的非公开数据。"
         else:
             answer = state.get("decision", {}).get("response") or "我不能更改系统规则、披露内部提示或绕过权限，但可以继续帮助您处理正常的商品、订单和售后问题。"
+        passed, safety_reason = _review_customer_facing_answer(state, answer)
+        if not passed:
+            return {
+                "answer": "为避免给出未经核实的承诺，我会将这个问题转给人工客服。",
+                "requires_human": True,
+                "route": "handoff",
+                "route_reason": safety_reason,
+                "trace": [
+                    *state["trace"],
+                    f"refuse:unsafe_response:{safety_reason}",
+                    "postcondition:handoff",
+                ],
+            }
         return {
             "answer": answer,
             "requires_human": False,
+            "route": "persist",
             "trace": [*state["trace"], "refuse", "postcondition:blocked"],
         }
 
     def persist(state: AgentState) -> dict[str, Any]:
-        return persist_response(state, db=db, sops=sops)
+        suggestion = build_customer_service_suggestion(state, settings)
+        updates = persist_response(
+            {**state, "customer_service_suggestion": suggestion},
+            db=db,
+            sops=sops,
+        )
+        return {**updates, "customer_service_suggestion": suggestion}
 
     builder.add_node("intake", intake)
     builder.add_node("precheck", precheck)
@@ -1438,9 +1665,17 @@ def build_graph(
         lambda state: state["review_route"],
         {"pass": "persist", "handoff": "handoff", "retry_later": "retry_later"},
     )
-    builder.add_edge("clarify", "persist")
+    builder.add_conditional_edges(
+        "clarify",
+        lambda state: state["route"],
+        {"persist": "persist", "handoff": "handoff"},
+    )
     builder.add_edge("retry_later", "persist")
     builder.add_edge("handoff", "persist")
-    builder.add_edge("refuse", "persist")
+    builder.add_conditional_edges(
+        "refuse",
+        lambda state: state["route"],
+        {"persist": "persist", "handoff": "handoff"},
+    )
     builder.add_edge("persist", END)
     return builder

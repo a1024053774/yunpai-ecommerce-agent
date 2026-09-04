@@ -5,6 +5,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+from .customer_service_contracts import CUSTOMER_SERVICE_KEYWORD_CATEGORY
 from .database import Database
 from .schemas import RetrievedDocument
 from .text_utils import (
@@ -77,6 +78,8 @@ class KnowledgeBase:
         store_id: str | None = None,
         sku_id: str | None = None,
         review_status: str | None = None,
+        effective_from: datetime | str | None = None,
+        effective_to: datetime | str | None = None,
         _conn: Any | None = None,
     ) -> str:
         document_id = id or f"kb-{uuid.uuid4().hex}"
@@ -84,6 +87,12 @@ class KnowledgeBase:
         indexed_text = search_text(question, answer, keywords, category, intent)
         embedding = vector_to_blob(hash_embedding(f"{question} {keywords} {answer}"))
         now = datetime.now(UTC).isoformat()
+        effective_start = (
+            effective_from.isoformat() if isinstance(effective_from, datetime) else effective_from
+        ) or now
+        effective_end = (
+            effective_to.isoformat() if isinstance(effective_to, datetime) else effective_to
+        )
         digest = checksum(
             question, answer, source, str(version), tenant_id or "global",
             layer, store_id or "", sku_id or "",
@@ -100,13 +109,13 @@ class KnowledgeBase:
                     effective_to, approved_by, checksum, created_at, tenant_id,
                     knowledge_key, layer, store_id, sku_id, review_status,
                     record_version, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?,
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                           ?, ?, ?, ?, ?, 1, ?)
                 """,
                 (
                     document_id, category, intent, question, answer, keywords,
                     indexed_text, embedding, risk_level, source, version, status,
-                    now, approved_by, digest, now, tenant_id,
+                    effective_start, effective_end, approved_by, digest, now, tenant_id,
                     document_key, layer, store_id, sku_id, lifecycle, now,
                 ),
             )
@@ -124,13 +133,13 @@ class KnowledgeBase:
                     effective_to, approved_by, checksum, created_at, tenant_id,
                     knowledge_key, layer, store_id, sku_id, review_status,
                     record_version, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?,
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                           ?, ?, ?, ?, ?, 1, ?)
                 """,
                 (
                     document_id, category, intent, question, answer, keywords,
                     indexed_text, embedding, risk_level, source, version, status,
-                    now, approved_by, digest, now, tenant_id,
+                    effective_start, effective_end, approved_by, digest, now, tenant_id,
                     document_key, layer, store_id, sku_id, lifecycle, now,
                 ),
             )
@@ -184,12 +193,13 @@ class KnowledgeBase:
                        search_text, embedding, source, version, layer, store_id,
                        sku_id, tenant_id
                 FROM knowledge
-                WHERE status='active' AND effective_from <= ?
+                WHERE status='active' AND category != ?
+                  AND effective_from <= ?
                   AND (effective_to IS NULL OR effective_to > ?)
                   {tenant_clause}
                   {' '.join(scope_clauses)}
                 """,
-                params,
+                (CUSTOMER_SERVICE_KEYWORD_CATEGORY, *params),
             ).fetchall()
         rows = self._apply_rollouts(
             [dict(row) for row in rows],
@@ -273,10 +283,16 @@ class KnowledgeBase:
                        search_text, embedding, source, version, layer, store_id,
                        sku_id, tenant_id
                 FROM knowledge
-                WHERE status='candidate' AND tenant_id=? AND id IN ({placeholders})
+                WHERE status='candidate' AND category != ?
+                  AND tenant_id=? AND id IN ({placeholders})
                   {' '.join(scope_clauses)}
                 """,
-                (tenant_id, *chosen.values(), *scope_params),
+                (
+                    CUSTOMER_SERVICE_KEYWORD_CATEGORY,
+                    tenant_id,
+                    *chosen.values(),
+                    *scope_params,
+                ),
             ).fetchall()
         replaced = [
             row for row in rows if str(row["knowledge_key"]) not in chosen

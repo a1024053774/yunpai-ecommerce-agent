@@ -43,6 +43,20 @@ def _thresholds(**overrides) -> EvaluationThresholds:
     return EvaluationThresholds.model_validate(payload)
 
 
+@pytest.mark.parametrize(
+    "source_type",
+    ["virtual", "operational", "mixed", "unknown"],
+)
+def test_evaluation_expectation_uses_authoritative_source_types(source_type: str) -> None:
+    expectation = EvaluationExpectation(expected_source_type=source_type)
+    assert expectation.expected_source_type == source_type
+
+
+def test_evaluation_expectation_rejects_evidence_state_as_source_type() -> None:
+    with pytest.raises(ValidationError):
+        EvaluationExpectation(expected_source_type="actual")
+
+
 def _case(
     case_key: str = "case-product",
     *,
@@ -487,6 +501,7 @@ def test_actual_agent_evaluation_is_isolated_from_primary_runtime(tmp_path) -> N
                 "sessions": conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0],
                 "messages": conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0],
                 "handoffs": conn.execute("SELECT COUNT(*) FROM handoff_tasks").fetchone()[0],
+                "outbox": conn.execute("SELECT COUNT(*) FROM channel_outbox").fetchone()[0],
             }
         report = service.run_evaluation_suite(
             "tenant-test",
@@ -501,6 +516,7 @@ def test_actual_agent_evaluation_is_isolated_from_primary_runtime(tmp_path) -> N
                 "sessions": conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0],
                 "messages": conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0],
                 "handoffs": conn.execute("SELECT COUNT(*) FROM handoff_tasks").fetchone()[0],
+                "outbox": conn.execute("SELECT COUNT(*) FROM channel_outbox").fetchone()[0],
             }
         assert after == before
     finally:
