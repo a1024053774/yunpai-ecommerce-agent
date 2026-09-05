@@ -80,6 +80,18 @@ The governing boundary is:
 
 - Preserve user-owned dirty-worktree changes and keep edits scoped to the request.
 - Use the project environment (`.venv/bin/python -m pytest`) for Python tests.
+- Follow the layered test policy in `CONTRIBUTING.md` section 6. Start with tests
+  for the changed behavior and its direct callers; expand to adjacent modules
+  only when the impact warrants it. Do not run the full suite after every edit,
+  commit, or routine task completion. Documentation-only changes need document
+  and diff checks, not a local pytest run.
+- High-risk changes require the relevant domain regression; run the full suite
+  when the impact cannot be bounded or an explicit WP, PR, merge, or release
+  gate requires it. Preserve the post-merge migration check in section 9.
+- Use a passing CI full-suite result for the candidate under review instead of
+  repeating it locally. Pending, failed, or outdated results do not satisfy a
+  gate; pre-merge results do not replace checks of the merged state. Report
+  commands, scope, results, and skipped checks with reasons.
 - For routing changes, add counterexamples for negation, hypothetical/presale
   questions, compound requests, and model decisions that must survive the gate.
   Run the real-model intent benchmark when credentials and authorization are
