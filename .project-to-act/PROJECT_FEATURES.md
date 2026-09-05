@@ -31,7 +31,7 @@
 | F-107 四种人机协同接待模式 | P2 | 已完成 | F-005、F-105 | 仅提示、人机协同、智能转接、夜间值守可按店铺/SOP 灰度；人工暂停后 AI 不再发送 | 0.29.0 schema v25 发布策略增加 UTC 夜间时间窗 + 夜间模式（含跨零点窗口）与 SOP 白名单：assignment 输出生效模式（白天 assist/夜间 automatic 等），mockchat 端到端窗口内自动发送、窗口外仅草稿；使用未列入白名单 SOP 的响应记 `sop_not_allowlisted` 违规并降级转人工；0.16.0 四模式/owner 二次检查与暂停停发保持通过；真实渠道夜间值守联调归 F-102，见 `tests/test_night_watch_release.py`、E-20260727-005 |
 | F-108 多模态客服证据 | P2 | 候选 | F-103、商品数据、OCR/多模态服务 | 支持商品图、商品卡、尺码/参数表和售后图片结构化识别；高风险动作不以图片单独放行 | `EPIC-MULTIMODAL` |
 | F-109 人工客服工作台 | P0 | 进行中 | F-005、F-107、前端 | 可查看建议/证据/SOP/风险，暂停、接管、修改发送、恢复、转队列并保留 diff 和反馈 | 0.30.0 渠道接待页新增适配器能力面板（契约/能力版本/模拟标记/验签防重放幂等回执/限流）与知识/SOP 灰度状态面板；发布门禁页可创建并展示夜间值守窗口与 SOP 白名单策略；0.22.2 范围切换/来源标签/决策详情保持通过；真实渠道回执联调与多渠道会话操作 API（F-114）待完成，见 `tests/test_admin_console.py`、E-20260727-006 |
-| F-110 首批真实业务只读工具 | P0 | 已阻塞 | F-102、商品/订单/物流授权 | 商品详情、SKU 对比、订单、物流和店铺政策工具返回结构化事实并记录来源、时间和权限范围 | 阻塞于首个渠道和客户数据源 |
+| F-110 首批真实业务只读工具 | P0 | 进行中 | F-102、商品/订单/物流授权 | 商品详情、SKU 对比、订单、物流和店铺政策工具返回结构化事实并记录来源、时间和权限范围 | 1688 5043656 的订单/商品列表与详情均有真实 HTTP 200；按授权店铺隔离的订单详情、商品详情和 `channel_available` 实时接口已发布，真实 product-only 与 SKU 商品 smoke 通过，且不返回/写入 WMS 字段。实现前详情与 availability 各有 2 failed 反证，当前相邻 33 passed；首轮独立验收因冻结范围不完整仍为 INCOMPLETE。物流、店铺政策、完整独立复审和生产业务商家仍未完成，见 E-20260903-1688-api-smoke-001 / E-20260903-1688-detail-001 / E-20260903-1688-channel-availability-001 |
 | F-111 首个低风险真实写动作 | P0 | 已阻塞 | F-003、F-102、F-105、人工审批 | 动作经官方允许，支持 dry-run 或稳定读回、幂等、风险/权限门、审批、后置验证和人工补偿 | 阻塞于动作选择、平台权限和业务规则 |
 | F-112 质检与 VOC | P2 | 进行中 | F-103、F-104、F-107 | 输出事实/SOP/权限/转人工/风格/系统故障分类；形成问题聚类、知识缺口和经营指标但不自动改规则 | 0.9.0 已完成确定性事实证据、模型降级、漏转人工、敏感信息、发送失败和高风险发送质检，支持复核与汇总；语义聚类和知识缺口建议待后续，见 E-20260721-011 |
 | F-113 回放、影子、灰度与发布门禁 | P0 | 进行中 | F-101 至 F-112、脱敏样本 | 覆盖离线回放、影子、仅提示、分流量人机协同和白名单自动化；严重错误触发停止放量和回滚 | 0.18.0 已用版本化客户 suite、实际多轮 Agent、指标/回归 Gate 和发布乐观锁关联替代一次性样本证据；0.16.0 持久策略/熔断保持通过；真实客户数据和渠道灰度未验收，见 E-20260722-004 |
@@ -47,8 +47,8 @@
 | F-123 本机顾客对话测试入口 | P1 | 已完成 | F-002、F-109、F-310 | 默认关闭；启用后仅回环客户端可访问；原后台智能客服页可无客户端密钥直测，提供案例和手输消息，复用实际 `AgentService.chat`，显示回答、意图、风险、来源、转人工、会话/追踪号；会话固定写入 simulation 范围；可显式用标准 Chat Completions 测试真实 GLM 模型 | `src/ecommerce_agent/customer_test_api.py`、`src/ecommerce_agent/llm.py`、`docs/admin-console.html`、`docs/TEST_REPORT_0.22.5.md`、`tests/test_llm.py`、`tests/test_admin_console.py`、`tests/test_api.py`、E-20260723-003 |
 | F-201 平台资质与权限审计 | P0 | 进行中 | 目标平台、企业主体、应用类型 | 逐平台确认开发者/服务商资质、可申请权限、审核材料、测试环境、费用、限制和 Owner，并以官方证据标注可信度 | 淘宝：`docs/taobao-api-access-application.md`；全平台：`云湃电商后台接入与客服接管执行调研报告_20260721.md` |
 | F-202 后台数据接入路线决策 | P0 | 已规划 | F-201、客户系统盘点 | 对每个平台和数据域确定官方 API、客户 ERP/OMS、审核服务商或报表导入路线，记录时效、写能力、成本和风险 | 新报告第 3、4、8、9 章；待客户盘点 |
-| F-203 应用授权与凭证生命周期 | P0 | 进行中 | F-201、F-202 | 完成应用创建、店铺 OAuth/授权、权限最小化、令牌刷新/吊销、密钥托管、操作审计和测试用例 | OAuth state、token 交换、AES-GCM 存储和测试已完成；刷新/吊销及真实店铺待授权 |
-| F-204 后台数据增量同步与对账 | P0 | 已规划 | F-202、F-203 | 商品、订单、库存、物流、售后等已选数据域具备初始化、增量、去重、限流、重试、补拉、日对账和可观测性 | 待首个平台数据能力 |
+| F-203 应用授权与凭证生命周期 | P0 | 进行中 | F-201、F-202 | 完成应用创建、店铺 OAuth/授权、权限最小化、令牌刷新/吊销、密钥托管、操作审计和测试用例 | 5043656 主账号对子账号的应用授权墙已通过；托管 OAuth、code 换票、AES-GCM 存储和真实卖家测试连接路径已实现。本轮 hosted callback HTTP 200，新增 1 条未过期授权并记录审计；旧连接刷新失败仍会 fail closed 为 error。仍缺真实 refresh 成功、吊销闭环、生产业务商家、多应用凭据隔离和长期生命周期验收，见 E-20260903-1688-channel-availability-persistence-001 |
+| F-204 后台数据增量同步与对账 | P0 | 进行中 | F-202、F-203 | 商品、订单、库存、物流、售后等已选数据域具备初始化、增量、去重、限流、重试、补拉、日对账和可观测性 | 1688 A1 本地候选已登记 schema v41 并实现 `connector_sync_checkpoints`：full 自动逐页并对 `totalRecords` fail closed；incremental 按窗口隔离，窗口 `totalRecords` 不得写入 `upstream_total`（保持 NULL）。成功页与 cursor 同事务推进，同 cursor 有界 502 重试。`cursor_invalid` 只来自 `_page`/调用方非法 cursor；拉取循环里其它 `Alibaba1688Error` 标 `request_invalid`、保留 resume cursor、清租约，不得停在 `running`。非法 cursor API 仍 409。服务器仍为 v40，尚未执行 v41 或生产入口真实 smoke，见 E-20260903-1688-a1-p1-checkpoint-001。
 | F-205 客服消息接收与原平台回复 | P0 | 已阻塞 | F-201、专项客服权限、测试子账号 | 合法接收客户消息并在原平台身份下回复，具备验签、顺序、去重、回执、限流、失败降级和全链路审计 | 0.16.0 本地 Qimen HTTP 已验证事件/任务事务、去重、Agent 恢复、精确 source event 和 outbox 回执闭环；真实链路仍阻塞于客服机器人资格、奇门场景和平台分配凭证，见 E-20260722-002 |
 | F-206 会话归属与人工接管 | P0 | 进行中 | F-205、F-005 | 明确机器人/人工坐席归属、在线状态、转接、暂停、排队、超时和恢复规则；人工接管后自动发送立即停止 | 0.21.0 已实现显式值守 session/心跳、绝对时间班次、自动/人工派单隔离、持久作业/告警；0.19.0 队列/SLA 与 0.16.0 owner/发送二次检查保持通过；真实平台转接、周期排班和业务 SLA 待联调，见 E-20260722-007 |
 | F-207 审核服务商与合作接入路线 | P0 | 已规划 | F-201、商务合作 | 对无法由普通 API 完成的客服/营销能力，确定平台服务市场、ISV 或客户既有供应商合作方式及数据责任边界 | 新报告第 7 至 9、11 章；待服务商演示与报价 |
@@ -88,6 +88,30 @@
 
 ## 功能变更历史
 
+- 2026-09-03：F-204 的 1688 A1 P1 收窄拉取循环的 `cursor_invalid` catch。红态复现：第 1 页成功后 cursor=`2`，第 2 页非 cursor 的 `Alibaba1688Error`（access token）被标 `cursor_invalid` 且 cursor 被清空；修复后该路径标 `request_invalid`、保留 resume cursor、清租约，非法 cursor 仍只由 `_page` 标 `cursor_invalid` 且 API 409。聚焦 1688/A1+迁移 `59 passed`。证据 E-20260903-1688-a1-p1-checkpoint-001。
+
+- 2026-09-03：F-204 的 1688 A1 P1 补上非法 cursor 收口。红态复现：`sync_availability(..., cursor='not-a-page')` 在 acquire 后由 `_page` 抛 `Alibaba1688Error`，checkpoint 停在 `running`、`cursor='not-a-page'`、租约未释放、`last_error_kind` 为空；修复后 acquire 前校验调用方 cursor、resume cursor 在店铺查找前校验，标 `failed`、清空非法 cursor 与租约、`last_error_kind=cursor_invalid`，服务层仍抛错、API 409，后续合法同步可再次 acquire。聚焦 1688/A1+迁移 `58 passed`。证据 E-20260903-1688-a1-p1-checkpoint-001。
+
+- 2026-09-03：F-204 的 1688 A1 P1 补上 acquire 后店铺不可用收口。红态复现：`_connector_for_store` 抛 `Alibaba1688Error` 后 checkpoint 停在 `running`、租约未释放、`last_error_kind` 为空；修复后标 `failed`、清租约、cursor 不推进，full/incremental 均可再次 acquire。聚焦 1688/A1+迁移 `57 passed`。证据 E-20260903-1688-a1-p1-checkpoint-001。
+
+- 2026-09-03：F-204 的 1688 A1 P1 补上 incremental 窗口总量隔离。红态复现：incremental 第 1 页 `totalRecords=2`、第 2 页同 cursor 502 后 checkpoint 为 failed 且 `upstream_total=2`；修复后该字段保持 NULL，full 仍持久化官方总量。聚焦 1688/A1+迁移当时 `56 passed`。证据 E-20260903-1688-a1-p1-checkpoint-001。
+
+- 2026-09-03：F-204 的 1688 A1 P1 本地候选已在用户授权后登记 schema v41，新增 additive `_apply_v41` / `connector_sync_checkpoints`，并把生产 `sync_availability` 改成按店铺与窗口身份可恢复的自动分页。先红后绿覆盖单页不会完成 full、失败不推进/同 cursor 恢复、店铺或窗口串线、totalRecords 对账缺口；聚焦 1688/A1+迁移当时 `55 passed`，相邻 connector/database `20 passed`。未改 `_apply_v40`，未部署、未做服务器 v41 迁移或真实平台 smoke。证据 E-20260903-1688-a1-p1-checkpoint-001。
+
+- 2026-09-03：F-204 的 1688 A1 v40 完成服务器真实全量回补、增量水位探针和独立对账。1,062 页 HTTP 200、1 页 502 后同游标恢复，累计 21,224 个商品快照/378,508 条记录，0 拒绝；增量 6 商品/65 记录全部幂等，订单与 inventory_balances 未变化。A1 Gate 为 PASS；WMS/ERP 与采购写能力仍分别为 INCOMPLETE/BLOCKED。证据 E-20260903-1688-channel-availability-full-001。
+
+- 2026-09-03：F-204 P2 已在本地候选中落地平台 totalRecords 传播与总量不一致反例；独立重跑 1688/A1 聚焦 24 项、迁移 18 项通过。P1 仍缺生产 checkpoint/watermark；由于服务器已执行 v40，新增状态表需在取得授权后登记 v41，当前不改变 CONTRIBUTING.md。证据 E-20260903-1688-channel-availability-p2-p1-gate-003。
+
+- 2026-09-03：补充 F-323/F-326 的真实来源核验。只读解析《商品库存管理.xlsx》确认其可作为库存字段映射样本，但缺少来源系统、数据时点、在途字段和完整仓库/SKU 稳定键；未新增生产导入适配器，未写入 inventory_balances，真实 WMS/ERP 接入保持 INCOMPLETE。证据 E-20260903-wms-source-workbook-001。
+
+- 2026-09-03：F-204 的 1688 A1 v40 候选完成服务器受控部署。v39→v40 additive 迁移、前后加密备份、健康/完整性、A1 路由和 capabilities 通过；业务表未变化，渠道可售量两表暂为 0 行。Cursor 核验的卖家子账号尚未获得 5043656 授权，真实持久化 smoke 保持 INCOMPLETE，见 E-20260903-1688-channel-persistence-deploy-001。
+
+- 2026-09-03：F-204 的 1688 A1 本地候选根据独立验收反馈补齐 D-014 来源版本门。缺少 `lastUpdateTime/createTime` 时不再用本机观测时间生成版本；`payload-sha256:*` 等无稳定来源时间载荷直接拒绝。修复前后反例均完成红→绿，1688/A1 聚焦 `23 passed`、全量 `1542 passed, 1 skipped`；候选仍未合并、部署或完成服务器持久化 smoke，见 E-20260903-1688-channel-persistence-fix-002。
+
+- 2026-08-20：F-121 增加 `simulate-store --load-only`。交测启动模板默认在每位测试者自己的
+  Git-ignored SQLite 中幂等装载仓库内置“晴川生活电器旗舰店” fixture，不复制维护者本机
+  数据，也不把完整场景验收或模型调用变成服务启动前置。旧代码反证、`14 passed` 相邻回归、
+  6 商品/10 库存/8 订单隔离库 smoke 及分发边界见 E-20260820-006。
 - 2026-08-20：关闭 F-323 的代码级、本机技术里程碑。WP1 因是 M7-R 与 M8-R～M10-R
   共用基建而先行合入；WP2～WP4 经 PR #20 head `ece61e1` 完成独立 WP5，并合入 `main`
   为 `f6bb47c`。缪海南原报告保持原文归档，实施方补充报告只补齐固定对象、WP1～WP4

@@ -61,6 +61,7 @@ class PullBatch(BaseModel):
     next_cursor: str | None = None
     has_more: bool = False
     data_as_of: str
+    upstream_total: int | None = Field(default=None, ge=0)
 
 
 class VerifiedEvent(BaseModel):
